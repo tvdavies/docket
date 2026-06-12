@@ -1,0 +1,19 @@
+{
+  "name": "tadu",
+  "version": "0.0.0",
+  "description": "TAsk DUrable — a file-backed, CLI-only task store that hands context between agent sessions.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "tadu": "./src/cli.ts"
+  },
+  "scripts": {
+    "tadu": "bun run ./src/cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
