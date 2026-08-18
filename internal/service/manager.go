@@ -194,7 +194,7 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 			if err != nil {
 				return err
 			}
-			failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Output: m.output})
+			failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Scope: handlers.ScopeAll, Output: m.output})
 			running.update(func(status *WorkspaceStatus) {
 				status.EventCount = events.Count(fresh)
 				status.HandlerCount = len(fresh.Config.Handlers)

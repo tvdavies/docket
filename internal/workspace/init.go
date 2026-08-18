@@ -44,6 +44,7 @@ func Init(root string) (*Workspace, error) {
 #   notify:
 #     on: [task.moved, task.commented]
 #     run: hooks/notify
+#     delivery: service  # optional; async via docket.service (default: inline)
 `
 	if err := os.WriteFile(filepath.Join(docketDir, "config.yaml"), append([]byte(header), data...), 0o644); err != nil {
 		return nil, err

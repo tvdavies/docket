@@ -99,8 +99,9 @@ react:
 - **Handlers** — post-hoc executables declared in `.docket/config.yaml`.
   Matching events arrive as JSON lines on stdin. Every handler owns a durable
   cursor: delivery is ordered and at-least-once, failed batches retry, and a
-  handler that was offline drains its backlog. Mutating commands drain handlers
-  synchronously after the event is durable.
+  handler that was offline drains its backlog. Inline delivery is the default;
+  `delivery: service` leaves execution to `docket.service` so mutations return
+  immediately without sacrificing durable retry.
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
   you, tracked by a per-actor cursor.
 - `docket watch` — **stream**: emits each new event as a JSON line for one
@@ -117,14 +118,16 @@ handlers:
   notify:
     on: [task.moved, task.commented]  # or ["*"]
     run: hooks/notify                 # relative to the directory containing .docket/
+    delivery: service                 # optional: asynchronous via docket.service
 ```
 
 Handler names use lowercase letters, numbers, hyphens, and underscores.
 `hooks/notify` must be executable. It runs from the project root with
 `DOCKET_HOME`, `DOCKET_ACTOR=handler:notify`, and `DOCKET_HANDLER=notify` set.
-Stdout and stderr are treated as logs and written to the invoking command's
-stderr, so `--json` output remains valid. A handler failure warns but cannot
-roll back the mutation; its cursor remains before the failed batch. A newly
+With inline delivery, stdout and stderr are written to the invoking command's
+stderr, so `--json` output remains valid. Service-delivered output goes to the
+Docket service journal. A handler failure cannot roll back the mutation; its
+cursor remains before the failed batch. A newly
 registered handler starts at cursor zero and therefore sees existing history.
 Handlers should enqueue or spawn long-running work and exit within 30 seconds.
 

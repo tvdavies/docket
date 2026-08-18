@@ -127,6 +127,16 @@ func TestConfigRejectsCaseCollidingHandlerNames(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsUnknownHandlerDelivery(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Handlers = map[string]HandlerConfig{
+		"notify": {On: []string{"*"}, Run: "hooks/noop", Delivery: "eventually-maybe"},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected unknown handler delivery to fail validation")
+	}
+}
+
 func TestDocketHomeOverride(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Init(root); err != nil {

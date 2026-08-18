@@ -31,6 +31,10 @@ type Config struct {
 type HandlerConfig struct {
 	On  []string `yaml:"on"`
 	Run string   `yaml:"run"`
+	// Delivery is "inline" (the default) or "service". Service delivery leaves
+	// the handler cursor pending for docket.service so the mutating CLI returns
+	// immediately while retaining durable, retryable execution.
+	Delivery string `yaml:"delivery,omitempty"`
 }
 
 // Matches reports whether this handler consumes an event type. "*" matches
@@ -107,6 +111,9 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(eventType) == "" {
 				return fmt.Errorf("handler %q: on contains an empty event type", name)
 			}
+		}
+		if handler.Delivery != "" && handler.Delivery != "inline" && handler.Delivery != "service" {
+			return fmt.Errorf("handler %q: delivery must be \"inline\" or \"service\"", name)
 		}
 	}
 	return nil

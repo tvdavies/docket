@@ -334,6 +334,34 @@ func TestHandlerTimeoutLeavesCursor(t *testing.T) {
 	}
 }
 
+func TestServiceDeliveryStaysPendingForInlineDrain(t *testing.T) {
+	ws, root := newWorkspace(t)
+	output := filepath.Join(root, "service-delivery.jsonl")
+	t.Setenv("HANDLER_OUTPUT", output)
+	run := writeScript(t, root, "service-delivery", `cat >> "$HANDLER_OUTPUT"`+"\n")
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{
+		"service-delivery": {On: []string{"*"}, Run: run, Delivery: "service"},
+	}
+	appendEvent(t, ws, events.TaskCreated)
+
+	if failures := handlers.DrainAll(ws, handlers.Options{Scope: handlers.ScopeInline}); len(failures) != 0 {
+		t.Fatalf("inline drain failed: %v", failures)
+	}
+	if got := len(nonEmptyLines(t, output)); got != 0 {
+		t.Fatalf("service handler ran inline; got %d deliveries", got)
+	}
+	if got := handlers.Cursor(ws, "service-delivery"); got != 0 {
+		t.Fatalf("inline drain advanced service cursor to %d", got)
+	}
+
+	if failures := handlers.DrainAll(ws, handlers.Options{Scope: handlers.ScopeAll}); len(failures) != 0 {
+		t.Fatalf("service drain failed: %v", failures)
+	}
+	if got := len(nonEmptyLines(t, output)); got != 1 {
+		t.Fatalf("service drain delivered %d events, want 1", got)
+	}
+}
+
 func TestWildcardHandlerReceivesEveryEvent(t *testing.T) {
 	ws, root := newWorkspace(t)
 	output := filepath.Join(root, "all.jsonl")

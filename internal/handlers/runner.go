@@ -28,11 +28,25 @@ const (
 	maxDrainRounds = 32
 )
 
+// Scope controls which delivery classes a drain executes.
+type Scope uint8
+
+const (
+	// ScopeAll runs inline and service-delivered handlers. The persistent
+	// service uses this to drain every durable cursor.
+	ScopeAll Scope = iota
+	// ScopeInline skips handlers declared with delivery: service. Mutating CLI
+	// commands use this so they return without waiting for asynchronous work.
+	ScopeInline
+)
+
 // Options controls handler execution. Zero values use safe defaults.
 type Options struct {
 	// Context cancels lock waits and the entire handler process group. A nil
 	// context means background execution bounded only by Timeout.
 	Context context.Context
+	// Scope defaults to ScopeAll.
+	Scope Scope
 	// Output receives handler stdout and stderr. It is normally the parent
 	// command's stderr so handler logs cannot corrupt --json output.
 	Output io.Writer
@@ -79,7 +93,7 @@ func DrainAll(ws *workspace.Workspace, opts Options) []Failure {
 		}
 		progressed := false
 		for _, name := range ws.Config.HandlerNames() {
-			if failed[name] {
+			if failed[name] || !runsInScope(ws.Config.Handlers[name], opts.Scope) {
 				continue
 			}
 			advanced, err := drainOne(ws, name, ws.Config.Handlers[name], opts, nested)
@@ -95,7 +109,7 @@ func DrainAll(ws *workspace.Workspace, opts Options) []Failure {
 		}
 	}
 
-	if handlersPending(ws, failed) {
+	if handlersPending(ws, failed, opts.Scope) {
 		failures = append(failures, Failure{
 			Handler: "runner",
 			Err:     fmt.Errorf("event chain did not settle after %d rounds; remaining events will retry on the next drain", maxDrainRounds),
@@ -253,14 +267,18 @@ func handlerCursorFile(ws *workspace.Workspace, name string) string {
 	return filepath.Join(ws.HandlerStateDir(), name+".cursor")
 }
 
-func handlersPending(ws *workspace.Workspace, failed map[string]bool) bool {
+func handlersPending(ws *workspace.Workspace, failed map[string]bool, scope Scope) bool {
 	end := events.Count(ws)
 	for _, name := range ws.Config.HandlerNames() {
-		if !failed[name] && Cursor(ws, name) < end {
+		if !failed[name] && runsInScope(ws.Config.Handlers[name], scope) && Cursor(ws, name) < end {
 			return true
 		}
 	}
 	return false
+}
+
+func runsInScope(config workspace.HandlerConfig, scope Scope) bool {
+	return scope != ScopeInline || config.Delivery != "service"
 }
 
 func appendHandler(stack, name string) string {

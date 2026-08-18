@@ -96,7 +96,7 @@ func appendEvent(ws *workspace.Workspace, event events.Event) error {
 	if err := events.Append(ws, event); err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
-	for _, failure := range handlers.DrainAll(ws, handlers.Options{Output: os.Stderr}) {
+	for _, failure := range handlers.DrainAll(ws, handlers.Options{Scope: handlers.ScopeInline, Output: os.Stderr}) {
 		fmt.Fprintf(os.Stderr, "docket: warning: %s\n", failure.Error())
 	}
 	return nil
