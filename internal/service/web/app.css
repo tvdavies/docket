@@ -127,7 +127,7 @@ main { padding: 26px 24px 48px; }
 .board {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(270px, 1fr);
+  grid-auto-columns: minmax(185px, 1fr);
   gap: 13px;
   align-items: start;
   overflow-x: auto;
