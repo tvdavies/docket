@@ -21,16 +21,19 @@ type Config struct {
 	// Relationships declares typed link kinds and their inverses.
 	Relationships []RelType `yaml:"relationships"`
 	// Handlers are post-hoc event consumers. Each handler has its own durable
-	// cursor and receives matching events as JSON lines on stdin.
+	// cursor. Executables receive JSON lines; Lua handlers receive event tables.
 	Handlers map[string]HandlerConfig `yaml:"handlers,omitempty"`
 	Settings Settings                 `yaml:"settings"`
 }
 
-// HandlerConfig registers one executable event consumer. Run is resolved
-// relative to the project root (the parent of .docket/) unless absolute.
+// HandlerConfig registers one event consumer. Exactly one of Run or Lua is
+// required. Relative paths resolve from the project root (the parent of
+// .docket/). Lua handlers execute in an isolated child Docket process.
 type HandlerConfig struct {
-	On  []string `yaml:"on"`
-	Run string   `yaml:"run"`
+	On    []string       `yaml:"on"`
+	Match map[string]any `yaml:"match,omitempty"`
+	Run   string         `yaml:"run,omitempty"`
+	Lua   string         `yaml:"lua,omitempty"`
 	// Delivery is "inline" (the default) or "service". Service delivery leaves
 	// the handler cursor pending for docket.service so the mutating CLI returns
 	// immediately while retaining durable, retryable execution.
@@ -101,8 +104,10 @@ func (c *Config) Validate() error {
 		if !handlerNamePattern.MatchString(name) {
 			return fmt.Errorf("handler %q: name must contain only lowercase letters, numbers, hyphens, and underscores", name)
 		}
-		if strings.TrimSpace(handler.Run) == "" {
-			return fmt.Errorf("handler %q: run is required", name)
+		hasRun := strings.TrimSpace(handler.Run) != ""
+		hasLua := strings.TrimSpace(handler.Lua) != ""
+		if hasRun == hasLua {
+			return fmt.Errorf("handler %q: exactly one of run or lua is required", name)
 		}
 		if len(handler.On) == 0 {
 			return fmt.Errorf("handler %q: on must contain at least one event type (or \"*\")", name)
@@ -110,6 +115,22 @@ func (c *Config) Validate() error {
 		for _, eventType := range handler.On {
 			if strings.TrimSpace(eventType) == "" {
 				return fmt.Errorf("handler %q: on contains an empty event type", name)
+			}
+		}
+		for path := range handler.Match {
+			parts := strings.Split(path, ".")
+			for _, part := range parts {
+				if strings.TrimSpace(part) == "" {
+					return fmt.Errorf("handler %q: match path %q is invalid", name, path)
+				}
+			}
+			switch parts[0] {
+			case "seq", "time", "type", "task", "title", "actor", "assignee", "data":
+			default:
+				return fmt.Errorf("handler %q: match path %q has an unknown event field", name, path)
+			}
+			if len(parts) > 1 && parts[0] != "data" {
+				return fmt.Errorf("handler %q: only data fields may use nested match paths (got %q)", name, path)
 			}
 		}
 		if handler.Delivery != "" && handler.Delivery != "inline" && handler.Delivery != "service" {

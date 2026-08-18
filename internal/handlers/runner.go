@@ -1,7 +1,7 @@
-// Package handlers delivers docket events to executable consumers declared in
-// .docket/config.yaml. Each handler owns a durable cursor: matching events are
-// delivered at least once, in log order, and the cursor advances only after the
-// executable exits successfully.
+// Package handlers delivers docket events to executable or Lua consumers
+// declared in .docket/config.yaml. Each handler owns a durable cursor: matching
+// events are delivered at least once, in log order, and the cursor advances
+// only after the isolated invocation exits successfully.
 package handlers
 
 import (
@@ -53,6 +53,10 @@ type Options struct {
 	// Timeout bounds one handler invocation. The default is 30 seconds;
 	// handlers should enqueue or spawn long-running work, not become it.
 	Timeout time.Duration
+	// LuaCommand overrides the child runner command before the script argument.
+	// Production uses the current Docket executable plus __lua-hook; tests may
+	// supply an isolated helper process.
+	LuaCommand []string
 }
 
 // Failure records one handler that could not drain. The task mutation and its
@@ -133,12 +137,12 @@ func drainOne(ws *workspace.Workspace, name string, cfg workspace.HandlerConfig,
 
 		matched := make([]events.Event, 0, len(batch))
 		for _, event := range batch {
-			if cfg.Matches(event.Type) {
+			if matchesEvent(cfg, event) {
 				matched = append(matched, event)
 			}
 		}
 		if len(matched) > 0 {
-			if err := execute(ws, name, cfg.Run, matched, opts); err != nil {
+			if err := execute(ws, name, cfg, matched, opts); err != nil {
 				return err
 			}
 		}
@@ -163,7 +167,20 @@ func drainOne(ws *workspace.Workspace, name string, cfg workspace.HandlerConfig,
 	return advanced, store.WithLockContext(opts.Context, lockPath, drain)
 }
 
-func execute(ws *workspace.Workspace, name, run string, batch []events.Event, opts Options) error {
+func execute(ws *workspace.Workspace, name string, config workspace.HandlerConfig, batch []events.Event, opts Options) error {
+	// A Lua child receives one event. Besides making handle(event, docket) the
+	// natural unit of isolation, this prevents os.exit(0) in one invocation from
+	// acknowledging later events it never saw. Executable handlers retain their
+	// original batched JSONL contract.
+	if config.Lua != "" && len(batch) > 1 {
+		for _, event := range batch {
+			if err := execute(ws, name, config, []events.Event{event}, opts); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	var input bytes.Buffer
 	enc := json.NewEncoder(&input)
 	enc.SetEscapeHTML(false)
@@ -174,14 +191,14 @@ func execute(ws *workspace.Workspace, name, run string, batch []events.Event, op
 	}
 
 	projectRoot := filepath.Dir(ws.Root)
-	program := run
-	if !filepath.IsAbs(program) {
-		program = filepath.Join(projectRoot, program)
+	program, args, display, err := handlerCommand(projectRoot, config, opts)
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(opts.Context, opts.Timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, program)
+	cmd := exec.CommandContext(ctx, program, args...)
 	// Handlers are scripts and may launch children. Put the invocation in its
 	// own process group so a timeout terminates the whole tree, not just the
 	// parent shell while a child keeps the command waiting.
@@ -203,14 +220,38 @@ func execute(ws *workspace.Workspace, name, run string, batch []events.Event, op
 		"DOCKET_HANDLER_STACK": appendHandler(os.Getenv("DOCKET_HANDLER_STACK"), name),
 	})
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%s timed out after %s", run, opts.Timeout)
+		return fmt.Errorf("%s timed out after %s", display, opts.Timeout)
 	}
 	if err != nil {
-		return fmt.Errorf("%s: %w", run, err)
+		return fmt.Errorf("%s: %w", display, err)
 	}
 	return nil
+}
+
+func handlerCommand(projectRoot string, config workspace.HandlerConfig, opts Options) (string, []string, string, error) {
+	if config.Lua != "" {
+		script := config.Lua
+		if !filepath.IsAbs(script) {
+			script = filepath.Join(projectRoot, script)
+		}
+		command := append([]string(nil), opts.LuaCommand...)
+		if len(command) == 0 {
+			executable, err := os.Executable()
+			if err != nil {
+				return "", nil, "", fmt.Errorf("resolve Docket executable for Lua handler: %w", err)
+			}
+			command = []string{executable, "__lua-hook"}
+		}
+		return command[0], append(command[1:], script), config.Lua, nil
+	}
+
+	program := config.Run
+	if !filepath.IsAbs(program) {
+		program = filepath.Join(projectRoot, program)
+	}
+	return program, nil, config.Run, nil
 }
 
 // Cursor returns a handler's delivery position. Handler cursors live outside

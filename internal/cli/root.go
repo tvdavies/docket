@@ -69,6 +69,7 @@ does work, and hands full context to the next session by attaching to the task.`
 		newServeCmd(),
 		newServiceCmd(),
 		newSkillCmd(),
+		newLuaHookCmd(),
 	)
 	return root
 }

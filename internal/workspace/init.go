@@ -38,12 +38,14 @@ func Init(root string) (*Workspace, error) {
 	}
 	header := `# docket workspace config. Statuses double as board lanes, in order.
 #
-# Optional post-hoc event handlers receive matching events as JSON lines on
-# stdin. Paths are relative to the directory containing .docket/:
+# Optional post-hoc event handlers use exactly one of lua or run. Paths are
+# relative to the directory containing .docket/:
 # handlers:
 #   notify:
-#     on: [task.moved, task.commented]
-#     run: hooks/notify
+#     on: [task.moved]
+#     match:
+#       data.to: done
+#     lua: hooks/notify.lua
 #     delivery: service  # optional; async via docket.service (default: inline)
 `
 	if err := os.WriteFile(filepath.Join(docketDir, "config.yaml"), append([]byte(header), data...), 0o644); err != nil {

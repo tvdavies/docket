@@ -96,12 +96,12 @@ refuses non-loopback binds unless `--allow-remote` is passed explicitly.
 Every mutation appends to an append-only event log. There are three ways to
 react:
 
-- **Handlers** — post-hoc executables declared in `.docket/config.yaml`.
-  Matching events arrive as JSON lines on stdin. Every handler owns a durable
-  cursor: delivery is ordered and at-least-once, failed batches retry, and a
-  handler that was offline drains its backlog. Inline delivery is the default;
-  `delivery: service` leaves execution to `docket.service` so mutations return
-  immediately without sacrificing durable retry.
+- **Handlers** — post-hoc executables or embedded Lua scripts declared in
+  `.docket/config.yaml`. Every handler owns a durable cursor: delivery is
+  ordered and at-least-once, failed batches retry, and an offline handler drains
+  its backlog. Inline delivery is the default; `delivery: service` leaves
+  execution to `docket.service` so mutations return immediately without
+  sacrificing durable retry.
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
   you, tracked by a per-actor cursor.
 - `docket watch` — **stream**: emits each new event as a JSON line for one
@@ -110,26 +110,86 @@ react:
   handlers for events written outside a synchronous CLI mutation.
 - `docket events [--since N]` — the raw log.
 
-A handler declaration is deliberately only delivery configuration; decisions
-belong in the script:
+Handlers subscribe by event type and may add exact-value matches on dotted event
+paths. All match entries must pass:
 
 ```yaml
 handlers:
   notify:
-    on: [task.moved, task.commented]  # or ["*"]
-    run: hooks/notify                 # relative to the directory containing .docket/
-    delivery: service                 # optional: asynchronous via docket.service
+    on: [task.moved]
+    match:
+      data.to: done
+    lua: hooks/notify.lua
+    delivery: service  # optional: asynchronous via docket.service
 ```
 
-Handler names use lowercase letters, numbers, hyphens, and underscores.
-`hooks/notify` must be executable. It runs from the project root with
-`DOCKET_HOME`, `DOCKET_ACTOR=handler:notify`, and `DOCKET_HANDLER=notify` set.
+Exactly one runtime is required:
+
+- `lua: hooks/notify.lua` loads an embedded Lua 5.1 script. The script does not
+  need to be executable. Docket runs it in an isolated child invocation of its
+  own binary and calls `handle(event, docket)` once per matching event.
+- `run: hooks/notify` runs an executable from the project root and supplies the
+  matching batch as JSON lines on stdin, preserving the original unrestricted
+  hook interface.
+
+Relative paths resolve from the directory containing `.docket/`. Handler names
+use lowercase letters, numbers, hyphens, and underscores. Both runtimes receive
+`DOCKET_HOME`, `DOCKET_ACTOR=handler:<name>`, and `DOCKET_HANDLER=<name>`.
+
+### Lua hooks
+
+Lua hooks have GopherLua's complete standard library, including `io`, `os`,
+`package`, `debug`, `coroutine`, and `channel`. They run with the user's system
+permissions and are trusted code. Process isolation means `os.exit` and
+blocking IO cannot terminate or indefinitely block the long-lived Docket
+service; the handler timeout kills the hook process group and its ordinary
+children. A script that deliberately detaches a process into a new session owns
+that process's lifecycle.
+
+```lua
+function handle(event, docket)
+    local file = assert(io.open(docket.path("completed.txt"), "a"))
+    file:write(event.task .. "\n")
+    file:close()
+
+    docket.log.info("completed", event.task)
+end
+```
+
+The lightweight `docket` SDK provides:
+
+```lua
+docket.path(...)                         -- path relative to the project root
+docket.asset(...)                        -- path relative to the Lua script
+docket.paths.project
+docket.paths.workspace
+docket.paths.script
+docket.paths.script_dir
+
+docket.log.info(...)
+docket.log.warn(...)
+docket.log.error(...)
+docket.fs.write_atomic(path, content, permission) -- permission defaults to 0644
+docket.process.run(command, {args})
+
+docket.task.get(id)
+docket.task.move(id, status)              -- returns task, previous_status
+docket.task.assign(id, assignee)
+docket.task.comment(id, text)             -- returns comment filename
+docket.task.label(id, {add}, {remove})
+```
+
+SDK task mutations use the same locks, validation, atomic writes, and events as
+the CLI. Events produced by a hook are drained after that handler returns.
+
 With inline delivery, stdout and stderr are written to the invoking command's
 stderr, so `--json` output remains valid. Service-delivered output goes to the
-Docket service journal. A handler failure cannot roll back the mutation; its
-cursor remains before the failed batch. A newly
-registered handler starts at cursor zero and therefore sees existing history.
-Handlers should enqueue or spawn long-running work and exit within 30 seconds.
+Docket service journal. A handler failure cannot roll back the triggering
+mutation; its cursor remains before the failed batch. A newly registered
+handler starts at cursor zero and therefore sees existing history. Because
+successful work can repeat after a later batch failure, handlers must be
+idempotent. Handlers should enqueue or spawn long-running work and exit within
+30 seconds.
 
 ## Identity
 

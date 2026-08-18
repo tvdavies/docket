@@ -6,6 +6,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gofrs/flock v0.13.0
 	github.com/spf13/cobra v1.10.2
+	github.com/yuin/gopher-lua v1.1.2
 	gopkg.in/yaml.v3 v3.0.1
 )
 

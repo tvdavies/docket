@@ -107,6 +107,61 @@ func TestConfigLoadsHandlers(t *testing.T) {
 	}
 }
 
+func TestConfigLoadsLuaHandlerAndMatch(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, DirName, "config.yaml")
+	file, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("handlers:\n  notify:\n    on: [task.moved]\n    match:\n      data.to: done\n    lua: hooks/notify.lua\n    delivery: service\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := OpenRoot(root)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	handler := ws.Config.Handlers["notify"]
+	if handler.Lua != "hooks/notify.lua" || handler.Match["data.to"] != "done" || handler.Delivery != "service" {
+		t.Fatalf("Lua handler not loaded: %#v", handler)
+	}
+}
+
+func TestConfigRequiresExactlyOneHandlerRuntime(t *testing.T) {
+	for name, handler := range map[string]HandlerConfig{
+		"neither": {On: []string{"*"}},
+		"both":    {On: []string{"*"}, Run: "hooks/noop", Lua: "hooks/noop.lua"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Handlers = map[string]HandlerConfig{"notify": handler}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected invalid runtime selection to fail validation")
+			}
+		})
+	}
+}
+
+func TestConfigRejectsInvalidMatchPath(t *testing.T) {
+	for _, path := range []string{"data..to", "date.to", "task.id"} {
+		t.Run(path, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Handlers = map[string]HandlerConfig{
+				"notify": {On: []string{"*"}, Lua: "hooks/noop.lua", Match: map[string]any{path: "done"}},
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected invalid match path to fail validation")
+			}
+		})
+	}
+}
+
 func TestConfigRejectsUnsafeHandlerName(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Handlers = map[string]HandlerConfig{

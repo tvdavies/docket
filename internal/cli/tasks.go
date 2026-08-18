@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/bundle"
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/registry"
@@ -281,23 +282,12 @@ func newMoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !ws.Config.HasStatus(status) {
-				return fmt.Errorf("unknown status %q (configured: %s)", status, strings.Join(ws.Config.Statuses, ", "))
+			operations := actions.Tasks{
+				Workspace: ws, Actor: actor(), Session: sessionID(),
+				Append: func(event events.Event) error { return appendEvent(ws, event) },
 			}
-			var from string
-			t, err := task.Update(ws, id, func(t *task.Task) error {
-				from = t.Status
-				t.Status = status
-				return nil
-			})
+			t, from, err := operations.Move(id, status)
 			if err != nil {
-				return err
-			}
-			if err := appendEvent(ws, events.Event{
-				Type: events.TaskMoved, Task: t.ID, Title: t.Title,
-				Actor: actor(), Assignee: t.Assignee,
-				Data: map[string]any{"from": from, "to": status},
-			}); err != nil {
 				return err
 			}
 			if flagJSON {
@@ -324,18 +314,12 @@ func newLabelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			t, err := task.Update(ws, id, func(t *task.Task) error {
-				t.Labels = applyLabels(t.Labels, add, remove)
-				return nil
-			})
-			if err != nil {
-				return err
+			operations := actions.Tasks{
+				Workspace: ws, Actor: actor(), Session: sessionID(),
+				Append: func(event events.Event) error { return appendEvent(ws, event) },
 			}
-			if err := appendEvent(ws, events.Event{
-				Type: events.TaskLabeled, Task: t.ID, Title: t.Title,
-				Actor: actor(), Assignee: t.Assignee,
-				Data: map[string]any{"labels": t.Labels},
-			}); err != nil {
+			t, err := operations.Label(id, add, remove)
+			if err != nil {
 				return err
 			}
 			return reportTask(t, "labeled")
@@ -365,34 +349,6 @@ func readDescription(desc, descFile string) (string, error) {
 		return string(data), err
 	}
 	return desc, nil
-}
-
-func applyLabels(existing, add, remove []string) []string {
-	set := map[string]bool{}
-	var order []string
-	for _, l := range existing {
-		if !set[l] {
-			set[l] = true
-			order = append(order, l)
-		}
-	}
-	for _, l := range add {
-		if !set[l] {
-			set[l] = true
-			order = append(order, l)
-		}
-	}
-	rm := map[string]bool{}
-	for _, l := range remove {
-		rm[l] = true
-	}
-	out := []string{}
-	for _, l := range order {
-		if !rm[l] {
-			out = append(out, l)
-		}
-	}
-	return out
 }
 
 type taskSummary struct {

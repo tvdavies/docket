@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/store"
 	"github.com/tvdavies/docket/internal/task"
@@ -44,24 +45,18 @@ func newCommentCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			t, err := task.Load(ws, id)
-			if err != nil {
-				return err
+			operations := actions.Tasks{
+				Workspace: ws, Actor: actor(), Session: sessionID(),
+				Append: func(event events.Event) error { return appendEvent(ws, event) },
 			}
-			c, err := task.AddComment(ws, id, actor(), sessionID(), text)
+			c, err := operations.Comment(id, text)
 			if err != nil {
-				return err
-			}
-			if err := appendEvent(ws, events.Event{
-				Type: events.TaskCommented, Task: t.ID, Title: t.Title,
-				Actor: actor(), Assignee: t.Assignee,
-			}); err != nil {
 				return err
 			}
 			if flagJSON {
-				return printJSON(map[string]string{"task": t.ID, "comment": c.File})
+				return printJSON(map[string]string{"task": id, "comment": c.File})
 			}
-			fmt.Printf("%s commented (%s)\n", t.ID, c.File)
+			fmt.Printf("%s commented (%s)\n", id, c.File)
 			return nil
 		},
 	}

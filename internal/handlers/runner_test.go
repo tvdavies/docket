@@ -10,6 +10,7 @@ import (
 
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/handlers"
+	"github.com/tvdavies/docket/internal/luahook"
 	"github.com/tvdavies/docket/internal/store"
 	"github.com/tvdavies/docket/internal/workspace"
 )
@@ -360,6 +361,144 @@ func TestServiceDeliveryStaysPendingForInlineDrain(t *testing.T) {
 	if got := len(nonEmptyLines(t, output)); got != 1 {
 		t.Fatalf("service drain delivered %d events, want 1", got)
 	}
+}
+
+func TestLuaHandlerRunsInChildAndAppliesExactMatches(t *testing.T) {
+	ws, root := newWorkspace(t)
+	output := filepath.Join(root, "lua-events.txt")
+	t.Setenv("HANDLER_OUTPUT", output)
+	t.Setenv("DOCKET_TEST_LUA_HELPER", "1")
+	if err := os.MkdirAll(filepath.Join(root, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "hooks", "record.lua")
+	source := `
+function handle(event, docket)
+    local file = assert(io.open(os.getenv("HANDLER_OUTPUT"), "a"))
+    file:write(event.task .. "|" .. event.data.to .. "\n")
+    file:close()
+end
+`
+	if err := os.WriteFile(script, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{
+		"lua-record": {
+			On: []string{events.TaskMoved}, Match: map[string]any{"data.to": "done"},
+			Lua: "hooks/record.lua",
+		},
+	}
+	if err := events.Append(ws, events.Event{Type: events.TaskMoved, Task: "TASK-0001", Data: map[string]any{"to": "ready"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.Append(ws, events.Event{Type: events.TaskMoved, Task: "TASK-0001", Data: map[string]any{"to": "done"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	failures := handlers.DrainAll(ws, handlers.Options{LuaCommand: luaHelperCommand()})
+	if len(failures) != 0 {
+		t.Fatalf("Lua drain failed: %v", failures)
+	}
+	lines := nonEmptyLines(t, output)
+	if len(lines) != 1 || lines[0] != "TASK-0001|done" {
+		t.Fatalf("Lua match delivered %q", lines)
+	}
+	if got := handlers.Cursor(ws, "lua-record"); got != 2 {
+		t.Fatalf("Lua handler cursor = %d, want 2", got)
+	}
+}
+
+func TestLuaOsExitCannotTerminateParentOrSkipBatchEvents(t *testing.T) {
+	ws, root := newWorkspace(t)
+	output := filepath.Join(root, "exited-events.txt")
+	t.Setenv("HANDLER_OUTPUT", output)
+	t.Setenv("DOCKET_TEST_LUA_HELPER", "1")
+	if err := os.MkdirAll(filepath.Join(root, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `
+function handle(event, docket)
+    local file = assert(io.open(os.getenv("HANDLER_OUTPUT"), "a"))
+    file:write(event.task .. "\n")
+    file:close()
+    os.exit(0)
+end
+`
+	if err := os.WriteFile(filepath.Join(root, "hooks", "exit.lua"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{
+		"lua-exit": {On: []string{"*"}, Lua: "hooks/exit.lua"},
+	}
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0002"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if failures := handlers.DrainAll(ws, handlers.Options{LuaCommand: luaHelperCommand()}); len(failures) != 0 {
+		t.Fatalf("isolated os.exit failed: %v", failures)
+	}
+	if lines := nonEmptyLines(t, output); len(lines) != 2 || lines[0] != "TASK-0001" || lines[1] != "TASK-0002" {
+		t.Fatalf("os.exit skipped events: %q", lines)
+	}
+	if got := handlers.Cursor(ws, "lua-exit"); got != 2 {
+		t.Fatalf("isolated Lua exit cursor = %d, want 2", got)
+	}
+}
+
+func TestLuaChildTimeoutLeavesCursor(t *testing.T) {
+	ws, root := newWorkspace(t)
+	t.Setenv("DOCKET_TEST_LUA_HELPER", "1")
+	if err := os.MkdirAll(filepath.Join(root, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "hooks", "loop.lua"), []byte("function handle(event, docket) while true do end end\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{
+		"lua-loop": {On: []string{"*"}, Lua: "hooks/loop.lua"},
+	}
+	appendEvent(t, ws, events.TaskCreated)
+
+	failures := handlers.DrainAll(ws, handlers.Options{LuaCommand: luaHelperCommand(), Timeout: 100 * time.Millisecond})
+	if len(failures) != 1 || !strings.Contains(failures[0].Error(), "timed out") {
+		t.Fatalf("expected isolated Lua timeout, got %v", failures)
+	}
+	if got := handlers.Cursor(ws, "lua-loop"); got != 0 {
+		t.Fatalf("timed-out Lua handler advanced cursor to %d", got)
+	}
+}
+
+func TestLuaHookHelperProcess(t *testing.T) {
+	if os.Getenv("DOCKET_TEST_LUA_HELPER") != "1" {
+		return
+	}
+	separator := -1
+	for index, arg := range os.Args {
+		if arg == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 || separator+1 >= len(os.Args) {
+		t.Fatal("missing Lua script argument")
+	}
+	ws, err := workspace.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := luahook.Run(luahook.Options{
+		Workspace: ws, Script: os.Args[separator+1], Input: os.Stdin,
+		Output: os.Stdout, Error: os.Stderr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func luaHelperCommand() []string {
+	return []string{os.Args[0], "-test.run=TestLuaHookHelperProcess", "--"}
 }
 
 func TestWildcardHandlerReceivesEveryEvent(t *testing.T) {

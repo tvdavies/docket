@@ -64,9 +64,11 @@ Every command supports `--json` for stable machine output.
 
 ### Coordination (triggering work elsewhere)
 docket records every change to an append-only event log. Optional post-hoc
-handlers in `.docket/config.yaml` receive matching events as JSON lines on stdin;
-each has a durable cursor and failed deliveries retry. Inline handlers run after
-the event is durable; `delivery: service` runs asynchronously via docket.service.
+handlers in `.docket/config.yaml` use `run:` for executable JSONL consumers or
+`lua:` for isolated embedded-Lua `handle(event, docket)` scripts. `match:` can
+filter exact dotted event paths such as `data.to: done`. Each handler has a
+durable cursor and failed deliveries retry. Inline handlers run after the event
+is durable; `delivery: service` runs asynchronously via docket.service.
 
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
   you, since your last cursor.
