@@ -7,8 +7,10 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,12 +68,40 @@ func Attach(ws *workspace.Workspace, taskID, sessionID, actor string) (*task.Tas
 	if err != nil {
 		return nil, err
 	}
-	e := Entry{Action: "attach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano)}
-	line, _ := json.Marshal(e)
-	if err := store.AppendLine(t.SessionsFile(), line); err != nil {
-		return nil, err
-	}
-	if err := store.WriteAtomic(pointerFile(ws, sessionID), []byte(t.ID+"\n"), 0o644); err != nil {
+	pointer := pointerFile(ws, sessionID)
+	err = store.WithLock(pointer+".lock", func() error {
+		previousID := Current(ws, sessionID)
+		if previousID != "" && previousID != t.ID {
+			previous, err := task.Load(ws, previousID)
+			if err != nil {
+				return err
+			}
+			if err := appendEntry(previous, Entry{
+				Action: "detach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano),
+			}); err != nil {
+				return err
+			}
+			if err := removeFile(pointer); err != nil {
+				return err
+			}
+		}
+
+		attached := Entry{Action: "attach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano)}
+		if previousID == t.ID {
+			return appendEntry(t, attached)
+		}
+		if err := appendEntry(t, attached); err != nil {
+			return err
+		}
+		if err := store.WriteAtomic(pointer, []byte(t.ID+"\n"), 0o644); err != nil {
+			compensation := appendEntry(t, Entry{
+				Action: "detach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano),
+			})
+			return errors.Join(err, compensation)
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -80,17 +110,33 @@ func Attach(ws *workspace.Workspace, taskID, sessionID, actor string) (*task.Tas
 // Detach clears the current pointer for sessionID and records it in the task
 // audit log. Returns the task id that was detached (empty if none).
 func Detach(ws *workspace.Workspace, sessionID, actor string) (string, error) {
-	taskID := Current(ws, sessionID)
-	if taskID == "" {
-		return "", nil
+	pointer := pointerFile(ws, sessionID)
+	var taskID string
+	err := store.WithLock(pointer+".lock", func() error {
+		taskID = Current(ws, sessionID)
+		if taskID == "" {
+			return nil
+		}
+		t, err := task.Load(ws, taskID)
+		if err != nil {
+			return err
+		}
+		if err := appendEntry(t, Entry{
+			Action: "detach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano),
+		}); err != nil {
+			return err
+		}
+		return removeFile(pointer)
+	})
+	return taskID, err
+}
+
+func appendEntry(value *task.Task, entry Entry) error {
+	line, err := json.Marshal(entry)
+	if err != nil {
+		return err
 	}
-	if t, err := task.Load(ws, taskID); err == nil {
-		e := Entry{Action: "detach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano)}
-		line, _ := json.Marshal(e)
-		_ = store.AppendLine(t.SessionsFile(), line)
-	}
-	_ = removeFile(pointerFile(ws, sessionID))
-	return taskID, nil
+	return store.AppendLine(value.SessionsFile(), line)
 }
 
 // Current returns the task id bound to sessionID, or "".
@@ -100,6 +146,36 @@ func Current(ws *workspace.Workspace, sessionID string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// ActiveEntries reduces an append-only attach/detach history to the currently
+// attached sessions. The latest attach record supplies actor and start time.
+func ActiveEntries(entries []Entry) []Entry {
+	active := map[string]Entry{}
+	for _, entry := range entries {
+		switch entry.Action {
+		case "attach":
+			active[entry.Session] = entry
+		case "detach":
+			delete(active, entry.Session)
+		}
+	}
+	result := make([]Entry, 0, len(active))
+	for _, entry := range active {
+		result = append(result, entry)
+	}
+	sort.Slice(result, func(left, right int) bool {
+		leftTime, leftErr := time.Parse(time.RFC3339Nano, result[left].At)
+		rightTime, rightErr := time.Parse(time.RFC3339Nano, result[right].At)
+		if leftErr == nil && rightErr == nil && !leftTime.Equal(rightTime) {
+			return leftTime.Before(rightTime)
+		}
+		if result[left].At != result[right].At {
+			return result[left].At < result[right].At
+		}
+		return result[left].Session < result[right].Session
+	})
+	return result
 }
 
 // Entries returns the valid session audit records for a task in append order.

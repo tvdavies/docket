@@ -14,6 +14,7 @@ import (
 	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/bundle"
 	"github.com/tvdavies/docket/internal/project"
+	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
 )
@@ -31,15 +32,16 @@ type boardResponse struct {
 }
 
 type boardTask struct {
-	ID         string           `json:"id"`
-	Title      string           `json:"title"`
-	Status     string           `json:"status"`
-	Project    string           `json:"project,omitempty"`
-	Labels     []string         `json:"labels"`
-	Assignee   string           `json:"assignee,omitempty"`
-	Wait       *task.Wait       `json:"wait,omitempty"`
-	References []task.Reference `json:"references"`
-	UpdatedAt  string           `json:"updated_at"`
+	ID             string           `json:"id"`
+	Title          string           `json:"title"`
+	Status         string           `json:"status"`
+	Project        string           `json:"project,omitempty"`
+	Labels         []string         `json:"labels"`
+	Assignee       string           `json:"assignee,omitempty"`
+	Wait           *task.Wait       `json:"wait,omitempty"`
+	References     []task.Reference `json:"references"`
+	ActiveSessions []session.Entry  `json:"active_sessions"`
+	UpdatedAt      string           `json:"updated_at"`
 }
 
 type createTaskRequest struct {
@@ -108,7 +110,12 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
 		for _, value := range tasks {
-			result.Tasks = append(result.Tasks, summariseTask(value))
+			summary, err := summariseTask(value)
+			if err != nil {
+				writeAPIError(writer, err)
+				return
+			}
+			result.Tasks = append(result.Tasks, summary)
 		}
 		writeJSON(writer, http.StatusOK, result)
 	})
@@ -320,13 +327,17 @@ func writeTaskBundle(writer http.ResponseWriter, status int, ws *workspace.Works
 	writeJSON(writer, status, result)
 }
 
-func summariseTask(value *task.Task) boardTask {
+func summariseTask(value *task.Task) (boardTask, error) {
+	sessions, err := session.Entries(value)
+	if err != nil {
+		return boardTask{}, err
+	}
 	return boardTask{
 		ID: value.ID, Title: value.Title, Status: value.Status, Project: value.Project,
 		Labels: nonNilStrings(value.Labels), Assignee: value.Assignee, Wait: value.Wait,
-		References: nonNilReferences(value.References),
-		UpdatedAt:  value.UpdatedAt.UTC().Format(time.RFC3339),
-	}
+		References: nonNilReferences(value.References), ActiveSessions: session.ActiveEntries(sessions),
+		UpdatedAt: value.UpdatedAt.UTC().Format(time.RFC3339),
+	}, nil
 }
 
 func allowJSONMutation(writer http.ResponseWriter, request *http.Request, allowRemoteHost bool) bool {

@@ -16,14 +16,22 @@ Start it in the foreground with `docket serve --all`, or manage the background u
 - create tasks;
 - inspect and edit title, status, assignee, labels, and description;
 - see active waits directly on cards and resolve them with optional feedback;
-- follow typed plan, pull-request, ticket, and session references;
+- see a live working badge while a task has an attached agent session;
+- follow typed plan, pull-request, ticket, and session/log references;
 - read relationships and attachment metadata;
 - read a chronological activity timeline and add comments; and
 - choose the actor recorded on browser mutations.
 
-The board reads authoritative task files on every refresh. It does not maintain a separate browser or server database. Writes use the same action layer, per-task locks, atomic writes, validation, and event production as the CLI and Lua SDK.
+The board reads authoritative task files on every refresh. It derives live work
+from unmatched session attach/detach audit records and does not maintain a
+separate browser or server database. The launching integration remains
+responsible for detaching crashed or completed sessions; Docket does not infer
+process liveness. Writes use the same action layer, per-task
+locks, atomic writes, validation, and event production as the CLI and Lua SDK.
 
-Browser mutations therefore trigger normal handlers. The HTTP response does not wait for handler completion; the service watcher drains the resulting event asynchronously.
+Browser mutations therefore trigger normal handlers. The HTTP response does not
+wait for handler completion; the service watcher drains the resulting event
+asynchronously.
 
 ## Drag and drop
 

@@ -18,6 +18,10 @@
   --wait-line: #e9c96f;
   --wait-chip: #fff0cc;
   --wait-ink: #805c0b;
+  --run-surface: #eff9f4;
+  --run-line: #8fcdb3;
+  --run-chip: #dcece5;
+  --run-ink: #146c52;
   --shadow: 0 18px 50px rgba(27, 39, 32, .12);
   --radius: 10px;
   --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -44,6 +48,10 @@
     --wait-line: #715d28;
     --wait-chip: #4a3b18;
     --wait-ink: #f0c96f;
+    --run-surface: #173127;
+    --run-line: #376c57;
+    --run-chip: #203c30;
+    --run-ink: #80d3b2;
     --shadow: 0 22px 60px rgba(0, 0, 0, .38);
   }
 }
@@ -164,12 +172,15 @@ main { padding: 26px 24px 48px; }
 .task-card:active { cursor: grabbing; }
 .task-card.dragging { opacity: .4; transform: rotate(1deg); }
 .card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .task-id { color: var(--faint); font: 700 10px/1.2 var(--mono); letter-spacing: .055em; text-transform: uppercase; }
 .card-title { margin: 8px 0 11px; font-size: 14px; font-weight: 670; line-height: 1.35; overflow-wrap: anywhere; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .tag, .reference-chip { max-width: 150px; padding: 2px 6px; border-radius: 4px; background: var(--surface-muted); color: var(--soft); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .reference-chip { color: var(--accent); background: var(--accent-soft); }
-.wait-badge { padding: 3px 7px; border-radius: 99px; background: var(--wait-chip); color: var(--wait-ink); font: 700 9px var(--mono); white-space: nowrap; }
+.wait-badge, .run-badge { padding: 3px 7px; border-radius: 99px; font: 700 9px var(--mono); white-space: nowrap; }
+.wait-badge { background: var(--wait-chip); color: var(--wait-ink); }
+.run-badge { background: var(--run-chip); color: var(--run-ink); }
 .assignee { margin-left: auto; color: var(--soft); font: 10px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .empty-column { padding: 25px 12px; color: var(--faint); text-align: center; font-size: 12px; }
 .empty-board { grid-column: 1 / -1; padding: 60px 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--soft); text-align: center; background: var(--surface); }
@@ -201,9 +212,12 @@ main { padding: 26px 24px 48px; }
 .detail-section { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--line); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
 .section-heading h3 { margin: 0; font-size: 14px; }
-.wait-section { padding: 16px; border: 1px solid var(--wait-line); border-radius: 9px; background: var(--wait-surface); }
-.wait-section.detail-section { margin-top: 24px; }
+.wait-section, .run-section { padding: 16px; border-radius: 9px; }
+.wait-section { border: 1px solid var(--wait-line); background: var(--wait-surface); }
+.run-section { border: 1px solid var(--run-line); background: var(--run-surface); }
+.wait-section.detail-section, .run-section.detail-section { margin-top: 24px; }
 .wait-reason { margin: 0 0 8px; color: var(--ink); font-size: 13px; }
+.run-detail { margin: 0; color: var(--ink); font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
 .wait-reference { display: block; margin-bottom: 15px; color: var(--accent); font-size: 12px; overflow-wrap: anywhere; }
 .resolve-wait-form { display: grid; gap: 10px; margin-top: 15px; }
 .resolve-wait-form .button { justify-self: end; }
