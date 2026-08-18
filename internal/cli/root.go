@@ -6,6 +6,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -26,61 +27,149 @@ var (
 	flagSession string
 )
 
+const (
+	groupTasks      = "tasks"
+	groupSessions   = "sessions"
+	groupProjects   = "projects"
+	groupAutomation = "automation"
+	groupService    = "service"
+	groupHelp       = "help"
+)
+
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "docket",
-		Short: "The docket that travels with the work — a file-backed task store that hands context between agent sessions",
-		Long: `docket — the slip that travels with the job.
+		Short: "File-backed tasks and durable context for humans and agents",
+		Long: `Docket stores tasks as plain Markdown and YAML files under .docket/.
 
-A lightweight, file-backed task store for agents. Tasks are plain markdown +
-YAML on disk; an optional local service watches multiple workspaces and serves
-status. An agent picks up a task,
-does work, and hands full context to the next session by attaching to the task.`,
+The normal workflow uses explicit task IDs:
+  1. docket init
+  2. docket new --title "Describe the work"
+  3. docket show TASK-0001
+  4. docket comment TASK-0001 "Record a durable decision"
+  5. docket move TASK-0001 done
+
+Session attachment is optional shorthand for omitting TASK-ID. See
+"docket session --help" before using it.`,
+		Example: `  # Start a workspace and create a task
+  docket init
+  docket new --title "Fix login cache" --label bug
+
+  # Inspect and update it using an explicit ID
+  docket show TASK-0001
+  docket comment TASK-0001 "Root cause: stale cache key"
+  docket move TASK-0001 in-review`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
 	}
-	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "machine-readable JSON output")
-	root.PersistentFlags().StringVar(&flagSession, "session", "", "session id for attach scoping (falls back to $DOCKET_SESSION)")
+	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "request machine-readable JSON from data-returning commands")
+	root.PersistentFlags().StringVar(&flagSession, "session", "", "session pointer used when TASK-ID is omitted (defaults to $DOCKET_SESSION, then _global)")
 
-	root.AddCommand(
-		newInitCmd(),
-		newNewCmd(),
-		newListCmd(),
-		newShowCmd(),
-		newContextCmd(),
-		newEditCmd(),
-		newMoveCmd(),
-		newLabelCmd(),
-		newCommentCmd(),
-		newAttachFileCmd(),
-		newFilesCmd(),
-		newLinkCmd(),
-		newUnlinkCmd(),
-		newProjectCmd(),
-		newAttachCmd(),
-		newDetachCmd(),
-		newCurrentCmd(),
-		newInboxCmd(),
-		newWatchCmd(),
-		newEventsCmd(),
-		newReindexCmd(),
-		newWorkspaceCmd(),
-		newServeCmd(),
-		newServiceCmd(),
-		newSkillCmd(),
-		newLuaHookCmd(),
+	root.AddGroup(
+		&cobra.Group{ID: groupTasks, Title: "Task workflow:"},
+		&cobra.Group{ID: groupSessions, Title: "Optional session shorthand:"},
+		&cobra.Group{ID: groupProjects, Title: "Projects and relationships:"},
+		&cobra.Group{ID: groupAutomation, Title: "Automation and event diagnostics:"},
+		&cobra.Group{ID: groupService, Title: "Workspace, service, and maintenance:"},
+		&cobra.Group{ID: groupHelp, Title: "Help and shell integration:"},
 	)
+	root.SetHelpCommandGroupID(groupHelp)
+	root.SetCompletionCommandGroupID(groupHelp)
+
+	taskCommands := []*cobra.Command{
+		newInitCmd(), newNewCmd(), newListCmd(), newShowCmd(), newEditCmd(),
+		newMoveCmd(), newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newFilesCmd(),
+	}
+	setCommandGroup(groupTasks, taskCommands...)
+
+	projectCommands := []*cobra.Command{newProjectCmd(), newLinkCmd(), newUnlinkCmd()}
+	setCommandGroup(groupProjects, projectCommands...)
+
+	automationCommands := []*cobra.Command{newInboxCmd(), newEventsCmd(), newWatchCmd()}
+	setCommandGroup(groupAutomation, automationCommands...)
+
+	serviceCommands := []*cobra.Command{newWorkspaceCmd(), newServeCmd(), newServiceCmd(), newReindexCmd()}
+	setCommandGroup(groupService, serviceCommands...)
+
+	sessionCommand := newSessionCmd()
+	sessionCommand.GroupID = groupSessions
+	skillCommand := newSkillCmd()
+	skillCommand.GroupID = groupHelp
+
+	// Preserve the original flat session commands and duplicate context command
+	// for scripts, but keep the primary help surface small and unambiguous.
+	legacyAttach, legacyDetach, legacyCurrent := newAttachCmd(), newDetachCmd(), newCurrentCmd()
+	legacyContext := newContextCmd()
+	for _, command := range []*cobra.Command{legacyAttach, legacyDetach, legacyCurrent, legacyContext} {
+		command.Hidden = true
+	}
+
+	root.AddCommand(taskCommands...)
+	root.AddCommand(projectCommands...)
+	root.AddCommand(automationCommands...)
+	root.AddCommand(serviceCommands...)
+	root.AddCommand(sessionCommand, skillCommand)
+	root.AddCommand(legacyAttach, legacyDetach, legacyCurrent, legacyContext, newLuaHookCmd())
 	return root
+}
+
+func setCommandGroup(group string, commands ...*cobra.Command) {
+	for _, command := range commands {
+		command.GroupID = group
+	}
 }
 
 // Execute runs the CLI and returns a process exit code.
 func Execute() int {
-	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "docket: "+err.Error())
+	return executeRoot(newRootCmd(), os.Stderr)
+}
+
+func executeRoot(root *cobra.Command, errorOutput io.Writer) int {
+	command, err := root.ExecuteC()
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintf(errorOutput, "docket: %v\n", err)
+	if !isUsageError(err) {
 		return 1
 	}
-	return 0
+	if command == nil {
+		command = root
+	}
+	fmt.Fprintf(errorOutput, "\nUsage: %s\n", command.UseLine())
+	fmt.Fprintf(errorOutput, "Run '%s --help' for examples and flags.\n", command.CommandPath())
+	return 1
+}
+
+func isUsageError(err error) bool {
+	message := err.Error()
+	for _, fragment := range []string{
+		"accepts ",
+		"requires at least ",
+		"requires at most ",
+		"requires exactly ",
+		"unknown command ",
+		"unknown flag:",
+		"unknown shorthand flag:",
+		"flag needs an argument:",
+		"invalid argument ",
+		"required flag(s)",
+		"if any flags in the group ",
+		"title is required",
+		"title cannot be empty",
+		"use either comment TEXT or --file",
+		"no changes requested;",
+		"no label changes requested;",
+		"comment text is required",
+		"specify a relationship flag",
+		"specify exactly one relationship flag",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // openWS discovers and opens the workspace.

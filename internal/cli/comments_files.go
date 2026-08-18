@@ -16,9 +16,15 @@ import (
 func newCommentCmd() *cobra.Command {
 	var fromFile string
 	cmd := &cobra.Command{
-		Use:   "comment [TASK-ID] [text]",
-		Short: "Append a comment to a task (append-only)",
-		Args:  cobra.MaximumNArgs(2),
+		Use:   "comment [TASK-ID] [TEXT]",
+		Short: "Append a durable, immutable comment to a task",
+		Long: `Comments should capture decisions, evidence, dead ends, and handoff context.
+Quote multi-word TEXT as one shell argument, or use --file. TASK-ID may be omitted
+only when an optional session pointer is attached.`,
+		Example: `  docket comment TASK-0007 "Root cause: stale cache key"
+  docket comment TASK-0007 --file ./investigation.md
+  printf 'Multiline note\n' | docket comment TASK-0007 --file -`,
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -26,6 +32,9 @@ func newCommentCmd() *cobra.Command {
 			}
 			// Disambiguate (id, text) vs (text) using whether arg0 looks like an id.
 			explicit, text := splitIDAndText(ws, args)
+			if fromFile != "" && text != "" {
+				return fmt.Errorf("use either comment TEXT or --file, not both")
+			}
 			if fromFile != "" {
 				var data []byte
 				if fromFile == "-" {
@@ -68,8 +77,14 @@ func newAttachFileCmd() *cobra.Command {
 	var caption string
 	cmd := &cobra.Command{
 		Use:   "attach-file [TASK-ID] PATH",
-		Short: "Attach a file (any media) to a task",
-		Args:  cobra.RangeArgs(1, 2),
+		Short: "Copy a file into a task's durable attachments",
+		Long: `The source file is copied into the task folder and recorded in its
+attachment manifest. With one argument, PATH applies to the optional attached
+task; explicit TASK-ID plus PATH is recommended for automation.`,
+		Example: `  docket attach-file TASK-0007 ./repro.log
+  docket attach-file TASK-0007 ./screenshot.png --caption "Failure state"
+  docket files TASK-0007`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -113,9 +128,11 @@ func newAttachFileCmd() *cobra.Command {
 
 func newFilesCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "files [TASK-ID]",
-		Short: "List a task's attachments",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     "files [TASK-ID]",
+		Short:   "List files attached to a task",
+		Long:    "TASK-ID may be omitted only when an optional session pointer is attached.",
+		Example: "  docket files TASK-0007\n  docket files TASK-0007 --json",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {

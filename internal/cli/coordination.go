@@ -22,7 +22,11 @@ tracked by a per-actor cursor. A polling consumer runs:
 
     docket inbox --mark-read --json
 
-to drain its queue. Use --all to ignore the assignee filter.`,
+to drain its queue. Use --all to ignore the assignee filter. Most event-driven
+automation should use configured handlers instead.`,
+		Example: `  DOCKET_ACTOR=researcher docket inbox
+  DOCKET_ACTOR=researcher docket inbox --mark-read --json
+  docket inbox --actor researcher --all --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -63,8 +67,11 @@ func newEventsCmd() *cobra.Command {
 	var since int
 	cmd := &cobra.Command{
 		Use:   "events",
-		Short: "Print the raw event log",
-		Args:  cobra.NoArgs,
+		Short: "Inspect the workspace's append-only event log",
+		Long:  "--since N skips the first N physical event records; it is a cursor position, not an event sequence or timestamp.",
+		Example: `  docket events
+  docket events --since 20 --json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -96,8 +103,10 @@ func newWatchCmd() *cobra.Command {
 		Use:   "watch",
 		Short: "Stream events as they happen (push-based coordination)",
 		Long: `watch blocks and emits each new event as a JSON line as soon as it is
-appended, so a harness can react without polling. Combine with --json (default
-output is already one JSON object per line).`,
+appended, so a harness can react without polling. Output is always JSONL.
+Most durable automation should use configured handlers instead.`,
+		Example: `  docket watch
+  docket watch --from-start | jq -c 'select(.type == "task.moved")'`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()

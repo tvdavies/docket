@@ -4,7 +4,7 @@ A file-backed task system that hands context between agent sessions.
 
 > A **docket** is the slip that travels with a job through the shop, carrying its details; a court docket is a list of cases moving through their stages. Both readings are the product: the task folder is the docket — it carries the work, and all its context, from one agent session to the next.
 
-Durable tasks are the whole point: plain files in a directory, **no database**, surviving across sessions, machines, and `git clone`. An agent picks up a task, does work, and hands full context to the next session by *attaching to the task*. Harness-neutral — workspace handlers decide what runs when events arrive.
+Durable tasks are the whole point: plain files in a directory, **no database**, surviving across sessions, machines, and `git clone`. A later human or agent resumes by reading the task's complete context bundle. Harness-neutral workspace handlers decide what runs when events arrive.
 
 A single static Go binary, ~8MB, zero runtime dependencies. The CLI works by
 itself; an optional systemd user service watches all registered workspaces and
@@ -38,7 +38,7 @@ go install github.com/tvdavies/docket@latest
 cd my-project
 docket init                                          # create + register (safe to repeat)
 ID=$(docket new --title "Fix login cache" --label bug)
-docket attach "$ID"                                  # bind session + print context bundle
+docket show "$ID"                                    # complete context bundle
 docket comment "$ID" "Root cause: cache key omits pwdVersion"
 docket attach-file "$ID" ./repro.log --caption "failing assertion"
 docket move "$ID" in-review
@@ -47,15 +47,28 @@ docket move "$ID" in-review
 A fresh session resumes with full continuity:
 
 ```sh
-docket attach "$ID"     # description + every comment + artifacts + links, resolved
+docket show "$ID"       # description + comments + artifacts + resolved links
 ```
+
+## Documentation
+
+- [CLI guide](docs/cli.md) — workflows, command map, flags, errors, and examples
+- [Configuration reference](docs/configuration.md) — workspace and service config
+- [Lua hooks and SDK](docs/lua-hooks.md) — runtime, event schema, APIs, and debugging
+- [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
+
+Run `docket COMMAND --help` for exact local usage and examples, or `docket skill`
+for a self-contained guide suitable for an agent harness.
 
 ## The handoff
 
-The task folder *is* the durable memory. A new session does not reconstruct
-what the last one knew — it `attach`es and reads the **context bundle**:
-description, comments (decisions and dead ends), attachments, and relationships
-resolved to human-meaningful titles.
+The task folder *is* durable memory. `docket show TASK-ID` returns the context
+bundle a fresh session needs: description, comments (decisions and dead ends),
+attachments, and relationships resolved to human-meaningful titles.
+
+Session attachment is optional shorthand that lets later commands omit the task
+ID. It does not assign, claim, lock, or start work; explicit IDs are recommended
+for automation. See [Session attachment](docs/sessions.md).
 
 ## Workspaces and the machine-wide service
 
@@ -110,8 +123,8 @@ react:
   handlers for events written outside a synchronous CLI mutation.
 - `docket events [--since N]` — the raw log.
 
-Handlers subscribe by event type and may add exact-value matches on dotted event
-paths. All match entries must pass:
+Handlers subscribe by event type, may add exact-value `match` predicates, and
+use exactly one runtime:
 
 ```yaml
 handlers:
@@ -120,80 +133,20 @@ handlers:
     match:
       data.to: done
     lua: hooks/notify.lua
-    delivery: service  # optional: asynchronous via docket.service
+    delivery: service
 ```
 
-Exactly one runtime is required:
+- `lua:` runs a trusted Lua 5.1 `handle(event, docket)` function in an isolated
+  Docket child process with full standard libraries and a lightweight SDK.
+- `run:` preserves the executable JSONL hook interface.
 
-- `lua: hooks/notify.lua` loads an embedded Lua 5.1 script. The script does not
-  need to be executable. Docket runs it in an isolated child invocation of its
-  own binary and calls `handle(event, docket)` once per matching event.
-- `run: hooks/notify` runs an executable from the project root and supplies the
-  matching batch as JSON lines on stdin, preserving the original unrestricted
-  hook interface.
-
-Relative paths resolve from the directory containing `.docket/`. Handler names
-use lowercase letters, numbers, hyphens, and underscores. Both runtimes receive
-`DOCKET_HOME`, `DOCKET_ACTOR=handler:<name>`, and `DOCKET_HANDLER=<name>`.
-
-### Lua hooks
-
-Lua hooks have GopherLua's complete standard library, including `io`, `os`,
-`package`, `debug`, `coroutine`, and `channel`. They run with the user's system
-permissions and are trusted code. Process isolation means `os.exit` and
-blocking IO cannot terminate or indefinitely block the long-lived Docket
-service; the handler timeout kills the hook process group and its ordinary
-children. A script that deliberately detaches a process into a new session owns
-that process's lifecycle.
-
-```lua
-function handle(event, docket)
-    local file = assert(io.open(docket.path("completed.txt"), "a"))
-    file:write(event.task .. "\n")
-    file:close()
-
-    docket.log.info("completed", event.task)
-end
-```
-
-The lightweight `docket` SDK provides:
-
-```lua
-docket.path(...)                         -- path relative to the project root
-docket.asset(...)                        -- path relative to the Lua script
-docket.paths.project
-docket.paths.workspace
-docket.paths.script
-docket.paths.script_dir
-
-docket.log.info(...)
-docket.log.warn(...)
-docket.log.error(...)
-docket.fs.write_atomic(path, content, permission) -- permission defaults to 0644
-docket.process.run(command, {args})
-
-docket.task.get(id)
-docket.task.move(id, status)              -- returns task, previous_status
-docket.task.assign(id, assignee)
-docket.task.comment(id, text)             -- returns comment filename
-docket.task.label(id, {add}, {remove})
-```
-
-SDK task mutations use the same locks, validation, atomic writes, and events as
-the CLI. Events produced by a hook are drained after that handler returns.
-
-With inline delivery, stdout and stderr are written to the invoking command's
-stderr, so `--json` output remains valid. Service-delivered output goes to the
-Docket service journal. A handler failure cannot roll back the triggering
-mutation; its cursor remains before the failed batch. A newly registered
-handler starts at cursor zero and therefore sees existing history. Because
-successful work can repeat after a later batch failure, handlers must be
-idempotent. Handlers should enqueue or spawn long-running work and exit within
-30 seconds.
+See the [configuration reference](docs/configuration.md) for every field and
+[Lua hooks and SDK](docs/lua-hooks.md) for the event schema, complete API,
+examples, retry semantics, and debugging guide.
 
 ## Identity
 
-- `--session <id>` (or `$DOCKET_SESSION`) scopes attach/detach per caller.
+- `--session <id>` (or `$DOCKET_SESSION`) selects an optional current-task pointer; see [Session attachment](docs/sessions.md).
 - `$DOCKET_ACTOR` (else git user, else "unknown") is the authorship identity.
 
 ## Develop

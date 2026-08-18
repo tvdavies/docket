@@ -14,9 +14,11 @@ var skillDoc string
 
 func newReindexCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "reindex",
-		Short: "Rebuild the optional .index/ cache by scanning all tasks",
-		Args:  cobra.NoArgs,
+		Use:     "reindex",
+		Short:   "Rebuild the optional derived task index",
+		Long:    "Normal commands read authoritative task files directly. Run this only when a consumer explicitly needs .docket/.index/tasks.json.",
+		Example: "  docket reindex\n  docket reindex --json",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -45,10 +47,15 @@ func newReindexCmd() *cobra.Command {
 
 func newSkillCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "skill",
-		Short: "Print the docket agent skill / usage doc (droppable into any harness)",
-		Args:  cobra.NoArgs,
+		Use:     "skill",
+		Aliases: []string{"guide"},
+		Short:   "Print a self-contained usage guide for an agent harness",
+		Example: "  docket skill\n  docket skill > ~/.config/my-agent/skills/docket.md",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flagJSON {
+				return printJSON(map[string]string{"skill": skillDoc})
+			}
 			fmt.Print(skillDoc)
 			return nil
 		},

@@ -1,87 +1,211 @@
 # docket — agent skill
 
-`docket` is a file-backed task store. It is your **durable memory across
-sessions**: the task folder *is* the context. You do not serialize your own
-working memory — you attach to a task, and everything you need is printed back.
+`docket` is a file-backed task store and durable memory across sessions. Tasks are Markdown + YAML under `.docket/`; comments, attachments, relationships, and events preserve context after a model session ends.
 
-Tasks are plain markdown + YAML under a `.docket/` directory, discovered by
-walking up from the current directory like `.git`. An optional machine-wide
-service watches registered workspaces; task files remain the source of truth.
+## Start here
 
-## The core loop
+Use explicit task IDs unless your harness intentionally uses session pointers:
 
-```
-docket attach TASK-0007            # bind this session + print the context bundle
-# ...do work, using the bundle as your ground truth...
+```sh
+docket show TASK-0007 --json
+# ...perform the work...
 docket comment TASK-0007 "Root cause: stale cache key omits pwdVersion"
-docket attach-file TASK-0007 ./repro.log --caption "failing assertion"
+docket attach-file TASK-0007 ./repro.log --caption "Failing assertion"
 docket move TASK-0007 in-review
-# session ends — your working memory evaporates, the task retains everything
 ```
 
-A fresh session resumes with one command:
+A fresh session resumes with:
 
+```sh
+docket show TASK-0007 --json
 ```
-docket attach TASK-0007            # full continuity: description, comments, files, links
+
+`show` returns the task description, comments, files, project, labels, assignee, and resolved relationships.
+
+## Correcting command mistakes
+
+Every command has examples and exact flags:
+
+```sh
+docket --help
+docket move --help
+docket workspace --help
 ```
 
-After `attach`, scoped commands (`comment`, `move`, `attach-file`, `show`,
-`label`, `edit`, `files`) may **omit the task id** — they default to the
-attached task.
+On an argument or flag mistake, Docket prints the exact usage line and relevant help command. Operational failures report their underlying error directly. Do not guess repeatedly; read that command's `--help`. Use quoted arguments for multi-word text or `--file` for multiline content.
 
-## Identity & sessions
+Data-returning commands accept `--json`. Successful JSON is written to stdout; errors and handler logs use stderr. Foreground and service-control commands may stream native output instead; inspect their help.
 
-- Pass `--session <id>` (your harness session/conversation id) so attach/detach
-  is traceable. Falls back to `$DOCKET_SESSION`, then a global pointer.
-- The acting identity for comments/authorship comes from `$DOCKET_ACTOR`, else the
-  git user, else "unknown". Set `DOCKET_ACTOR=agent:pi` (etc.) in your harness.
+## Workspace and identity
 
-## Commands
+```sh
+docket init                 # create + register current workspace; safe to repeat
+docket workspace check      # validate config and summarise store
+```
 
-Every command supports `--json` for stable machine output.
+- Workspace discovery walks upward for `.docket/`.
+- `DOCKET_HOME` overrides discovery.
+- `DOCKET_ACTOR` sets authorship; otherwise Git user, then `unknown`.
+- `DOCKET_SESSION` identifies an optional session pointer.
 
-### Tasks
-- `docket init` — ensure the current directory has `.docket/` and is registered with the service; safe to repeat.
-- `docket new --title T [--desc D | --desc-file F] [--project P] [--label L]...` — prints the new id.
-- `docket list [--status S] [--label L] [--project P] [--assignee A]`
-- `docket show [TASK-ID]` — full dossier.
-- `docket context [TASK-ID] [--comments N]` — the handoff bundle (same as attach prints).
-- `docket edit [TASK-ID] [--title T] [--desc-file F] [--assignee A]`
-- `docket move [TASK-ID] STATUS` — change lane.
-- `docket label [TASK-ID] --add L --remove L`
+## Task commands
 
-### Comments & files
-- `docket comment [TASK-ID] "text"` (or `--file -` for stdin) — append-only.
-- `docket attach-file [TASK-ID] ./path [--caption "..."]` — any media.
-- `docket files [TASK-ID]` — list attachments.
+```sh
+docket new --title TITLE [--desc TEXT | --desc-file FILE] [--project ID] [--status STATUS] [--label LABEL]...
+docket list [--status STATUS] [--label LABEL] [--project ID] [--assignee ACTOR]
+docket show TASK-ID [--comments N]
+docket edit TASK-ID [--title TITLE] [--desc TEXT | --desc-file FILE] [--assignee ACTOR]
+docket move TASK-ID STATUS
+docket comment TASK-ID "TEXT"
+docket comment TASK-ID --file FILE
+docket label TASK-ID --add LABEL --remove LABEL
+docket attach-file TASK-ID PATH [--caption TEXT]
+docket files TASK-ID
+docket link TASK-ID --blocks TARGET
+docket unlink TASK-ID --blocks TARGET
+```
 
-### Relationships & projects
-- `docket link TASK-ID --blocks TASK-0010` — inverse maintained automatically.
-  Other kinds: `--parent`, `--relates`, `--duplicate-of` (see `docket link --help`).
-- `docket unlink TASK-ID --blocks TASK-0010`
-- `docket project new --name "Website" [--desc ...]` → `PROJ-0001`
-- `docket project list | docket project show PROJ-0001`
+Use `--file -` to read a description or comment from stdin.
 
-### Coordination (triggering work elsewhere)
-docket records every change to an append-only event log. Optional post-hoc
-handlers in `.docket/config.yaml` use `run:` for executable JSONL consumers or
-`lua:` for isolated embedded-Lua `handle(event, docket)` scripts. `match:` can
-filter exact dotted event paths such as `data.to: done`. Each handler has a
-durable cursor and failed deliveries retry. Inline handlers run after the event
-is durable; `delivery: service` runs asynchronously via docket.service.
+## Durable-context practice
 
-- `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
-  you, since your last cursor.
-- `docket watch` — **stream**: blocks and emits one workspace's events as JSON lines.
-- `docket serve --all` — watches every registered workspace and drains handlers.
-- `docket workspace add [PATH] --name NAME` — register a workspace with that service.
-- `docket events [--since N]` — the raw event log.
+1. Create or identify one task for each unit of work.
+2. Read `docket show TASK-ID --json` before acting.
+3. Record decisions, evidence, root causes, and dead ends as comments.
+4. Attach logs, screenshots, and other artifacts.
+5. Move status when ownership or workflow phase changes.
+6. Never assume a future session remembers facts absent from the task.
 
-## How to use this as durable context
+## Optional session shorthand
 
-1. When you start a unit of work, `docket new` it (or `attach` an existing one).
-2. Record **decisions, root causes, and dead ends** as `comment`s — these are
-   what the next session reads. Be specific; the comment log is the memory.
-3. Attach artifacts (logs, screenshots, diffs) with `attach-file`.
-4. `move` the task as state changes so an event handler can route follow-up.
-5. Never assume the next session remembers anything you did not write down.
+Attachment only stores a current-task pointer. It does not assign, claim, lock, or launch work.
+
+```sh
+export DOCKET_SESSION="agent-turn-42"
+docket session attach TASK-0007
+docket comment "TASK-ID can now be omitted"
+docket move in-review
+docket session detach
+```
+
+Prefer explicit IDs for hooks, concurrent agents, and independently generated commands. Without `--session` or `DOCKET_SESSION`, attachment uses a shared `_global` pointer.
+
+Legacy `docket attach`, `detach`, and `current` commands remain compatible but `docket session ...` is the documented surface.
+
+## Projects
+
+```sh
+docket project new --name "Website"
+docket project list
+docket project show PROJ-0001
+docket new --title "Improve navigation" --project PROJ-0001
+```
+
+Projects group tasks inside one workspace; they are not separate workspaces.
+
+## Event automation
+
+Every mutation appends to `.docket/events.jsonl`. Prefer durable configured handlers over polling or `docket watch`.
+
+```yaml
+handlers:
+  route-ready:
+    on: [task.moved]
+    match:
+      data.to: ready
+    lua: hooks/route.lua
+    delivery: service
+```
+
+- `on` is a list of exact event types or `["*"]`.
+- `match` uses exact dotted paths; nested paths are supported under `data`.
+- Use exactly one of `lua:` or `run:`.
+- `delivery: service` is asynchronous and durable; `inline` is the default.
+- A new handler name starts at cursor zero and may receive historical events.
+- Failures retain the cursor and retry; hooks must be idempotent.
+
+Validate configuration with:
+
+```sh
+docket workspace check
+```
+
+## Lua hooks
+
+Lua handlers define one global function:
+
+```lua
+function handle(event, docket)
+    docket.log.info("handling", event.type, event.task)
+end
+```
+
+Each matching event runs in a fresh isolated Docket child process with full GopherLua standard libraries, including `io`, `os`, `package`, and `debug`.
+
+Common event fields:
+
+```lua
+event.seq
+event.time
+event.type
+event.task
+event.title
+event.actor
+event.assignee
+event.data
+```
+
+For `task.moved`, use `event.data.from` and `event.data.to`.
+
+### Lua SDK
+
+```lua
+docket.path(...)                         -- relative to project root
+docket.asset(...)                        -- relative to Lua script directory
+docket.paths.project
+docket.paths.workspace
+docket.paths.script
+docket.paths.script_dir
+
+docket.log.info(...)
+docket.log.warn(...)
+docket.log.error(...)
+docket.fs.write_atomic(path, content, permission)
+docket.process.run(command, {args})
+
+docket.task.get(id)
+docket.task.move(id, status)              -- returns task, previous status
+docket.task.assign(id, assignee)
+docket.task.comment(id, text)             -- returns comment filename
+docket.task.label(id, {add}, {remove})
+```
+
+Example using ordinary Lua IO:
+
+```lua
+function handle(event, docket)
+    local file = assert(io.open(docket.path("reports", event.task .. ".txt"), "w"))
+    file:write("Handled " .. event.type .. "\n")
+    file:close()
+end
+```
+
+SDK task mutations use Docket's locks, atomic writes, validation, and event production. Do not edit `.docket` internals directly.
+
+For service-delivered failures:
+
+```sh
+docket service status
+docket service logs
+docket events --json
+```
+
+## Low-level coordination
+
+```sh
+docket events [--since N] --json
+docket watch [--from-start]
+docket inbox [--actor ACTOR] [--all] [--mark-read] --json
+```
+
+These are diagnostics or integration primitives. Configured handlers are the normal durable event mechanism.

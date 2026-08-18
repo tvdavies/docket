@@ -22,6 +22,9 @@ func newInitCmd() *cobra.Command {
 		Long: `init is idempotent: it creates .docket/ when absent and registers the
 workspace with the machine-wide service when unregistered. Re-running it is a
 successful no-op; it never creates duplicate registrations.`,
+		Example: `  mkdir my-workspace && cd my-workspace
+  docket init
+  docket init  # safe: already initialised and registered`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
@@ -50,9 +53,13 @@ func newNewCmd() *cobra.Command {
 	var title, desc, descFile, project, status string
 	var labels []string
 	cmd := &cobra.Command{
-		Use:   "new --title T [flags]",
-		Short: "Create a new task",
-		Args:  cobra.NoArgs,
+		Use:   "new --title TITLE",
+		Short: "Create a task and print its new ID",
+		Example: `  docket new --title "Fix login cache"
+  docket new --title "Fix login cache" --label bug --status ready
+  docket new --title "Investigate" --desc-file ./brief.md --project PROJ-0001
+  ID=$(docket new --title "Machine-readable creation")`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -92,6 +99,7 @@ func newNewCmd() *cobra.Command {
 	cmd.Flags().StringVar(&project, "project", "", "project id")
 	cmd.Flags().StringVar(&status, "status", "", "initial status (defaults to first lane)")
 	cmd.Flags().StringSliceVar(&labels, "label", nil, "label (repeatable)")
+	cmd.MarkFlagsMutuallyExclusive("desc", "desc-file")
 	_ = cmd.MarkFlagRequired("title")
 	return cmd
 }
@@ -100,8 +108,12 @@ func newListCmd() *cobra.Command {
 	var status, label, project, assignee string
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List tasks, optionally filtered",
-		Args:  cobra.NoArgs,
+		Short: "List tasks, with optional exact filters",
+		Example: `  docket list
+  docket list --status in-review
+  docket list --label bug --assignee researcher
+  docket list --project PROJ-0001 --json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -142,10 +154,17 @@ func newListCmd() *cobra.Command {
 }
 
 func newShowCmd() *cobra.Command {
-	return &cobra.Command{
+	var comments int
+	cmd := &cobra.Command{
 		Use:   "show [TASK-ID]",
-		Short: "Show a task's full dossier",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Show the complete context needed to understand or resume a task",
+		Long: `Show prints the task description, comments, attachments, project, and
+resolved relationships. TASK-ID may be omitted only when an optional session
+pointer is attached; explicit IDs are recommended for scripts and agents.`,
+		Example: `  docket show TASK-0007
+  docket show TASK-0007 --comments 10
+  docket show TASK-0007 --json`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -155,7 +174,7 @@ func newShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			b, err := bundle.Build(ws, id, 0)
+			b, err := bundle.Build(ws, id, comments)
 			if err != nil {
 				return err
 			}
@@ -166,13 +185,16 @@ func newShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().IntVar(&comments, "comments", 0, "show only the most recent N comments (0 means all)")
+	return cmd
 }
 
 func newContextCmd() *cobra.Command {
 	var comments int
 	cmd := &cobra.Command{
 		Use:   "context [TASK-ID]",
-		Short: "Print the context handoff bundle a fresh session reads to resume",
+		Short: "Compatibility alias for show --comments",
+		Long:  "This compatibility command remains for existing scripts. New usage should call `docket show [TASK-ID] --comments N`.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -202,9 +224,21 @@ func newEditCmd() *cobra.Command {
 	var title, desc, descFile, assignee string
 	cmd := &cobra.Command{
 		Use:   "edit [TASK-ID]",
-		Short: "Edit a task's title, description, or assignee",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Change a task's title, description, or assignee",
+		Long: `At least one edit flag should be supplied. TASK-ID may be omitted only
+when an optional session pointer is attached. Use --assignee "" to clear it.`,
+		Example: `  docket edit TASK-0007 --title "Clarify cache invalidation"
+  docket edit TASK-0007 --desc-file ./updated-brief.md
+  docket edit TASK-0007 --assignee researcher
+  docket edit TASK-0007 --assignee ""`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !cmd.Flags().Changed("title") && !cmd.Flags().Changed("desc") && !cmd.Flags().Changed("desc-file") && !cmd.Flags().Changed("assignee") {
+				return fmt.Errorf("no changes requested; supply --title, --desc, --desc-file, or --assignee")
+			}
+			if cmd.Flags().Changed("title") && strings.TrimSpace(title) == "" {
+				return fmt.Errorf("title cannot be empty")
+			}
 			ws, err := openWS()
 			if err != nil {
 				return err
@@ -259,14 +293,23 @@ func newEditCmd() *cobra.Command {
 	cmd.Flags().StringVar(&desc, "desc", "", "new description")
 	cmd.Flags().StringVar(&descFile, "desc-file", "", "read new description from file ('-' for stdin)")
 	cmd.Flags().StringVar(&assignee, "assignee", "", "set assignee (empty clears)")
+	cmd.MarkFlagsMutuallyExclusive("desc", "desc-file")
 	return cmd
 }
 
 func newMoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "move [TASK-ID] STATUS",
-		Short: "Change a task's status (lane)",
-		Args:  cobra.RangeArgs(1, 2),
+		Short: "Move a task to a configured status lane",
+		Long: `With two arguments, the first is TASK-ID and the second is STATUS. With
+one argument, it is STATUS for the optional task attached to this session.
+Explicit IDs are recommended for scripts and agents.`,
+		Example: `  docket move TASK-0007 in-progress
+  docket move TASK-0007 done
+
+  # Only after: docket session attach TASK-0007
+  docket move in-review`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -302,10 +345,18 @@ func newMoveCmd() *cobra.Command {
 func newLabelCmd() *cobra.Command {
 	var add, remove []string
 	cmd := &cobra.Command{
-		Use:   "label [TASK-ID] [--add L] [--remove L]",
-		Short: "Add or remove labels on a task",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "label [TASK-ID]",
+		Short: "Add or remove task labels",
+		Long: `Repeat --add or --remove to change several labels. TASK-ID may be omitted
+only when an optional session pointer is attached.`,
+		Example: `  docket label TASK-0007 --add bug
+  docket label TASK-0007 --add urgent --add client-visible
+  docket label TASK-0007 --remove bug`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(add) == 0 && len(remove) == 0 {
+				return fmt.Errorf("no label changes requested; supply --add LABEL or --remove LABEL")
+			}
 			ws, err := openWS()
 			if err != nil {
 				return err

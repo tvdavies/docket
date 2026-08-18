@@ -9,12 +9,41 @@ import (
 	"github.com/tvdavies/docket/internal/session"
 )
 
+func newSessionCmd() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "session",
+		Short: "Optional task pointer for commands that omit TASK-ID",
+		Long: `Session attachment is optional shorthand, not task assignment or locking.
+
+Attaching stores a machine-local pointer from one session ID to one task. After
+that, commands whose TASK-ID is optional can omit it. Use a stable, unique
+--session value or DOCKET_SESSION when several agents or terminals share a
+workspace. Without one, Docket uses the shared _global pointer.
+
+Prefer explicit task IDs in automation unless omitting them materially improves
+the harness integration.`,
+		Example: `  export DOCKET_SESSION="agent-turn-42"
+  docket session attach TASK-0007
+  docket comment "Found the root cause"   # TASK-ID omitted
+  docket move in-review                    # TASK-ID omitted
+  docket session detach`,
+	}
+	command.AddCommand(newAttachCmd(), newDetachCmd(), newCurrentCmd())
+	return command
+}
+
 func newAttachCmd() *cobra.Command {
 	var comments int
 	cmd := &cobra.Command{
 		Use:   "attach TASK-ID",
-		Short: "Bind this session to a task and print its context bundle (the handoff)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Point this session at a task and print its full context",
+		Long: `Attach records a machine-local current-task pointer for the effective
+session ID and prints the same context bundle as docket show. It does not claim,
+assign, lock, or start the task. Explicit TASK-ID arguments always remain valid.`,
+		Example: `  docket session attach TASK-0007
+  docket session attach TASK-0007 --session agent-turn-42
+  docket session attach TASK-0007 --comments 10`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -50,9 +79,10 @@ func newAttachCmd() *cobra.Command {
 
 func newDetachCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "detach",
-		Short: "Unbind this session from its current task",
-		Args:  cobra.NoArgs,
+		Use:     "detach",
+		Short:   "Clear this session's optional current-task pointer",
+		Example: "  docket session detach\n  docket session detach --session agent-turn-42",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -87,9 +117,10 @@ func newDetachCmd() *cobra.Command {
 
 func newCurrentCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "current",
-		Short: "Show the task this session is attached to",
-		Args:  cobra.NoArgs,
+		Use:     "current",
+		Short:   "Print the task selected by this session pointer",
+		Example: "  docket session current\n  docket session current --json",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {

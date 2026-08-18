@@ -69,10 +69,16 @@ func addRelFlags(cmd *cobra.Command) {
 
 func newLinkCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "link TASK-ID --<relationship> TARGET",
-		Short: "Create a typed relationship (inverse maintained automatically)",
-		Args:  cobra.ExactArgs(1),
-		RunE:  linkRunner(events.TaskLinked, true),
+		Use:   "link TASK-ID --RELATIONSHIP TARGET",
+		Short: "Create a typed task relationship and its inverse",
+		Long: `Supply exactly one relationship flag. Docket updates both tasks, so
+"TASK-0007 --blocks TASK-0010" also records TASK-0007 under TASK-0010's
+"blocked-by" relationship. Available flags come from workspace configuration.`,
+		Example: `  docket link TASK-0007 --blocks TASK-0010
+  docket link TASK-0007 --parent TASK-0001
+  docket link TASK-0007 --relates TASK-0008`,
+		Args: cobra.ExactArgs(1),
+		RunE: linkRunner(events.TaskLinked, true),
 	}
 	addRelFlags(cmd)
 	return cmd
@@ -80,10 +86,12 @@ func newLinkCmd() *cobra.Command {
 
 func newUnlinkCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "unlink TASK-ID --<relationship> TARGET",
-		Short: "Remove a typed relationship and its inverse",
-		Args:  cobra.ExactArgs(1),
-		RunE:  linkRunner(events.TaskUnlinked, false),
+		Use:   "unlink TASK-ID --RELATIONSHIP TARGET",
+		Short: "Remove a typed task relationship and its inverse",
+		Example: `  docket unlink TASK-0007 --blocks TASK-0010
+  docket unlink TASK-0007 --relates TASK-0008`,
+		Args: cobra.ExactArgs(1),
+		RunE: linkRunner(events.TaskUnlinked, false),
 	}
 	addRelFlags(cmd)
 	return cmd
@@ -92,7 +100,8 @@ func newUnlinkCmd() *cobra.Command {
 func newProjectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "project",
-		Short: "Manage projects (named task groupings)",
+		Short: "Create and inspect named task groupings",
+		Long:  "Projects are lightweight groupings inside one Docket workspace; they are not separate workspaces.",
 	}
 	cmd.AddCommand(newProjectNewCmd(), newProjectListCmd(), newProjectShowCmd())
 	return cmd
@@ -101,9 +110,10 @@ func newProjectCmd() *cobra.Command {
 func newProjectNewCmd() *cobra.Command {
 	var name, desc string
 	cmd := &cobra.Command{
-		Use:   "new --name NAME",
-		Short: "Create a project",
-		Args:  cobra.NoArgs,
+		Use:     "new --name NAME",
+		Short:   "Create a project and print its ID",
+		Example: "  docket project new --name \"Website\"\n  docket project new --name \"Website\" --desc \"Public site work\"",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -134,9 +144,10 @@ func newProjectNewCmd() *cobra.Command {
 
 func newProjectListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List projects",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Short:   "List projects",
+		Example: "  docket project list\n  docket project list --json",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -173,9 +184,10 @@ func newProjectListCmd() *cobra.Command {
 
 func newProjectShowCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "show PROJ-ID",
-		Short: "Show a project and its tasks",
-		Args:  cobra.ExactArgs(1),
+		Use:     "show PROJ-ID",
+		Short:   "Show a project and its member tasks",
+		Example: "  docket project show PROJ-0001\n  docket project show PROJ-0001 --json",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {

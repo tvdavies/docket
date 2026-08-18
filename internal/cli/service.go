@@ -21,7 +21,12 @@ func newServeCmd() *cobra.Command {
 		Short: "Watch handlers and serve the local Docket status UI",
 		Long: `serve runs one foreground Docket service. By default it serves the current
 workspace. With --all it follows the machine-local workspace registry and
-starts or stops workspace runtimes as registrations change.`,
+starts or stops workspace runtimes as registrations change. This is the
+foreground/debugging form; use "docket service" to manage the background systemd
+user service.`,
+		Example: `  docket serve            # current workspace, foreground
+  docket serve --all      # all registered workspaces, foreground
+  docket serve --all --listen 127.0.0.1:7463`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -61,7 +66,14 @@ starts or stops workspace runtimes as registrations change.`,
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "service",
-		Short: "Manage the machine-wide systemd user service",
+		Short: "Install and control the background systemd user service",
+		Long: `There is one Docket user service per machine, not one per workspace. It
+runs ` + "`docket serve --all`" + ` in the background. Use ` + "`docket serve`" + ` directly only
+for foreground development or debugging.`,
+		Example: `  docket service install
+  docket service start
+  docket service status
+  docket service logs`,
 	}
 	cmd.AddCommand(
 		&cobra.Command{
