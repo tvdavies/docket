@@ -79,11 +79,11 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 
 	taskCommands := []*cobra.Command{
 		newInitCmd(), newNewCmd(), newListCmd(), newShowCmd(), newEditCmd(),
-		newMoveCmd(), newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newFilesCmd(),
+		newMoveCmd(), newWaitCmd(), newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newFilesCmd(),
 	}
 	setCommandGroup(groupTasks, taskCommands...)
 
-	projectCommands := []*cobra.Command{newProjectCmd(), newLinkCmd(), newUnlinkCmd()}
+	projectCommands := []*cobra.Command{newProjectCmd(), newReferenceCmd(), newLinkCmd(), newUnlinkCmd()}
 	setCommandGroup(groupProjects, projectCommands...)
 
 	automationCommands := []*cobra.Command{newInboxCmd(), newEventsCmd(), newWatchCmd()}

@@ -26,11 +26,20 @@ const elements = {
   description: $('#detail-description'),
   saveState: $('#save-state'),
   saveTask: $('#save-task-button'),
+  waitSection: $('#wait-section'),
+  waitKind: $('#wait-kind'),
+  waitReason: $('#wait-reason'),
+  waitReference: $('#wait-reference'),
+  resolveWaitForm: $('#resolve-wait-form'),
+  waitResult: $('#wait-result'),
+  waitComment: $('#wait-comment'),
+  references: $('#references'),
+  referenceCount: $('#reference-count'),
   relationships: $('#relationships'),
   attachments: $('#attachments'),
   attachmentCount: $('#attachment-count'),
-  comments: $('#comments'),
-  commentCount: $('#comment-count'),
+  activity: $('#activity'),
+  activityCount: $('#activity-count'),
   commentForm: $('#comment-form'),
   commentText: $('#comment-text'),
   newDialog: $('#new-task-dialog'),
@@ -200,7 +209,7 @@ function renderBoard() {
     const header = createElement('header', 'column-header');
     const titleWrap = createElement('div', 'column-title');
     titleWrap.append(createElement('span', 'status-mark'));
-    titleWrap.append(createElement('h3', '', status));
+    titleWrap.append(createElement('h3', '', humanize(status)));
     header.append(titleWrap, createElement('span', 'count', String(tasks.length)));
 
     const list = createElement('div', 'card-list');
@@ -238,10 +247,12 @@ function renderTaskCard(task) {
 
   const top = createElement('div', 'card-top');
   top.append(createElement('span', 'task-id', task.id));
+  if (task.wait) top.append(createElement('span', 'wait-badge', `Waiting · ${humanize(task.wait.kind)}`));
   card.append(top, createElement('div', 'card-title', task.title));
 
   const meta = createElement('div', 'card-meta');
   for (const label of task.labels || []) meta.append(createElement('span', 'tag', label));
+  for (const reference of task.references || []) meta.append(createElement('span', 'reference-chip', humanize(reference.kind)));
   if (task.assignee) meta.append(createElement('span', 'assignee', task.assignee));
   card.append(meta);
 
@@ -333,9 +344,11 @@ function renderTaskDetail(task) {
   elements.labels.value = (task.labels || []).join(', ');
   elements.description.value = task.description || '';
   elements.saveState.textContent = task.project ? `Project ${task.project.id}` : '';
+  renderWait(task.wait);
+  renderReferences(task.references || []);
   renderRelationships(task.relationships || {});
   renderAttachments(task.attachments || []);
-  renderComments(task.comments || []);
+  renderActivity(task.activity || []);
   elements.detailLoading.hidden = true;
   elements.detailContent.hidden = false;
 }
@@ -345,10 +358,45 @@ function fillStatusSelect(select, selected) {
   const statuses = [...(state.board?.statuses || [])];
   if (selected && !statuses.includes(selected)) statuses.push(selected);
   for (const status of statuses) {
-    const option = createElement('option', '', status);
+    const option = createElement('option', '', humanize(status));
     option.value = status;
     option.selected = status === selected;
     select.append(option);
+  }
+}
+
+function renderWait(wait) {
+  elements.waitSection.hidden = !wait;
+  elements.waitResult.value = '';
+  elements.waitComment.value = '';
+  if (!wait) return;
+  elements.waitKind.textContent = humanize(wait.kind);
+  elements.waitReason.textContent = wait.reason || '';
+  const safeURL = safeReferenceURL(wait.reference);
+  elements.waitReference.hidden = !safeURL;
+  elements.waitReference.textContent = safeURL || '';
+  if (safeURL) elements.waitReference.href = safeURL;
+  else elements.waitReference.removeAttribute('href');
+}
+
+function renderReferences(references) {
+  elements.references.replaceChildren();
+  elements.referenceCount.textContent = String(references.length);
+  if (!references.length) {
+    elements.references.append(createElement('div', 'empty-detail', 'No external references.'));
+    return;
+  }
+  for (const reference of [...references].reverse()) {
+    const safeURL = safeReferenceURL(reference.url);
+    const row = createElement(safeURL ? 'a' : 'div', 'reference-row');
+    if (safeURL) {
+      row.href = safeURL;
+      row.target = '_blank';
+      row.rel = 'noreferrer';
+    }
+    row.append(createElement('span', 'reference-kind', humanize(reference.kind)));
+    row.append(createElement('span', 'reference-title', reference.title || reference.url));
+    elements.references.append(row);
   }
 }
 
@@ -385,20 +433,38 @@ function renderAttachments(attachments) {
   }
 }
 
-function renderComments(comments) {
-  elements.comments.replaceChildren();
-  elements.commentCount.textContent = String(comments.length);
-  if (!comments.length) {
-    elements.comments.append(createElement('div', 'empty-detail', 'No comments yet.'));
+function renderActivity(activity) {
+  elements.activity.replaceChildren();
+  elements.activityCount.textContent = String(activity.length);
+  if (!activity.length) {
+    elements.activity.append(createElement('div', 'empty-detail', 'No activity yet.'));
     return;
   }
-  for (const comment of [...comments].reverse()) {
-    const item = createElement('article', 'comment');
-    const meta = createElement('div', 'comment-meta');
-    meta.append(createElement('span', '', comment.author || 'unknown'));
-    meta.append(createElement('time', '', formatDate(comment.created_at)));
-    item.append(meta, createElement('div', 'comment-body', comment.body || ''));
-    elements.comments.append(item);
+  for (const entry of [...activity].reverse()) {
+    const item = createElement('article', `activity-item ${entry.kind || 'event'}`);
+    const meta = createElement('div', 'activity-meta');
+    const identity = [entry.actor || 'system', entry.session ? `session ${entry.session}` : ''].filter(Boolean).join(' · ');
+    meta.append(createElement('span', '', identity));
+    meta.append(createElement('time', '', formatDate(entry.at)));
+    item.append(meta, createElement('div', 'activity-type', activityTitle(entry)));
+    if (entry.body) item.append(createElement('div', 'activity-body', entry.body));
+    elements.activity.append(item);
+  }
+}
+
+function activityTitle(entry) {
+  const data = entry.data || {};
+  switch (entry.type) {
+    case 'comment': return 'Commented';
+    case 'task.created': return 'Created task';
+    case 'task.moved': return `Moved ${humanize(data.from || '')} → ${humanize(data.to || '')}`;
+    case 'task.waiting': return `Waiting · ${humanize(data.wait?.kind || '')}${data.wait?.reason ? ` — ${data.wait.reason}` : ''}`;
+    case 'task.resumed': return `Resumed · ${humanize(data.result || 'resolved')}`;
+    case 'task.reference_added': return `Added ${humanize(data.reference?.kind || '')} reference`;
+    case 'task.reference_removed': return `Removed ${humanize(data.reference?.kind || '')} reference`;
+    case 'attach': return 'Attached agent session';
+    case 'detach': return 'Detached agent session';
+    default: return humanize(String(entry.type || 'activity').replace(/^task\./, ''));
   }
 }
 
@@ -414,6 +480,23 @@ function closeDrawer() {
 
 function labelsFromInput(value) {
   return [...new Set(value.split(',').map((label) => label.trim()).filter(Boolean))];
+}
+
+function safeReferenceURL(value) {
+  if (!value) return '';
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:', 'file:'].includes(parsed.protocol.toLowerCase())) return '';
+    return parsed.href;
+  } catch {
+    return '';
+  }
+}
+
+function humanize(value) {
+  return String(value || '')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function formatDate(value) {
@@ -506,6 +589,54 @@ async function saveTask(event) {
   }
 }
 
+async function resolveWait(event) {
+  event.preventDefault();
+  if (!state.selectedTask?.wait) return;
+  if (state.dirty && !window.confirm('Discard unsaved task edits before resolving this wait?')) return;
+  const requestedWorkspace = state.workspace;
+  const requestedTask = state.selectedTask.id;
+  const waitID = state.selectedTask.wait.id;
+  const submittedGeneration = state.editGeneration;
+  const submit = elements.resolveWaitForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const note = elements.waitComment.value.trim();
+    if (note) {
+      await api(`/api/workspaces/${encodeURIComponent(requestedWorkspace)}/tasks/${encodeURIComponent(requestedTask)}/comments`, {
+        method: 'POST', body: JSON.stringify({ text: note }),
+      });
+    }
+    const updated = await api(`/api/workspaces/${encodeURIComponent(requestedWorkspace)}/tasks/${encodeURIComponent(requestedTask)}/wait/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ wait_id: waitID, result: elements.waitResult.value.trim() }),
+    });
+    if (state.workspace !== requestedWorkspace || state.selectedTask?.id !== requestedTask) return;
+    state.selectedTask = updated;
+    if (state.editGeneration === submittedGeneration) {
+      state.dirty = false;
+      renderTaskDetail(updated);
+      toast(`${requestedTask} resumed`);
+    } else {
+      state.dirty = true;
+      renderWait(updated.wait);
+      renderReferences(updated.references || []);
+      renderActivity(updated.activity || []);
+      elements.saveTask.disabled = false;
+      elements.saveState.textContent = 'Wait resolved · newer edits remain unsaved';
+      toast(`${requestedTask} resumed; newer edits are still unsaved`);
+    }
+    await loadBoard({ quiet: true });
+  } catch (error) {
+    toast(`Could not resolve wait: ${error.message}`, true);
+    if (state.workspace === requestedWorkspace && state.selectedTask?.id === requestedTask &&
+        state.editGeneration === submittedGeneration && !state.dirty) {
+      await loadTaskDetail(requestedTask);
+    }
+  } finally {
+    submit.disabled = false;
+  }
+}
+
 async function addComment(event) {
   event.preventDefault();
   if (!state.selectedTask) return;
@@ -522,7 +653,7 @@ async function addComment(event) {
     if (state.workspace !== requestedWorkspace || state.selectedTask?.id !== requestedTask) return;
     elements.commentText.value = '';
     state.selectedTask = updated;
-    renderComments(updated.comments || []);
+    renderActivity(updated.activity || []);
     toast('Comment added');
   } catch (error) {
     toast(`Comment failed: ${error.message}`, true);
@@ -563,6 +694,7 @@ elements.taskForm.addEventListener('input', () => {
   elements.saveState.textContent = 'Unsaved changes';
 });
 elements.taskForm.addEventListener('submit', saveTask);
+elements.resolveWaitForm.addEventListener('submit', resolveWait);
 elements.commentForm.addEventListener('submit', addComment);
 elements.closeDrawer.addEventListener('click', closeDrawer);
 elements.scrim.addEventListener('click', closeDrawer);

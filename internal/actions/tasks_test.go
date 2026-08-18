@@ -150,6 +150,117 @@ func TestTaskPatchWritesOneDossierAndOrderedEventGroup(t *testing.T) {
 	}
 }
 
+func TestWaitAndReferenceLifecycle(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Plan durable waits"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := actions.Tasks{Workspace: ws, Actor: "planner"}
+	waiting, err := operations.SetWait(created.ID, actions.SetWaitOptions{
+		Kind: "plan_feedback", Reason: "Awaiting plan review", Reference: "https://example.com/plan",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Wait == nil || waiting.Wait.ID == "" || waiting.Wait.Kind != "plan_feedback" {
+		t.Fatalf("wait = %#v", waiting.Wait)
+	}
+	if _, err := operations.SetWait(created.ID, actions.SetWaitOptions{Kind: "other", Reason: "Must fail"}); err == nil {
+		t.Fatal("second active wait unexpectedly succeeded")
+	}
+	if _, err := operations.ResolveWait(created.ID, actions.ResolveWaitOptions{WaitID: "wait-stale"}); err == nil {
+		t.Fatal("stale wait resolver unexpectedly succeeded")
+	}
+
+	withReference, reference, err := operations.AddReference(created.ID, "plan", "https://example.com/plan", "Plan v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withReference.References) != 1 || reference.ID == "" {
+		t.Fatalf("reference = %#v task = %#v", reference, withReference)
+	}
+	resumed, err := operations.ResolveWait(created.ID, actions.ResolveWaitOptions{WaitID: waiting.Wait.ID, Result: "approved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Wait != nil {
+		t.Fatalf("resolved wait remains: %#v", resumed.Wait)
+	}
+	withoutReference, removed, err := operations.RemoveReference(created.ID, reference.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.ID != reference.ID || len(withoutReference.References) != 0 {
+		t.Fatalf("removed = %#v task = %#v", removed, withoutReference)
+	}
+
+	log, err := events.All(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{events.TaskWaiting, events.TaskReferenceAdded, events.TaskResumed, events.TaskReferenceRemoved}
+	if len(log) != len(want) {
+		t.Fatalf("events = %#v", log)
+	}
+	for index, eventType := range want {
+		if log[index].Type != eventType {
+			t.Fatalf("event %d = %#v", index, log[index])
+		}
+	}
+}
+
+func TestWaitAndReferenceRejectUnsafeURLSchemes(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Safe links only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := actions.Tasks{Workspace: ws, Actor: "planner"}
+	for _, unsafe := range []string{"javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "mailto:test@example.com", "file:relative"} {
+		t.Run(unsafe, func(t *testing.T) {
+			if _, _, err := operations.AddReference(created.ID, "plan", unsafe, ""); err == nil {
+				t.Fatalf("unsafe reference %q was accepted", unsafe)
+			}
+			if _, err := operations.SetWait(created.ID, actions.SetWaitOptions{Kind: "feedback", Reason: "Review", Reference: unsafe}); err == nil {
+				t.Fatalf("unsafe wait reference %q was accepted", unsafe)
+			}
+		})
+	}
+}
+
+func TestWaitMutationRollsBackWhenEventFails(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Remain runnable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFailure := errors.New("event disk unavailable")
+	operations := actions.Tasks{
+		Workspace: ws, Actor: "planner",
+		Append: func(events.Event) error { return commitFailure },
+	}
+	if _, err := operations.SetWait(created.ID, actions.SetWaitOptions{Kind: "ci", Reason: "Awaiting CI"}); !errors.Is(err, commitFailure) {
+		t.Fatalf("set wait error = %v", err)
+	}
+	reloaded, err := task.Load(ws, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Wait != nil {
+		t.Fatalf("failed wait mutation persisted: %#v", reloaded.Wait)
+	}
+}
+
 func TestTaskActionsMutateAndEmitEvents(t *testing.T) {
 	ws, err := workspace.Init(t.TempDir())
 	if err != nil {

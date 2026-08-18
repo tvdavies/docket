@@ -5,7 +5,9 @@
 package session
 
 import (
+	"bufio"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,8 +23,8 @@ var Now = func() time.Time { return time.Now().UTC() }
 // GlobalSession is the pointer name used when no session id is supplied.
 const GlobalSession = "_global"
 
-// entry is one line in a task's sessions.jsonl.
-type entry struct {
+// Entry is one append-only session association record on a task.
+type Entry struct {
 	Action  string `json:"action"`
 	Session string `json:"session"`
 	Actor   string `json:"actor,omitempty"`
@@ -64,7 +66,7 @@ func Attach(ws *workspace.Workspace, taskID, sessionID, actor string) (*task.Tas
 	if err != nil {
 		return nil, err
 	}
-	e := entry{Action: "attach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339)}
+	e := Entry{Action: "attach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano)}
 	line, _ := json.Marshal(e)
 	if err := store.AppendLine(t.SessionsFile(), line); err != nil {
 		return nil, err
@@ -83,7 +85,7 @@ func Detach(ws *workspace.Workspace, sessionID, actor string) (string, error) {
 		return "", nil
 	}
 	if t, err := task.Load(ws, taskID); err == nil {
-		e := entry{Action: "detach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339)}
+		e := Entry{Action: "detach", Session: sessionID, Actor: actor, At: Now().Format(time.RFC3339Nano)}
 		line, _ := json.Marshal(e)
 		_ = store.AppendLine(t.SessionsFile(), line)
 	}
@@ -98,4 +100,25 @@ func Current(ws *workspace.Workspace, sessionID string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// Entries returns the valid session audit records for a task in append order.
+func Entries(value *task.Task) ([]Entry, error) {
+	file, err := os.Open(value.SessionsFile())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Entry{}, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+	entries := []Entry{}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var entry Entry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err == nil {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, scanner.Err()
 }

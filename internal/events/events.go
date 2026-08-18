@@ -18,18 +18,22 @@ import (
 
 // Event types.
 const (
-	TaskCreated    = "task.created"
-	TaskUpdated    = "task.updated"
-	TaskMoved      = "task.moved"
-	TaskCommented  = "task.commented"
-	TaskLabeled    = "task.labeled"
-	TaskLinked     = "task.linked"
-	TaskUnlinked   = "task.unlinked"
-	TaskAttached   = "task.attached"
-	TaskDetached   = "task.detached"
-	FileAttached   = "task.file_attached"
-	TaskAssigned   = "task.assigned"
-	ProjectCreated = "project.created"
+	TaskCreated          = "task.created"
+	TaskUpdated          = "task.updated"
+	TaskMoved            = "task.moved"
+	TaskCommented        = "task.commented"
+	TaskLabeled          = "task.labeled"
+	TaskLinked           = "task.linked"
+	TaskUnlinked         = "task.unlinked"
+	TaskAttached         = "task.attached"
+	TaskDetached         = "task.detached"
+	FileAttached         = "task.file_attached"
+	TaskAssigned         = "task.assigned"
+	TaskWaiting          = "task.waiting"
+	TaskResumed          = "task.resumed"
+	TaskReferenceAdded   = "task.reference_added"
+	TaskReferenceRemoved = "task.reference_removed"
+	ProjectCreated       = "project.created"
 )
 
 // Event is one line in the log. Assignee is denormalised so an inbox query can

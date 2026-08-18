@@ -23,6 +23,28 @@ var Now = func() time.Time { return time.Now().UTC() }
 // Task is the in-memory view of a task. The yaml tags define its frontmatter;
 // Description is the markdown body and dir is the on-disk location (neither is
 // serialised into frontmatter).
+// Wait describes the one external condition currently preventing progress.
+// Its ID lets asynchronous resolvers prove they are clearing the wait they
+// observed rather than a newer replacement.
+type Wait struct {
+	ID        string    `yaml:"id" json:"id"`
+	Kind      string    `yaml:"kind" json:"kind"`
+	Reason    string    `yaml:"reason" json:"reason"`
+	Reference string    `yaml:"reference,omitempty" json:"reference,omitempty"`
+	Since     time.Time `yaml:"since" json:"since"`
+	Actor     string    `yaml:"actor,omitempty" json:"actor,omitempty"`
+}
+
+// Reference is a durable typed link to an external artifact or system.
+type Reference struct {
+	ID      string    `yaml:"id" json:"id"`
+	Kind    string    `yaml:"kind" json:"kind"`
+	URL     string    `yaml:"url" json:"url"`
+	Title   string    `yaml:"title,omitempty" json:"title,omitempty"`
+	AddedAt time.Time `yaml:"added_at" json:"added_at"`
+	AddedBy string    `yaml:"added_by,omitempty" json:"added_by,omitempty"`
+}
+
 type Task struct {
 	ID            string              `yaml:"id"`
 	Title         string              `yaml:"title"`
@@ -30,6 +52,8 @@ type Task struct {
 	Project       string              `yaml:"project,omitempty"`
 	Labels        []string            `yaml:"labels"`
 	Assignee      string              `yaml:"assignee,omitempty"`
+	Wait          *Wait               `yaml:"wait,omitempty"`
+	References    []Reference         `yaml:"references,omitempty"`
 	Relationships map[string][]string `yaml:"relationships,omitempty"`
 	CreatedAt     time.Time           `yaml:"created_at"`
 	UpdatedAt     time.Time           `yaml:"updated_at"`

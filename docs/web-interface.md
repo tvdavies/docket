@@ -15,8 +15,10 @@ Start it in the foreground with `docket serve --all`, or manage the background u
 - drag cards between status columns;
 - create tasks;
 - inspect and edit title, status, assignee, labels, and description;
+- see active waits directly on cards and resolve them with optional feedback;
+- follow typed plan, pull-request, ticket, and session references;
 - read relationships and attachment metadata;
-- read and add comments; and
+- read a chronological activity timeline and add comments; and
 - choose the actor recorded on browser mutations.
 
 The board reads authoritative task files on every refresh. It does not maintain a separate browser or server database. Writes use the same action layer, per-task locks, atomic writes, validation, and event production as the CLI and Lua SDK.
@@ -68,6 +70,10 @@ The UI uses a small local JSON API:
 | `POST` | `/api/workspaces/{name}/tasks` | Create a task |
 | `GET` | `/api/workspaces/{name}/tasks/{id}` | Read a complete task bundle |
 | `PATCH` | `/api/workspaces/{name}/tasks/{id}` | Edit task fields or move status |
+| `PUT` | `/api/workspaces/{name}/tasks/{id}/wait` | Set the one active wait |
+| `POST` | `/api/workspaces/{name}/tasks/{id}/wait/resolve` | Resolve an exact wait ID |
+| `POST` | `/api/workspaces/{name}/tasks/{id}/references` | Add a typed external reference |
+| `DELETE` | `/api/workspaces/{name}/tasks/{id}/references/{reference}` | Remove a reference; send `{}` JSON |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/comments` | Append a comment |
 
 ### Create
@@ -95,6 +101,24 @@ curl -sS -X PATCH \
 ```
 
 Supported fields: `title`, `description`, `labels`, `assignee`, and `status`. The API validates the complete request before applying any field, writes the dossier once under one task lock, and commits the resulting event group before releasing that lock. If event commit fails, the original dossier is restored.
+
+### Wait and resume
+
+```sh
+WAIT=$(curl -sS -X PUT \
+  -H 'Content-Type: application/json' \
+  -H 'X-Docket-Actor: planner' \
+  -d '{"kind":"plan_feedback","reason":"Awaiting plan review","reference":"https://example.com/plan"}' \
+  http://127.0.0.1:7463/api/workspaces/dispatch/tasks/JOB-0001/wait)
+
+WAIT_ID=$(printf '%s' "$WAIT" | jq -r .wait.id)
+curl -sS -X POST \
+  -H 'Content-Type: application/json' \
+  -d "{\"wait_id\":\"$WAIT_ID\",\"result\":\"approved\"}" \
+  http://127.0.0.1:7463/api/workspaces/dispatch/tasks/JOB-0001/wait/resolve
+```
+
+The board can add a comment and then resolve the active wait. The status lane does not change. See [Waits, references, and activity](waits-and-references.md).
 
 ### Comment
 

@@ -78,7 +78,7 @@ Pointers live under the machine-local, gitignored path:
 .docket/.sessions/<sanitised-session-id>.current
 ```
 
-Attach/detach audit entries live with the task at:
+Attach/detach audit entries are exposed in `docket show --json` under `sessions` and interleaved with task events and comments under `activity`. They live with the task at:
 
 ```text
 .docket/tasks/TASK-.../sessions.jsonl

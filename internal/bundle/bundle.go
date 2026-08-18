@@ -5,7 +5,12 @@
 package bundle
 
 import (
+	"sort"
+	"time"
+
+	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/project"
+	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
 )
@@ -30,6 +35,21 @@ type CommentView struct {
 	Body      string `json:"body"`
 }
 
+// ActivityView is one chronological task history item assembled from the
+// event log, comments, and session audit records.
+type ActivityView struct {
+	At      string         `json:"at"`
+	Kind    string         `json:"kind"`
+	Type    string         `json:"type"`
+	Actor   string         `json:"actor,omitempty"`
+	Session string         `json:"session,omitempty"`
+	Body    string         `json:"body,omitempty"`
+	Data    map[string]any `json:"data,omitempty"`
+
+	sortTime time.Time
+	order    int
+}
+
 // Bundle is the resolved context handoff payload.
 type Bundle struct {
 	ID            string               `json:"id"`
@@ -38,10 +58,14 @@ type Bundle struct {
 	Project       *ProjectRef          `json:"project,omitempty"`
 	Labels        []string             `json:"labels"`
 	Assignee      string               `json:"assignee,omitempty"`
+	Wait          *task.Wait           `json:"wait,omitempty"`
+	References    []task.Reference     `json:"references"`
 	Description   string               `json:"description"`
 	Relationships map[string][]TaskRef `json:"relationships,omitempty"`
 	Comments      []CommentView        `json:"comments"`
 	Attachments   []*task.Attachment   `json:"attachments"`
+	Sessions      []session.Entry      `json:"sessions"`
+	Activity      []ActivityView       `json:"activity"`
 }
 
 // Build assembles the bundle for a task. commentLimit > 0 keeps only the most
@@ -58,10 +82,15 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 		Status:      t.Status,
 		Labels:      t.Labels,
 		Assignee:    t.Assignee,
+		Wait:        t.Wait,
+		References:  t.References,
 		Description: t.Description,
 	}
 	if b.Labels == nil {
 		b.Labels = []string{}
+	}
+	if b.References == nil {
+		b.References = []task.Reference{}
 	}
 
 	if t.Project != "" {
@@ -85,6 +114,11 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 		}
 	}
 
+	log, err := events.All(ws)
+	if err != nil {
+		return nil, err
+	}
+
 	comments, err := t.Comments()
 	if err != nil {
 		return nil, err
@@ -94,13 +128,67 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 	}
 	b.Comments = make([]CommentView, 0, len(comments))
 	for _, c := range comments {
+		createdAt := c.CreatedAt.Format(time.RFC3339Nano)
 		b.Comments = append(b.Comments, CommentView{
-			Author:    c.Author,
-			Session:   c.Session,
-			CreatedAt: c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			Body:      c.Body,
+			Author: c.Author, Session: c.Session, CreatedAt: createdAt, Body: c.Body,
+		})
+		b.Activity = append(b.Activity, ActivityView{
+			At: createdAt, Kind: "comment", Type: "comment",
+			Actor: c.Author, Session: c.Session, Body: c.Body,
+			sortTime: c.CreatedAt, order: len(b.Activity),
 		})
 	}
+
+	// Older session audits used second-resolution timestamps. When their
+	// corresponding task event exists, use its nanosecond timestamp for the
+	// computed timeline while preserving the authoritative audit entry itself.
+	sessionEventTimes := map[string][]string{}
+	for _, event := range log {
+		if event.Task != t.ID || (event.Type != events.TaskAttached && event.Type != events.TaskDetached) {
+			continue
+		}
+		sessionID, _ := event.Data["session"].(string)
+		key := event.Type + "\x00" + sessionID
+		sessionEventTimes[key] = append(sessionEventTimes[key], event.Time)
+	}
+	b.Sessions, err = session.Entries(t)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range b.Sessions {
+		eventType := events.TaskAttached
+		if entry.Action == "detach" {
+			eventType = events.TaskDetached
+		}
+		key := eventType + "\x00" + entry.Session
+		activityAt := entry.At
+		if matching := sessionEventTimes[key]; len(matching) > 0 {
+			activityAt = matching[0]
+			sessionEventTimes[key] = matching[1:]
+		}
+		b.Activity = append(b.Activity, ActivityView{
+			At: activityAt, Kind: "session", Type: entry.Action,
+			Actor: entry.Actor, Session: entry.Session,
+			sortTime: parseActivityTime(activityAt), order: len(b.Activity),
+		})
+	}
+
+	for _, event := range log {
+		if event.Task != t.ID || event.Type == events.TaskCommented || event.Type == events.TaskAttached || event.Type == events.TaskDetached {
+			continue
+		}
+		b.Activity = append(b.Activity, ActivityView{
+			At: event.Time, Kind: "event", Type: event.Type,
+			Actor: event.Actor, Data: event.Data,
+			sortTime: parseActivityTime(event.Time), order: len(b.Activity),
+		})
+	}
+	sort.SliceStable(b.Activity, func(left, right int) bool {
+		if b.Activity[left].sortTime.Equal(b.Activity[right].sortTime) {
+			return b.Activity[left].order < b.Activity[right].order
+		}
+		return b.Activity[left].sortTime.Before(b.Activity[right].sortTime)
+	})
 
 	atts, err := t.Attachments()
 	if err != nil {
@@ -112,4 +200,12 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 	b.Attachments = atts
 
 	return b, nil
+}
+
+func parseActivityTime(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }

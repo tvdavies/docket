@@ -84,6 +84,28 @@
         </div>
       </form>
 
+      <section id="wait-section" class="detail-section wait-section" aria-labelledby="wait-heading" hidden>
+        <div class="section-heading"><h3 id="wait-heading">Waiting</h3><span id="wait-kind" class="wait-badge"></span></div>
+        <p id="wait-reason" class="wait-reason"></p>
+        <a id="wait-reference" class="wait-reference" target="_blank" rel="noreferrer" hidden></a>
+        <form id="resolve-wait-form" class="resolve-wait-form">
+          <label class="field full">
+            <span>Resolution <small>for example: approved or changes_requested</small></span>
+            <input id="wait-result" name="result" placeholder="resolved">
+          </label>
+          <label class="field full">
+            <span>Comment <small>optional; recorded before resuming</small></span>
+            <textarea id="wait-comment" rows="3" placeholder="Add feedback or explain what changed"></textarea>
+          </label>
+          <button class="button primary" type="submit">Resolve wait</button>
+        </form>
+      </section>
+
+      <section class="detail-section" aria-labelledby="references-heading">
+        <div class="section-heading"><h3 id="references-heading">References</h3><span id="reference-count" class="count"></span></div>
+        <div id="references" class="reference-list"></div>
+      </section>
+
       <section class="detail-section" aria-labelledby="relationships-heading">
         <div class="section-heading"><h3 id="relationships-heading">Relationships</h3></div>
         <div id="relationships" class="relationship-list"></div>
@@ -94,13 +116,13 @@
         <div id="attachments" class="attachment-list"></div>
       </section>
 
-      <section class="detail-section comments-section" aria-labelledby="comments-heading">
-        <div class="section-heading"><h3 id="comments-heading">Comments</h3><span id="comment-count" class="count"></span></div>
+      <section class="detail-section activity-section" aria-labelledby="activity-heading">
+        <div class="section-heading"><h3 id="activity-heading">Activity</h3><span id="activity-count" class="count"></span></div>
         <form id="comment-form" class="comment-form">
           <textarea id="comment-text" rows="3" placeholder="Record a decision, result, or handoff note" required></textarea>
           <button class="button" type="submit">Add comment</button>
         </form>
-        <div id="comments" class="comment-list"></div>
+        <div id="activity" class="activity-list"></div>
       </section>
     </div>
   </aside>

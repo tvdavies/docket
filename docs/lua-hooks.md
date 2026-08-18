@@ -72,6 +72,10 @@ Every event contains this common shape; optional fields may be absent:
 | `task.moved` | `from`, `to` |
 | `task.commented` | — |
 | `task.labeled` | `labels` |
+| `task.waiting` | `wait.id`, `wait.kind`, `wait.reason`, `wait.reference` |
+| `task.resumed` | `wait_id`, `kind`, `result` |
+| `task.reference_added` | `reference` |
+| `task.reference_removed` | `reference` |
 | `task.linked` | `kind`, `to` |
 | `task.unlinked` | `kind`, `to` |
 | `task.attached` | `session` |
@@ -193,8 +197,8 @@ local task = docket.task.get(event.task)
 Task fields:
 
 ```text
-id, title, status, project, labels, assignee, relationships,
-description, created_at, updated_at, dir
+id, title, status, project, labels, assignee, wait, references,
+relationships, description, created_at, updated_at, dir
 ```
 
 `labels` is an array and `relationships` maps relationship names to task-ID arrays.
@@ -232,6 +236,35 @@ docket.task.label(event.task, {"researched", "ready"}, {"needs-research"})
 ```
 
 Arguments are `(task_id, labels_to_add, labels_to_remove)`. Either array may be `nil` or empty. Emits `task.labeled`.
+
+### Wait and resume
+
+```lua
+local updated = docket.task.wait(event.task, {
+  kind = "github_pr_change",
+  reason = "Awaiting CI or review activity",
+  reference = "https://github.com/example/repo/pull/42",
+})
+
+local resumed = docket.task.resume(event.task, updated.wait.id, "checks_green")
+```
+
+A task has at most one active wait. `resume` requires the exact wait ID and emits `task.resumed` without changing status.
+
+### References
+
+```lua
+local updated, reference = docket.task.reference_add(
+  event.task,
+  "plan",
+  "https://files.example/plan.html",
+  "Plan v2"
+)
+
+docket.task.reference_remove(event.task, reference.id)
+```
+
+References are typed external links stored on the task. These calls emit `task.reference_added` and `task.reference_removed`.
 
 ## Generated events and recursion
 

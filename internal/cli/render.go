@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,12 @@ func printBundleHuman(b *bundle.Bundle) {
 	if len(b.Labels) > 0 {
 		fmt.Printf("labels: %s\n", strings.Join(b.Labels, ", "))
 	}
+	if b.Wait != nil {
+		fmt.Printf("waiting: %s — %s (%s)\n", b.Wait.Kind, b.Wait.Reason, b.Wait.ID)
+		if b.Wait.Reference != "" {
+			fmt.Printf("wait reference: %s\n", b.Wait.Reference)
+		}
+	}
 
 	if b.Description != "" {
 		fmt.Printf("\n%s\n", b.Description)
@@ -51,6 +58,17 @@ func printBundleHuman(b *bundle.Bundle) {
 		}
 	}
 
+	if len(b.References) > 0 {
+		fmt.Println("\n## References")
+		for _, reference := range b.References {
+			line := fmt.Sprintf("- %s [%s]: %s", reference.ID, reference.Kind, reference.URL)
+			if reference.Title != "" {
+				line += " — " + reference.Title
+			}
+			fmt.Println(line)
+		}
+	}
+
 	if len(b.Attachments) > 0 {
 		fmt.Println("\n## Attachments")
 		for _, a := range b.Attachments {
@@ -62,10 +80,24 @@ func printBundleHuman(b *bundle.Bundle) {
 		}
 	}
 
-	if len(b.Comments) > 0 {
-		fmt.Printf("\n## Comments (%d)\n", len(b.Comments))
-		for _, c := range b.Comments {
-			fmt.Printf("\n[%s] %s\n%s\n", c.CreatedAt, c.Author, c.Body)
+	if len(b.Activity) > 0 {
+		fmt.Printf("\n## Activity (%d)\n", len(b.Activity))
+		for _, activity := range b.Activity {
+			actor := activity.Actor
+			if actor == "" {
+				actor = "system"
+			}
+			fmt.Printf("\n[%s] %s · %s", activity.At, actor, activity.Type)
+			if activity.Session != "" {
+				fmt.Printf(" · session %s", activity.Session)
+			}
+			fmt.Println()
+			if activity.Body != "" {
+				fmt.Println(activity.Body)
+			} else if len(activity.Data) > 0 {
+				data, _ := json.Marshal(activity.Data)
+				fmt.Println(string(data))
+			}
 		}
 	}
 }

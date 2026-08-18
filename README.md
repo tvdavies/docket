@@ -47,7 +47,7 @@ docket move "$ID" in-review
 A fresh session resumes with full continuity:
 
 ```sh
-docket show "$ID"       # description + comments + artifacts + resolved links
+docket show "$ID"       # dossier + waits + references + sessions + activity
 ```
 
 ## Documentation
@@ -55,6 +55,7 @@ docket show "$ID"       # description + comments + artifacts + resolved links
 - [CLI guide](docs/cli.md) — workflows, command map, flags, errors, and examples
 - [Configuration reference](docs/configuration.md) — workspace and service config
 - [Web interface](docs/web-interface.md) — board features, security, and HTTP API
+- [Waits, references, and activity](docs/waits-and-references.md) — durable external dependencies and temporal context
 - [Lua hooks and SDK](docs/lua-hooks.md) — runtime, event schema, APIs, and debugging
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
 
@@ -64,8 +65,9 @@ for a self-contained guide suitable for an agent harness.
 ## The handoff
 
 The task folder *is* durable memory. `docket show TASK-ID` returns the context
-bundle a fresh session needs: description, comments (decisions and dead ends),
-attachments, and relationships resolved to human-meaningful titles.
+bundle a fresh session needs: description, active wait, typed references,
+comments, session history, attachments, relationships, and one chronological
+activity stream.
 
 Session attachment is optional shorthand that lets later commands omit the task
 ID. It does not assign, claim, lock, or start work; explicit IDs are recommended

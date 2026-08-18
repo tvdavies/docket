@@ -4,12 +4,16 @@
 package actions
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/task"
@@ -220,6 +224,205 @@ func uniqueLabels(labels []string) []string {
 		}
 	}
 	return result
+}
+
+// SetWaitOptions describes an external condition blocking task progress.
+type SetWaitOptions struct {
+	Kind      string
+	Reason    string
+	Reference string
+}
+
+// SetWait records one active wait. Tasks deliberately cannot carry several
+// ambiguous flags: a stage records the next external condition it needs, then
+// a resolver clears that exact wait ID when the condition changes.
+func (operations Tasks) SetWait(id string, options SetWaitOptions) (*task.Task, error) {
+	options.Kind = strings.TrimSpace(options.Kind)
+	options.Reason = strings.TrimSpace(options.Reason)
+	options.Reference = strings.TrimSpace(options.Reference)
+	if !validKind(options.Kind) {
+		return nil, fmt.Errorf("invalid wait kind %q (use letters, numbers, '.', '-', or '_')", options.Kind)
+	}
+	if options.Reason == "" {
+		return nil, fmt.Errorf("wait reason is required")
+	}
+	if options.Reference != "" {
+		if err := validateReferenceURL(options.Reference); err != nil {
+			return nil, fmt.Errorf("invalid wait reference: %w", err)
+		}
+	}
+	waitID, err := recordID("wait")
+	if err != nil {
+		return nil, err
+	}
+	waiting := &task.Wait{
+		ID: waitID, Kind: options.Kind, Reason: options.Reason,
+		Reference: options.Reference, Since: task.Now(), Actor: operations.Actor,
+	}
+	return task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+		if value.Wait != nil {
+			return fmt.Errorf("task is already waiting on %s (%s)", value.Wait.Kind, value.Wait.ID)
+		}
+		value.Wait = waiting
+		return nil
+	}, func(value *task.Task) error {
+		return operations.append(events.Event{
+			Type: events.TaskWaiting, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{"wait": waiting},
+		})
+	})
+}
+
+// ResolveWaitOptions clears the exact wait observed by a user or watcher.
+type ResolveWaitOptions struct {
+	WaitID string
+	Result string
+}
+
+// ResolveWait clears an active wait and emits task.resumed without changing the
+// workflow lane. Stage-entry automation can wake the current assignee from the
+// resume event.
+func (operations Tasks) ResolveWait(id string, options ResolveWaitOptions) (*task.Task, error) {
+	options.WaitID = strings.TrimSpace(options.WaitID)
+	options.Result = strings.TrimSpace(options.Result)
+	if options.WaitID == "" {
+		return nil, fmt.Errorf("wait id is required")
+	}
+	var resolved *task.Wait
+	return task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+		if value.Wait == nil {
+			return fmt.Errorf("task is not waiting")
+		}
+		if value.Wait.ID != options.WaitID {
+			return fmt.Errorf("wait id %q does not match active wait %q", options.WaitID, value.Wait.ID)
+		}
+		copy := *value.Wait
+		resolved = &copy
+		value.Wait = nil
+		return nil
+	}, func(value *task.Task) error {
+		return operations.append(events.Event{
+			Type: events.TaskResumed, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{
+				"wait_id": resolved.ID, "kind": resolved.Kind, "result": options.Result,
+			},
+		})
+	})
+}
+
+// AddReference adds a durable typed external link to a task.
+func (operations Tasks) AddReference(id, kind, referenceURL, title string) (*task.Task, *task.Reference, error) {
+	kind = strings.TrimSpace(kind)
+	referenceURL = strings.TrimSpace(referenceURL)
+	title = strings.TrimSpace(title)
+	if !validKind(kind) {
+		return nil, nil, fmt.Errorf("invalid reference kind %q (use letters, numbers, '.', '-', or '_')", kind)
+	}
+	if err := validateReferenceURL(referenceURL); err != nil {
+		return nil, nil, fmt.Errorf("invalid reference URL: %w", err)
+	}
+	referenceID, err := recordID("ref")
+	if err != nil {
+		return nil, nil, err
+	}
+	reference := task.Reference{
+		ID: referenceID, Kind: kind, URL: referenceURL, Title: title,
+		AddedAt: task.Now(), AddedBy: operations.Actor,
+	}
+	value, err := task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+		for _, existing := range value.References {
+			if existing.Kind == kind && existing.URL == referenceURL {
+				return fmt.Errorf("task already has %s reference %q", kind, referenceURL)
+			}
+		}
+		value.References = append(value.References, reference)
+		return nil
+	}, func(value *task.Task) error {
+		return operations.append(events.Event{
+			Type: events.TaskReferenceAdded, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{"reference": reference},
+		})
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return value, &reference, nil
+}
+
+// RemoveReference removes one reference by its stable ID.
+func (operations Tasks) RemoveReference(id, referenceID string) (*task.Task, *task.Reference, error) {
+	referenceID = strings.TrimSpace(referenceID)
+	if referenceID == "" {
+		return nil, nil, fmt.Errorf("reference id is required")
+	}
+	var removed *task.Reference
+	value, err := task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+		for index, reference := range value.References {
+			if reference.ID != referenceID {
+				continue
+			}
+			copy := reference
+			removed = &copy
+			value.References = append(value.References[:index], value.References[index+1:]...)
+			return nil
+		}
+		return fmt.Errorf("reference %q not found", referenceID)
+	}, func(value *task.Task) error {
+		return operations.append(events.Event{
+			Type: events.TaskReferenceRemoved, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{"reference": removed},
+		})
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return value, removed, nil
+}
+
+func recordID(prefix string) (string, error) {
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate %s id: %w", prefix, err)
+	}
+	return prefix + "-" + hex.EncodeToString(bytes), nil
+}
+
+func validKind(value string) bool {
+	if value == "" || len(value) > 100 {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) || character == '.' || character == '-' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateReferenceURL(value string) error {
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil {
+		return err
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "http", "https":
+		if parsed.Host == "" {
+			return fmt.Errorf("HTTP URL must include a host")
+		}
+	case "file":
+		if parsed.Path == "" || !filepath.IsAbs(parsed.Path) {
+			return fmt.Errorf("file URL must contain an absolute path")
+		}
+	default:
+		return fmt.Errorf("URL scheme %q is not allowed (use http, https, or file)", parsed.Scheme)
+	}
+	return nil
 }
 
 // Move changes a task's status and emits task.moved.

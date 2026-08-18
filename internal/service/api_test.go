@@ -102,6 +102,92 @@ func TestBoardAPICreatesReadsAndUpdatesTasks(t *testing.T) {
 	}
 }
 
+func TestBoardAPIWaitReferenceAndTimelineLifecycle(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Plan this work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, server := newBoardServer(t, "demo", root)
+	defer manager.Stop()
+	defer server.Close()
+
+	response := sendJSON(t, http.MethodPut, server.URL+"/api/workspaces/demo/tasks/"+created.ID+"/wait", map[string]any{
+		"kind": "plan_feedback", "reason": "Awaiting plan review", "reference": "https://example.com/plan",
+	}, map[string]string{"X-Docket-Actor": "planner"})
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("set wait status = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	var waiting bundle.Bundle
+	decodeResponse(t, response, &waiting)
+	if waiting.Wait == nil || waiting.Wait.ID == "" {
+		t.Fatalf("wait = %#v", waiting.Wait)
+	}
+
+	response = sendJSON(t, http.MethodPost, server.URL+"/api/workspaces/demo/tasks/"+created.ID+"/references", map[string]any{
+		"kind": "plan", "url": "https://example.com/plan", "title": "Plan v1",
+	}, map[string]string{"X-Docket-Actor": "planner"})
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("add reference status = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	var referenced bundle.Bundle
+	decodeResponse(t, response, &referenced)
+	if len(referenced.References) != 1 {
+		t.Fatalf("references = %#v", referenced.References)
+	}
+
+	response = sendJSON(t, http.MethodPost, server.URL+"/api/workspaces/demo/tasks/"+created.ID+"/wait/resolve", map[string]any{
+		"wait_id": "wait-stale", "result": "approved",
+	}, nil)
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("stale wait status = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	response.Body.Close()
+
+	response = sendJSON(t, http.MethodPost, server.URL+"/api/workspaces/demo/tasks/"+created.ID+"/wait/resolve", map[string]any{
+		"wait_id": waiting.Wait.ID, "result": "approved",
+	}, map[string]string{"X-Docket-Actor": "tom"})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("resolve wait status = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	var resumed bundle.Bundle
+	decodeResponse(t, response, &resumed)
+	if resumed.Wait != nil || len(resumed.Activity) < 3 {
+		t.Fatalf("resumed bundle = %#v", resumed)
+	}
+
+	referenceID := referenced.References[0].ID
+	response = sendJSON(t, http.MethodDelete, server.URL+"/api/workspaces/demo/tasks/"+created.ID+"/references/"+referenceID, map[string]any{}, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("remove reference status = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	var removed bundle.Bundle
+	decodeResponse(t, response, &removed)
+	if len(removed.References) != 0 {
+		t.Fatalf("references after removal = %#v", removed.References)
+	}
+
+	response = getJSON(t, server.URL+"/api/workspaces/demo/board")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("board status = %d", response.StatusCode)
+	}
+	var board struct {
+		Tasks []struct {
+			ID         string           `json:"id"`
+			Wait       *task.Wait       `json:"wait"`
+			References []task.Reference `json:"references"`
+		} `json:"tasks"`
+	}
+	decodeResponse(t, response, &board)
+	if len(board.Tasks) != 1 || board.Tasks[0].Wait != nil || board.Tasks[0].References == nil {
+		t.Fatalf("board task = %#v", board.Tasks)
+	}
+}
+
 func TestBoardAPIValidatesBeforeMutationAndProtectsWrites(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Init(root)

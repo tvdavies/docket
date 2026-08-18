@@ -58,6 +58,12 @@ function handle(event, docket)
     assert(from == "backlog" and moved.status == "done")
     assert(docket.task.assign(event.task, "researcher").assignee == "researcher")
     assert(docket.task.label(event.task, {"lua"}, {"demo"}).labels[1] == "lua")
+    local waiting = docket.task.wait(event.task, {kind="ci", reason="Awaiting checks", reference="https://example.com/pr"})
+    assert(waiting.wait.kind == "ci")
+    local referenced, reference = docket.task.reference_add(event.task, "pr", "https://example.com/pr", "Pull request")
+    assert(referenced.references[1].kind == "pr" and reference.id:match("^ref%-"))
+    assert(docket.task.resume(event.task, waiting.wait.id, "green").wait == nil)
+    assert(#docket.task.reference_remove(event.task, reference.id).references == 0)
     assert(docket.task.comment(event.task, "from Lua"):match("%.md$"))
     docket.log.info("handled", event.task)
 end
@@ -84,14 +90,14 @@ end
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Status != "done" || updated.Assignee != "researcher" || len(updated.Labels) != 1 || updated.Labels[0] != "lua" {
+	if updated.Status != "done" || updated.Assignee != "researcher" || len(updated.Labels) != 1 || updated.Labels[0] != "lua" || updated.Wait != nil || len(updated.References) != 0 {
 		t.Fatalf("SDK task mutations produced %#v", updated)
 	}
 	eventLog, err := events.All(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(eventLog) != 4 || eventLog[0].Actor != "handler:lua-test" {
+	if len(eventLog) != 8 || eventLog[0].Actor != "handler:lua-test" {
 		t.Fatalf("SDK events = %#v", eventLog)
 	}
 	if !strings.Contains(output.String(), "info: handled "+created.ID) {

@@ -390,13 +390,14 @@ func readDescription(desc, descFile string) (string, error) {
 }
 
 type taskSummary struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Status   string   `json:"status"`
-	Project  string   `json:"project,omitempty"`
-	Labels   []string `json:"labels"`
-	Assignee string   `json:"assignee,omitempty"`
-	Updated  string   `json:"updated_at"`
+	ID       string     `json:"id"`
+	Title    string     `json:"title"`
+	Status   string     `json:"status"`
+	Project  string     `json:"project,omitempty"`
+	Labels   []string   `json:"labels"`
+	Assignee string     `json:"assignee,omitempty"`
+	Wait     *task.Wait `json:"wait,omitempty"`
+	Updated  string     `json:"updated_at"`
 }
 
 func taskSummaries(tasks []*task.Task) []taskSummary {
@@ -408,7 +409,7 @@ func taskSummaries(tasks []*task.Task) []taskSummary {
 		}
 		out = append(out, taskSummary{
 			ID: t.ID, Title: t.Title, Status: t.Status, Project: t.Project,
-			Labels: labels, Assignee: t.Assignee,
+			Labels: labels, Assignee: t.Assignee, Wait: t.Wait,
 			Updated: t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
@@ -421,9 +422,13 @@ func printTaskTable(tasks []*task.Task) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tLABELS")
+	fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tLABELS\tWAITING")
 	for _, t := range tasks {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.ID, t.Status, truncate(t.Title, 50), strings.Join(t.Labels, ","))
+		waiting := ""
+		if t.Wait != nil {
+			waiting = t.Wait.Kind
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, truncate(t.Title, 50), strings.Join(t.Labels, ","), waiting)
 	}
 	_ = w.Flush()
 }

@@ -31,13 +31,15 @@ type boardResponse struct {
 }
 
 type boardTask struct {
-	ID        string   `json:"id"`
-	Title     string   `json:"title"`
-	Status    string   `json:"status"`
-	Project   string   `json:"project,omitempty"`
-	Labels    []string `json:"labels"`
-	Assignee  string   `json:"assignee,omitempty"`
-	UpdatedAt string   `json:"updated_at"`
+	ID         string           `json:"id"`
+	Title      string           `json:"title"`
+	Status     string           `json:"status"`
+	Project    string           `json:"project,omitempty"`
+	Labels     []string         `json:"labels"`
+	Assignee   string           `json:"assignee,omitempty"`
+	Wait       *task.Wait       `json:"wait,omitempty"`
+	References []task.Reference `json:"references"`
+	UpdatedAt  string           `json:"updated_at"`
 }
 
 type createTaskRequest struct {
@@ -59,6 +61,23 @@ type updateTaskRequest struct {
 
 type commentRequest struct {
 	Text string `json:"text"`
+}
+
+type setWaitRequest struct {
+	Kind      string `json:"kind"`
+	Reason    string `json:"reason"`
+	Reference string `json:"reference"`
+}
+
+type resolveWaitRequest struct {
+	WaitID string `json:"wait_id"`
+	Result string `json:"result"`
+}
+
+type addReferenceRequest struct {
+	Kind  string `json:"kind"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
 }
 
 func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
@@ -156,6 +175,89 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		writeTaskBundle(writer, http.StatusOK, ws, id)
 	})
+	mux.HandleFunc("PUT /api/workspaces/{workspace}/tasks/{task}/wait", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowJSONMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		var input setWaitRequest
+		if !decodeJSONBody(writer, request, &input) {
+			return
+		}
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		id := request.PathValue("task")
+		if _, err := webTaskActions(ws, request).SetWait(id, actions.SetWaitOptions{
+			Kind: input.Kind, Reason: input.Reason, Reference: input.Reference,
+		}); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeTaskBundle(writer, http.StatusCreated, ws, id)
+	})
+	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/wait/resolve", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowJSONMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		var input resolveWaitRequest
+		if !decodeJSONBody(writer, request, &input) {
+			return
+		}
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		id := request.PathValue("task")
+		if _, err := webTaskActions(ws, request).ResolveWait(id, actions.ResolveWaitOptions{
+			WaitID: input.WaitID, Result: input.Result,
+		}); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeTaskBundle(writer, http.StatusOK, ws, id)
+	})
+	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/references", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowJSONMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		var input addReferenceRequest
+		if !decodeJSONBody(writer, request, &input) {
+			return
+		}
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		id := request.PathValue("task")
+		if _, _, err := webTaskActions(ws, request).AddReference(id, input.Kind, input.URL, input.Title); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeTaskBundle(writer, http.StatusCreated, ws, id)
+	})
+	mux.HandleFunc("DELETE /api/workspaces/{workspace}/tasks/{task}/references/{reference}", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowJSONMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		if !decodeEmptyJSONBody(writer, request) {
+			return
+		}
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		id := request.PathValue("task")
+		if _, _, err := webTaskActions(ws, request).RemoveReference(id, request.PathValue("reference")); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeTaskBundle(writer, http.StatusOK, ws, id)
+	})
 	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/comments", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowJSONMutation(writer, request, allowRemoteHost) {
 			return
@@ -221,8 +323,9 @@ func writeTaskBundle(writer http.ResponseWriter, status int, ws *workspace.Works
 func summariseTask(value *task.Task) boardTask {
 	return boardTask{
 		ID: value.ID, Title: value.Title, Status: value.Status, Project: value.Project,
-		Labels: nonNilStrings(value.Labels), Assignee: value.Assignee,
-		UpdatedAt: value.UpdatedAt.UTC().Format(time.RFC3339),
+		Labels: nonNilStrings(value.Labels), Assignee: value.Assignee, Wait: value.Wait,
+		References: nonNilReferences(value.References),
+		UpdatedAt:  value.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -261,6 +364,11 @@ func isLoopbackRequestHost(hostPort string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func decodeEmptyJSONBody(writer http.ResponseWriter, request *http.Request) bool {
+	var input struct{}
+	return decodeJSONBody(writer, request, &input)
+}
+
 func decodeJSONBody(writer http.ResponseWriter, request *http.Request, destination any) bool {
 	request.Body = http.MaxBytesReader(writer, request.Body, maxAPIRequestBytes)
 	decoder := json.NewDecoder(request.Body)
@@ -282,9 +390,16 @@ func writeAPIError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrWorkspaceNotManaged), strings.Contains(message, "not found"):
 		status = http.StatusNotFound
+	case strings.Contains(message, "already waiting"),
+		strings.Contains(message, "does not match active wait"),
+		strings.Contains(message, "already has"):
+		status = http.StatusConflict
 	case strings.Contains(message, "required"),
 		strings.Contains(message, "invalid task id"),
 		strings.Contains(message, "invalid project id"),
+		strings.Contains(message, "invalid wait"),
+		strings.Contains(message, "invalid reference"),
+		strings.Contains(message, "not waiting"),
 		strings.Contains(message, "cannot be empty"),
 		strings.Contains(message, "unknown status"),
 		strings.Contains(message, "no task changes"):
@@ -304,6 +419,13 @@ func normaliseLabels(labels []string) []string {
 		}
 	}
 	return result
+}
+
+func nonNilReferences(values []task.Reference) []task.Reference {
+	if values == nil {
+		return []task.Reference{}
+	}
+	return values
 }
 
 func nonNilStrings(values []string) []string {

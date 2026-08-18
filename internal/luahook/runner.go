@@ -208,6 +208,52 @@ func newSDK(state *lua.LState, options sdkOptions) *lua.LTable {
 		state.Push(lua.LString(comment.File))
 		return 1
 	}))
+	state.SetField(tasks, "wait", state.NewFunction(func(state *lua.LState) int {
+		options := state.CheckTable(2)
+		value, err := operations.SetWait(state.CheckString(1), actions.SetWaitOptions{
+			Kind:      optionalLuaString(options.RawGetString("kind")),
+			Reason:    optionalLuaString(options.RawGetString("reason")),
+			Reference: optionalLuaString(options.RawGetString("reference")),
+		})
+		if err != nil {
+			state.RaiseError("task.wait: %v", err)
+			return 0
+		}
+		state.Push(taskValue(state, value))
+		return 1
+	}))
+	state.SetField(tasks, "resume", state.NewFunction(func(state *lua.LState) int {
+		value, err := operations.ResolveWait(state.CheckString(1), actions.ResolveWaitOptions{
+			WaitID: state.CheckString(2), Result: state.OptString(3, ""),
+		})
+		if err != nil {
+			state.RaiseError("task.resume: %v", err)
+			return 0
+		}
+		state.Push(taskValue(state, value))
+		return 1
+	}))
+	state.SetField(tasks, "reference_add", state.NewFunction(func(state *lua.LState) int {
+		value, reference, err := operations.AddReference(
+			state.CheckString(1), state.CheckString(2), state.CheckString(3), state.OptString(4, ""),
+		)
+		if err != nil {
+			state.RaiseError("task.reference_add: %v", err)
+			return 0
+		}
+		state.Push(taskValue(state, value))
+		state.Push(toLua(state, normaliseValue(reference)))
+		return 2
+	}))
+	state.SetField(tasks, "reference_remove", state.NewFunction(func(state *lua.LState) int {
+		value, _, err := operations.RemoveReference(state.CheckString(1), state.CheckString(2))
+		if err != nil {
+			state.RaiseError("task.reference_remove: %v", err)
+			return 0
+		}
+		state.Push(taskValue(state, value))
+		return 1
+	}))
 	state.SetField(tasks, "label", state.NewFunction(func(state *lua.LState) int {
 		add, err := stringList(state, 2)
 		if err != nil {
@@ -267,6 +313,13 @@ func resolvePath(base, path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Join(base, path)
+}
+
+func optionalLuaString(value lua.LValue) string {
+	if value == lua.LNil {
+		return ""
+	}
+	return value.String()
 }
 
 func stringList(state *lua.LState, index int) ([]string, error) {
@@ -329,6 +382,8 @@ func taskValue(state *lua.LState, value *task.Task) *lua.LTable {
 		"project":       value.Project,
 		"labels":        value.Labels,
 		"assignee":      value.Assignee,
+		"wait":          value.Wait,
+		"references":    value.References,
 		"relationships": value.Relationships,
 		"description":   value.Description,
 		"created_at":    value.CreatedAt.Format("2006-01-02T15:04:05.999999999Z07:00"),

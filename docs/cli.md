@@ -42,7 +42,7 @@ A later human or agent resumes with:
 docket show TASK-0001
 ```
 
-`show` returns the complete context bundle: description, comments, attachments, project, assignee, labels, and resolved relationships. Use `--comments N` to include only the most recent comments.
+`show` returns the complete context bundle: description, active wait, references, attachments, project, assignee, labels, resolved relationships, sessions, and a chronological activity timeline. Use `--comments N` to limit comment bodies included in the bundle and timeline.
 
 ## Task commands
 
@@ -53,10 +53,12 @@ docket show TASK-0001
 | `docket show [TASK-ID]` | Read a complete context bundle |
 | `docket edit [TASK-ID]` | Change title, description, or assignee |
 | `docket move [TASK-ID] STATUS` | Change status lane |
+| `docket wait set\|show\|resolve TASK-ID` | Record or resolve one external dependency |
 | `docket comment [TASK-ID] TEXT` | Add immutable durable context |
 | `docket label [TASK-ID]` | Add or remove labels |
 | `docket attach-file [TASK-ID] PATH` | Copy an artifact into the task |
 | `docket files [TASK-ID]` | List attached files |
+| `docket reference add\|list\|remove TASK-ID` | Manage typed external links |
 | `docket link TASK-ID --RELATIONSHIP TARGET` | Create a typed relationship |
 | `docket unlink TASK-ID --RELATIONSHIP TARGET` | Remove a relationship |
 
@@ -92,6 +94,21 @@ Repeat flags to change several labels:
 docket label TASK-0001 --add bug --add urgent
 docket label TASK-0001 --remove urgent
 ```
+
+### Waits and references
+
+Status identifies the workflow stage; an active wait identifies the one external condition preventing that stage from continuing. Resolving requires the exact wait ID so a stale watcher cannot clear a newer condition.
+
+```sh
+docket wait set TASK-0001 --kind ci --reason "Awaiting required checks" --ref https://github.com/example/repo/pull/42
+WAIT_ID=$(docket wait show TASK-0001 --json | jq -r .id)
+docket wait resolve TASK-0001 --wait-id "$WAIT_ID" --result green
+
+docket reference add TASK-0001 --kind pr --url https://github.com/example/repo/pull/42
+docket reference list TASK-0001
+```
+
+See [Waits, references, and activity](waits-and-references.md) for the event and automation contract.
 
 ### Relationships
 
