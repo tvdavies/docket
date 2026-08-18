@@ -1,10 +1,10 @@
 # docket
 
-A file-backed task system that hands context between agent sessions.
+A generic file-backed task system with durable context, event hooks, and a local Kanban board.
 
-> A **docket** is the slip that travels with a job through the shop, carrying its details; a court docket is a list of cases moving through their stages. Both readings are the product: the task folder is the docket — it carries the work, and all its context, from one agent session to the next.
+> A **docket** is the slip that travels with a job through the shop, carrying its details; a court docket is a list of cases moving through their stages. Both readings are the product: the task folder is the docket — it carries the work and its context between people, tools, and processes.
 
-Durable tasks are the whole point: plain files in a directory, **no database**, surviving across sessions, machines, and `git clone`. A later human or agent resumes by reading the task's complete context bundle. Harness-neutral workspace handlers decide what runs when events arrive.
+Durable tasks are the whole point: plain files in a directory, **no database**, surviving across sessions, machines, and `git clone`. A later human or tool resumes by reading the task's complete context bundle. Harness-neutral workspace handlers decide what runs when events arrive; execution protocols and live run interfaces remain outside Docket.
 
 A single static Go binary, ~8MB, zero runtime dependencies. The CLI works by
 itself; an optional systemd user service watches all registered workspaces and
@@ -44,7 +44,7 @@ docket attach-file "$ID" ./repro.log --caption "failing assertion"
 docket move "$ID" in-review
 ```
 
-A fresh session resumes with full continuity:
+A later caller resumes with full continuity:
 
 ```sh
 docket show "$ID"       # dossier + waits + references + sessions + activity

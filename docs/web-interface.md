@@ -16,22 +16,33 @@ Start it in the foreground with `docket serve --all`, or manage the background u
 - create tasks;
 - inspect and edit title, status, assignee, labels, and description;
 - see active waits directly on cards and resolve them with optional feedback;
-- see a live working badge while a task has an attached agent session;
-- follow typed plan, pull-request, ticket, and session/log references;
+- follow typed plan, pull-request, ticket, run, and session references in a new tab;
 - read relationships and attachment metadata;
 - read a chronological activity timeline and add comments; and
 - choose the actor recorded on browser mutations.
 
-The board reads authoritative task files on every refresh. It derives live work
-from unmatched session attach/detach audit records and does not maintain a
-separate browser or server database. The launching integration remains
-responsible for detaching crashed or completed sessions; Docket does not infer
-process liveness. Writes use the same action layer, per-task
-locks, atomic writes, validation, and event production as the CLI and Lua SDK.
+The board reads authoritative task files on every refresh and does not maintain
+a separate browser or server database. It does not infer external process or
+agent liveness. Execution systems publish durable typed references whose links
+open their own status or session interfaces. Writes use the same action layer,
+per-task locks, atomic writes, validation, and event production as the CLI and
+Lua SDK.
 
 Browser mutations therefore trigger normal handlers. The HTTP response does not
 wait for handler completion; the service watcher drains the resulting event
 asynchronously.
+
+## Deep links
+
+Use `?workspace=NAME&task=TASK-ID` to link directly to a task drawer:
+
+```text
+http://127.0.0.1:7463/?workspace=dispatch&task=JOB-0001
+```
+
+The workspace and task query parameters are generic navigation state. External
+execution systems can use them for reciprocal links without Docket knowing the
+external protocol or session schema.
 
 ## Drag and drop
 
