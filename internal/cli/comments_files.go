@@ -52,10 +52,12 @@ func newCommentCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = events.Append(ws, events.Event{
+			if err := appendEvent(ws, events.Event{
 				Type: events.TaskCommented, Task: t.ID, Title: t.Title,
 				Actor: actor(), Assignee: t.Assignee,
-			})
+			}); err != nil {
+				return err
+			}
 			if flagJSON {
 				return printJSON(map[string]string{"task": t.ID, "comment": c.File})
 			}
@@ -96,11 +98,13 @@ func newAttachFileCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = events.Append(ws, events.Event{
+			if err := appendEvent(ws, events.Event{
 				Type: events.FileAttached, Task: t.ID, Title: t.Title,
 				Actor: actor(), Assignee: t.Assignee,
 				Data: map[string]any{"file": att.File, "mime": att.Mime},
-			})
+			}); err != nil {
+				return err
+			}
 			if flagJSON {
 				return printJSON(att)
 			}

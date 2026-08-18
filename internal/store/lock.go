@@ -26,3 +26,20 @@ func WithLock(lockPath string, fn func() error) error {
 	defer fl.Unlock()
 	return fn()
 }
+
+// TryWithLock runs fn under an exclusive flock when it can acquire the lock
+// immediately. A false acquired result is not an error. This is used by
+// post-hoc event handlers so a handler-triggered docket command can drain other
+// handlers without deadlocking on the handler that invoked it.
+func TryWithLock(lockPath string, fn func() error) (acquired bool, err error) {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return false, err
+	}
+	fl := flock.New(lockPath)
+	acquired, err = fl.TryLock()
+	if err != nil || !acquired {
+		return acquired, err
+	}
+	defer fl.Unlock()
+	return true, fn()
+}

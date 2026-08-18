@@ -1,7 +1,7 @@
 // Package events implements docket's append-only event log (events.jsonl) — the
 // coordination primitive. Every mutation appends one JSON line. Consumers
-// either poll a filtered view (the "inbox") or stream new lines (`docket watch`).
-// The store never executes anything; it only records.
+// either poll a filtered view (the "inbox"), stream new lines (`docket watch`),
+// or receive matching events through configured post-hoc handlers.
 package events
 
 import (
@@ -16,17 +16,18 @@ import (
 
 // Event types.
 const (
-	TaskCreated   = "task.created"
-	TaskUpdated   = "task.updated"
-	TaskMoved     = "task.moved"
-	TaskCommented = "task.commented"
-	TaskLabeled   = "task.labeled"
-	TaskLinked    = "task.linked"
-	TaskUnlinked  = "task.unlinked"
-	TaskAttached  = "task.attached"
-	TaskDetached  = "task.detached"
-	FileAttached  = "task.file_attached"
-	TaskAssigned  = "task.assigned"
+	TaskCreated    = "task.created"
+	TaskUpdated    = "task.updated"
+	TaskMoved      = "task.moved"
+	TaskCommented  = "task.commented"
+	TaskLabeled    = "task.labeled"
+	TaskLinked     = "task.linked"
+	TaskUnlinked   = "task.unlinked"
+	TaskAttached   = "task.attached"
+	TaskDetached   = "task.detached"
+	FileAttached   = "task.file_attached"
+	TaskAssigned   = "task.assigned"
+	ProjectCreated = "project.created"
 )
 
 // Event is one line in the log. Assignee is denormalised so an inbox query can
@@ -87,21 +88,31 @@ func countLines(path string) int {
 
 // All reads every event in order.
 func All(ws *workspace.Workspace) ([]Event, error) {
-	return readFrom(ws.EventsFile(), 0)
+	evs, _, err := ReadBatch(ws, 0)
+	return evs, err
 }
 
-// Since reads events after the first n lines (the cursor position).
+// Since reads events after the first n non-empty lines (the cursor position).
 func Since(ws *workspace.Workspace, n int) ([]Event, error) {
-	return readFrom(ws.EventsFile(), n)
+	evs, _, err := ReadBatch(ws, n)
+	return evs, err
 }
 
-func readFrom(path string, skip int) ([]Event, error) {
+// ReadBatch reads valid events after cursor and returns the cursor position at
+// the end of this snapshot. Malformed non-empty lines are skipped as events but
+// included in end, so a consumer can advance past them instead of getting
+// permanently stuck. Positions count non-empty lines, matching Count.
+func ReadBatch(ws *workspace.Workspace, cursor int) ([]Event, int, error) {
+	return readFrom(ws.EventsFile(), cursor)
+}
+
+func readFrom(path string, skip int) ([]Event, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, skip, nil
 		}
-		return nil, err
+		return nil, skip, err
 	}
 	defer f.Close()
 	var out []Event
@@ -123,7 +134,7 @@ func readFrom(path string, skip int) ([]Event, error) {
 		}
 		out = append(out, ev)
 	}
-	return out, sc.Err()
+	return out, i, sc.Err()
 }
 
 // Count returns the number of events currently in the log.

@@ -40,6 +40,53 @@ func TestInitTwiceFails(t *testing.T) {
 	}
 }
 
+func TestConfigLoadsHandlers(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, DirName, "config.yaml")
+	file, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("handlers:\n  notify:\n    on: [task.moved]\n    run: hooks/notify\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	ws, err := Open()
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	handler, ok := ws.Config.Handlers["notify"]
+	if !ok || handler.Run != "hooks/notify" || !handler.Matches("task.moved") {
+		t.Fatalf("handler not loaded: %#v", handler)
+	}
+}
+
+func TestConfigRejectsUnsafeHandlerName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Handlers = map[string]HandlerConfig{
+		"../../outside": {On: []string{"*"}, Run: "hooks/noop"},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected unsafe handler name to fail validation")
+	}
+}
+
+func TestConfigRejectsCaseCollidingHandlerNames(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Handlers = map[string]HandlerConfig{
+		"Notify": {On: []string{"*"}, Run: "hooks/noop"},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected uppercase handler name to fail validation")
+	}
+}
+
 func TestDocketHomeOverride(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Init(root); err != nil {

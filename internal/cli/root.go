@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/handlers"
 	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/workspace"
 )
@@ -79,6 +81,21 @@ func Execute() int {
 // openWS discovers and opens the workspace.
 func openWS() (*workspace.Workspace, error) {
 	return workspace.Open()
+}
+
+// appendEvent durably records a mutation and then drains configured post-hoc
+// handlers. A handler failure cannot roll back the mutation, so it is reported
+// as a warning and left unread for the next drain. Handler ancestry is carried
+// in the subprocess environment so recursive docket commands never block on
+// handler locks; unrelated top-level drains wait and deliver.
+func appendEvent(ws *workspace.Workspace, event events.Event) error {
+	if err := events.Append(ws, event); err != nil {
+		return fmt.Errorf("append event: %w", err)
+	}
+	for _, failure := range handlers.DrainAll(ws, handlers.Options{Output: os.Stderr}) {
+		fmt.Fprintf(os.Stderr, "docket: warning: %s\n", failure.Error())
+	}
+	return nil
 }
 
 // actor resolves the acting identity: $DOCKET_ACTOR → git user → "unknown".

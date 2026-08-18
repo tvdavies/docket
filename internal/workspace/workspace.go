@@ -103,6 +103,12 @@ func (w *Workspace) EventsFile() string { return w.Path("events.jsonl") }
 // CursorsDir holds per-actor inbox cursors.
 func (w *Workspace) CursorsDir() string { return w.Path(".cursors") }
 
+// HandlerStateDir holds machine-local handler cursors and locks. Its dedicated
+// subdirectory prevents a handler's DOCKET_ACTOR inbox from acknowledging its
+// delivery cursor while remaining covered by the existing .cursors/ gitignore
+// rule in workspaces created before handlers existed.
+func (w *Workspace) HandlerStateDir() string { return w.Path(".cursors", "handlers") }
+
 // loadConfig reads and parses config.yaml.
 func loadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -114,5 +120,8 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.applyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
+	}
 	return &cfg, nil
 }

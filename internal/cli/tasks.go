@@ -63,10 +63,12 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = events.Append(ws, events.Event{
+			if err := appendEvent(ws, events.Event{
 				Type: events.TaskCreated, Task: t.ID, Title: t.Title,
 				Actor: actor(), Assignee: t.Assignee,
-			})
+			}); err != nil {
+				return err
+			}
 			if flagJSON {
 				return printJSON(map[string]string{"id": t.ID})
 			}
@@ -226,15 +228,19 @@ func newEditCmd() *cobra.Command {
 				return err
 			}
 			if assigneeChanged {
-				_ = events.Append(ws, events.Event{
+				if err := appendEvent(ws, events.Event{
 					Type: events.TaskAssigned, Task: t.ID, Title: t.Title,
 					Actor: actor(), Assignee: t.Assignee,
-				})
+				}); err != nil {
+					return err
+				}
 			} else {
-				_ = events.Append(ws, events.Event{
+				if err := appendEvent(ws, events.Event{
 					Type: events.TaskUpdated, Task: t.ID, Title: t.Title,
 					Actor: actor(), Assignee: t.Assignee,
-				})
+				}); err != nil {
+					return err
+				}
 			}
 			return reportTask(t, "updated")
 		},
@@ -278,11 +284,13 @@ func newMoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = events.Append(ws, events.Event{
+			if err := appendEvent(ws, events.Event{
 				Type: events.TaskMoved, Task: t.ID, Title: t.Title,
 				Actor: actor(), Assignee: t.Assignee,
 				Data: map[string]any{"from": from, "to": status},
-			})
+			}); err != nil {
+				return err
+			}
 			if flagJSON {
 				return printJSON(map[string]string{"id": t.ID, "from": from, "to": status})
 			}
@@ -314,11 +322,13 @@ func newLabelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = events.Append(ws, events.Event{
+			if err := appendEvent(ws, events.Event{
 				Type: events.TaskLabeled, Task: t.ID, Title: t.Title,
 				Actor: actor(), Assignee: t.Assignee,
 				Data: map[string]any{"labels": t.Labels},
-			})
+			}); err != nil {
+				return err
+			}
 			return reportTask(t, "labeled")
 		},
 	}

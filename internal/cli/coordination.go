@@ -18,7 +18,7 @@ func newInboxCmd() *cobra.Command {
 		Use:   "inbox",
 		Short: "Show unread events addressed to an actor (poll-based coordination)",
 		Long: `inbox returns events on tasks assigned to you that you have not yet seen,
-tracked by a per-actor cursor. A heartbeat or polling agent runs:
+tracked by a per-actor cursor. A polling consumer runs:
 
     docket inbox --mark-read --json
 

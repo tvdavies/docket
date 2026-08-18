@@ -1,7 +1,16 @@
 package workspace
 
+import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+var handlerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
 // Config is the parsed `config.yaml`. It declares the status lanes, advisory
-// labels, typed relationship kinds, and id-generation settings.
+// labels, typed relationship kinds, event handlers, and id-generation settings.
 type Config struct {
 	// Statuses double as board lanes, in order.
 	Statuses []string `yaml:"statuses"`
@@ -11,7 +20,28 @@ type Config struct {
 	Labels []string `yaml:"labels,omitempty"`
 	// Relationships declares typed link kinds and their inverses.
 	Relationships []RelType `yaml:"relationships"`
-	Settings      Settings  `yaml:"settings"`
+	// Handlers are post-hoc event consumers. Each handler has its own durable
+	// cursor and receives matching events as JSON lines on stdin.
+	Handlers map[string]HandlerConfig `yaml:"handlers,omitempty"`
+	Settings Settings                 `yaml:"settings"`
+}
+
+// HandlerConfig registers one executable event consumer. Run is resolved
+// relative to the project root (the parent of .docket/) unless absolute.
+type HandlerConfig struct {
+	On  []string `yaml:"on"`
+	Run string   `yaml:"run"`
+}
+
+// Matches reports whether this handler consumes an event type. "*" matches
+// every event; otherwise matches are exact.
+func (h HandlerConfig) Matches(eventType string) bool {
+	for _, pattern := range h.On {
+		if pattern == "*" || pattern == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 // RelType is a typed relationship kind and its inverse. A symmetric
@@ -59,6 +89,38 @@ func (c *Config) applyDefaults() {
 	if c.Settings.ProjectPadding == 0 {
 		c.Settings.ProjectPadding = 4
 	}
+}
+
+// Validate rejects handler declarations that cannot be delivered safely.
+func (c *Config) Validate() error {
+	for name, handler := range c.Handlers {
+		if !handlerNamePattern.MatchString(name) {
+			return fmt.Errorf("handler %q: name must contain only lowercase letters, numbers, hyphens, and underscores", name)
+		}
+		if strings.TrimSpace(handler.Run) == "" {
+			return fmt.Errorf("handler %q: run is required", name)
+		}
+		if len(handler.On) == 0 {
+			return fmt.Errorf("handler %q: on must contain at least one event type (or \"*\")", name)
+		}
+		for _, eventType := range handler.On {
+			if strings.TrimSpace(eventType) == "" {
+				return fmt.Errorf("handler %q: on contains an empty event type", name)
+			}
+		}
+	}
+	return nil
+}
+
+// HandlerNames returns configured handler names in deterministic order.
+// Handlers must not rely on this order for correctness; each owns its cursor.
+func (c *Config) HandlerNames() []string {
+	names := make([]string, 0, len(c.Handlers))
+	for name := range c.Handlers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // HasStatus reports whether s is a configured status.

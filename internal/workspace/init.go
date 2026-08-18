@@ -37,7 +37,15 @@ func Init(root string) (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := "# docket workspace config. Statuses double as board lanes, in order.\n"
+	header := `# docket workspace config. Statuses double as board lanes, in order.
+#
+# Optional post-hoc event handlers receive matching events as JSON lines on
+# stdin. Paths are relative to the directory containing .docket/:
+# handlers:
+#   notify:
+#     on: [task.moved, task.commented]
+#     run: hooks/notify
+`
 	if err := os.WriteFile(filepath.Join(docketDir, "config.yaml"), append([]byte(header), data...), 0o644); err != nil {
 		return nil, err
 	}

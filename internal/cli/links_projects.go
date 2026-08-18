@@ -41,10 +41,12 @@ func linkRunner(eventType string, link bool) func(cmd *cobra.Command, args []str
 		if err != nil {
 			return err
 		}
-		_ = events.Append(ws, events.Event{
+		if err := appendEvent(ws, events.Event{
 			Type: eventType, Task: from, Actor: actor(),
 			Data: map[string]any{"kind": kind, "to": to},
-		})
+		}); err != nil {
+			return err
+		}
 		if flagJSON {
 			return printJSON(map[string]string{"from": from, "kind": kind, "to": to})
 		}
@@ -109,6 +111,12 @@ func newProjectNewCmd() *cobra.Command {
 			}
 			p, err := project.Create(ws, name, desc)
 			if err != nil {
+				return err
+			}
+			if err := appendEvent(ws, events.Event{
+				Type: events.ProjectCreated, Title: p.Name, Actor: actor(),
+				Data: map[string]any{"project": p.ID},
+			}); err != nil {
 				return err
 			}
 			if flagJSON {

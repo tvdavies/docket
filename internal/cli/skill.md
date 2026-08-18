@@ -62,13 +62,14 @@ Every command supports `--json` for stable machine output.
 - `docket project list | docket project show PROJ-0001`
 
 ### Coordination (triggering work elsewhere)
-docket is a passive store; it records every change to an append-only event log and
-lets other processes react. It never executes anything itself.
+docket records every change to an append-only event log. Optional post-hoc
+handlers in `.docket/config.yaml` receive matching events as JSON lines on stdin;
+each has a durable cursor and failed deliveries retry. Mutating commands drain
+handlers after the event is durable.
 
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
-  you, since your last cursor. A heartbeat drains this to pick up new work.
-- `docket watch` — **stream**: blocks and emits each new event as a JSON line the
-  instant it happens, for push-based harnesses.
+  you, since your last cursor.
+- `docket watch` — **stream**: blocks and emits each new event as a JSON line.
 - `docket events [--since N]` — the raw event log.
 
 ## How to use this as durable context
@@ -77,5 +78,5 @@ lets other processes react. It never executes anything itself.
 2. Record **decisions, root causes, and dead ends** as `comment`s — these are
    what the next session reads. Be specific; the comment log is the memory.
 3. Attach artifacts (logs, screenshots, diffs) with `attach-file`.
-4. `move` the task as state changes so a watcher/heartbeat can route follow-up.
+4. `move` the task as state changes so an event handler can route follow-up.
 5. Never assume the next session remembers anything you did not write down.

@@ -19,9 +19,9 @@ type InboxOptions struct {
 
 // Inbox returns unread events for an actor since their last cursor. With
 // MarkRead, the cursor advances to the end of the log so a later call returns
-// only newer events. This is the poll-based consumer path (heartbeats).
+// only newer events. This is the poll-based consumer path.
 func Inbox(ws *workspace.Workspace, opts InboxOptions) ([]Event, error) {
-	cursor := readCursor(ws, opts.Actor)
+	cursor := Cursor(ws, opts.Actor)
 	evs, err := Since(ws, cursor)
 	if err != nil {
 		return nil, err
@@ -33,7 +33,7 @@ func Inbox(ws *workspace.Workspace, opts InboxOptions) ([]Event, error) {
 		}
 	}
 	if opts.MarkRead {
-		if err := writeCursor(ws, opts.Actor, Count(ws)); err != nil {
+		if err := AdvanceCursor(ws, opts.Actor, Count(ws)); err != nil {
 			return nil, err
 		}
 	}
@@ -56,7 +56,9 @@ func cursorFile(ws *workspace.Workspace, actor string) string {
 	return filepath.Join(ws.CursorsDir(), safe+".cursor")
 }
 
-func readCursor(ws *workspace.Workspace, actor string) int {
+// Cursor returns a consumer's current event-log position. Missing or invalid
+// cursor files start at zero, so a newly registered consumer sees history.
+func Cursor(ws *workspace.Workspace, actor string) int {
 	data, err := os.ReadFile(cursorFile(ws, actor))
 	if err != nil {
 		return 0
@@ -68,6 +70,7 @@ func readCursor(ws *workspace.Workspace, actor string) int {
 	return n
 }
 
-func writeCursor(ws *workspace.Workspace, actor string, n int) error {
+// AdvanceCursor durably records a consumer's event-log position.
+func AdvanceCursor(ws *workspace.Workspace, actor string, n int) error {
 	return store.WriteAtomic(cursorFile(ws, actor), []byte(strconv.Itoa(n)+"\n"), 0o644)
 }

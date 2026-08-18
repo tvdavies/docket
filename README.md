@@ -57,14 +57,38 @@ resolved to human-meaningful titles.
 
 ## Coordination (triggering work elsewhere)
 
-docket is a passive store. Every mutation appends to an append-only event log;
-other processes react. docket never executes anything itself.
+Every mutation appends to an append-only event log. There are three ways to
+react:
 
+- **Handlers** — post-hoc executables declared in `.docket/config.yaml`.
+  Matching events arrive as JSON lines on stdin. Every handler owns a durable
+  cursor: delivery is ordered and at-least-once, failed batches retry, and a
+  handler that was offline drains its backlog. Mutating commands drain handlers
+  synchronously after the event is durable.
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
-  you, tracked by a per-actor cursor. A heartbeat drains this to pick up work.
-- `docket watch` — **stream**: blocks and emits each new event as a JSON line the
-  instant it happens, for push-based harnesses.
+  you, tracked by a per-actor cursor.
+- `docket watch` — **stream**: emits each new event as a JSON line. (Having this
+  command also drain configured handlers is the next implementation step.)
 - `docket events [--since N]` — the raw log.
+
+A handler declaration is deliberately only delivery configuration; decisions
+belong in the script:
+
+```yaml
+handlers:
+  notify:
+    on: [task.moved, task.commented]  # or ["*"]
+    run: hooks/notify                 # relative to the directory containing .docket/
+```
+
+Handler names use lowercase letters, numbers, hyphens, and underscores.
+`hooks/notify` must be executable. It runs from the project root with
+`DOCKET_HOME`, `DOCKET_ACTOR=handler:notify`, and `DOCKET_HANDLER=notify` set.
+Stdout and stderr are treated as logs and written to the invoking command's
+stderr, so `--json` output remains valid. A handler failure warns but cannot
+roll back the mutation; its cursor remains before the failed batch. A newly
+registered handler starts at cursor zero and therefore sees existing history.
+Handlers should enqueue or spawn long-running work and exit within 30 seconds.
 
 ## Identity
 
@@ -86,7 +110,7 @@ Everything is text-first and git-trackable:
 
 ```
 .docket/
-  config.yaml            # statuses, labels, relationship types
+  config.yaml            # statuses, labels, relationships, event handlers
   events.jsonl           # append-only event log
   tasks/TASK-0001-fix-login-cache/
     task.md              # YAML frontmatter + markdown description

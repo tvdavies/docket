@@ -25,11 +25,13 @@ func newAttachCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = events.Append(ws, events.Event{
+			if err := appendEvent(ws, events.Event{
 				Type: events.TaskAttached, Task: t.ID, Title: t.Title,
 				Actor: actor(), Assignee: t.Assignee,
 				Data: map[string]any{"session": sid},
-			})
+			}); err != nil {
+				return err
+			}
 			b, err := bundle.Build(ws, t.ID, comments)
 			if err != nil {
 				return err
@@ -68,10 +70,12 @@ func newDetachCmd() *cobra.Command {
 				fmt.Println("No task attached.")
 				return nil
 			}
-			_ = events.Append(ws, events.Event{
+			if err := appendEvent(ws, events.Event{
 				Type: events.TaskDetached, Task: id, Actor: actor(),
 				Data: map[string]any{"session": sid},
-			})
+			}); err != nil {
+				return err
+			}
 			if flagJSON {
 				return printJSON(map[string]string{"detached": id})
 			}
