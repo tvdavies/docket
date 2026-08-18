@@ -177,7 +177,8 @@ main { padding: 26px 24px 48px; }
 .card-title { margin: 8px 0 11px; font-size: 14px; font-weight: 670; line-height: 1.35; overflow-wrap: anywhere; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .tag, .reference-chip { max-width: 150px; padding: 2px 6px; border-radius: 4px; background: var(--surface-muted); color: var(--soft); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.reference-chip { color: var(--accent); background: var(--accent-soft); }
+.reference-chip { color: var(--accent); background: var(--accent-soft); text-decoration: none; }
+.reference-chip[href]:hover { color: var(--ink); }
 .wait-badge, .run-badge { padding: 3px 7px; border-radius: 99px; font: 700 9px var(--mono); white-space: nowrap; }
 .wait-badge { background: var(--wait-chip); color: var(--wait-ink); }
 .run-badge { background: var(--run-chip); color: var(--run-ink); }

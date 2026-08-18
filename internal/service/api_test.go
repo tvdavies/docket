@@ -387,6 +387,9 @@ func TestBoardAssetsAreEmbeddedWithStrictCSP(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(asset, "async function loadBoard") {
 		t.Fatalf("JS asset response = %d", response.StatusCode)
 	}
+	if !strings.Contains(asset, "chip.target = '_blank'") || !strings.Contains(asset, "event.stopPropagation()") {
+		t.Fatal("task-card reference links do not open independently in a new tab")
+	}
 }
 
 func newBoardServer(t *testing.T, name, root string) (*service.Manager, *httptest.Server) {

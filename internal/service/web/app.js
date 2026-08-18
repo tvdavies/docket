@@ -259,7 +259,19 @@ function renderTaskCard(task) {
 
   const meta = createElement('div', 'card-meta');
   for (const label of task.labels || []) meta.append(createElement('span', 'tag', label));
-  for (const reference of task.references || []) meta.append(createElement('span', 'reference-chip', humanize(reference.kind)));
+  for (const reference of task.references || []) {
+    const safeURL = safeReferenceURL(reference.url);
+    const chip = createElement(safeURL ? 'a' : 'span', 'reference-chip', humanize(reference.kind));
+    if (safeURL) {
+      chip.href = safeURL;
+      chip.target = '_blank';
+      chip.rel = 'noopener noreferrer';
+      chip.title = reference.title || reference.url;
+      chip.addEventListener('click', (event) => event.stopPropagation());
+      chip.addEventListener('keydown', (event) => event.stopPropagation());
+    }
+    meta.append(chip);
+  }
   if (task.assignee) meta.append(createElement('span', 'assignee', task.assignee));
   card.append(meta);
 
@@ -428,7 +440,7 @@ function renderReferences(references) {
     if (safeURL) {
       row.href = safeURL;
       row.target = '_blank';
-      row.rel = 'noreferrer';
+      row.rel = 'noopener noreferrer';
     }
     row.append(createElement('span', 'reference-kind', humanize(reference.kind)));
     row.append(createElement('span', 'reference-title', reference.title || reference.url));
