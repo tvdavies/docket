@@ -64,7 +64,9 @@ func TestManagerWatchesWorkspaceAndDrainsHandlers(t *testing.T) {
 	}
 	waitFor(t, func() bool {
 		data, err := os.ReadFile(output)
-		return err == nil && strings.Contains(string(data), `"task":"TASK-0001"`)
+		statuses := manager.Statuses()
+		return err == nil && strings.Contains(string(data), `"task":"TASK-0001"`) &&
+			len(statuses) == 1 && statuses[0].EventCount == 1 && statuses[0].HandlerCount == 1
 	})
 	statuses := manager.Statuses()
 	if statuses[0].EventCount != 1 || statuses[0].HandlerCount != 1 {
