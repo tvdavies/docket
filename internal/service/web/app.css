@@ -176,7 +176,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .order-control select { max-width:145px; } .active-filters { display:none; } .board-summary { font-size:10px; }
   .control-panel { top:79px; left:10px; right:10px; width:auto; }
   .explorer-root { padding:10px; } .lane { width:calc(100vw - 32px); flex-basis:calc(100vw - 32px); scroll-snap-align:start; } .board-viewport { scroll-snap-type:x mandatory; }
-  .task-root { padding:24px 15px 55px; } .task-layout { display:flex; flex-direction:column; gap:26px; } .properties { position:static; width:100%; order:-1; padding:12px; border:1px solid var(--line); border-radius:9px; background:var(--surface); }
+  .task-root { padding:24px 15px 55px; } .task-layout { display:flex; flex-direction:column; gap:26px; } .properties { position:static; width:100%; padding:12px; border:1px solid var(--line); border-radius:9px; background:var(--surface); }
   .task-title-button { font-size:24px; } .task-table th:nth-child(n+4),.task-table td:nth-child(n+4) { display:none; }
   .field-row { grid-template-columns:1fr; }
 }

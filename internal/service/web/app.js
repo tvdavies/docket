@@ -1,7 +1,7 @@
 import { icon } from './icons.js';
 import {
   buildExplorerPath, buildTaskAPIPath, buildTaskPath, parseLocation,
-  resolveRoute, routeContext, sameRouteContext,
+  resolveRoute, routeContext, sameRouteContext, shouldNavigateInApp,
 } from './router.js';
 import { activeFilterCount, allStatuses, filterAndSortTasks, filterOptions, groupTasks, normalisePreferences } from './view-model.js';
 
@@ -101,6 +101,25 @@ function openPanel(panel, trigger) {
   closePanels(); panel.hidden = false; trigger.setAttribute('aria-expanded', 'true'); state.panelTrigger = trigger;
   requestAnimationFrame(() => panel.querySelector('input,select,button')?.focus());
 }
+function capturePanelFocus() {
+  const active = document.activeElement;
+  for (const [name, panel] of [['filter', elements.filterPanel], ['view-settings', elements.viewSettingsPanel]]) {
+    if (panel.hidden || !panel.contains(active)) continue;
+    const option = active.closest?.('[data-panel-group]');
+    if (option) return { name, group: option.dataset.panelGroup, value: option.dataset.panelValue, action: '' };
+    const action = active.closest?.('[data-panel-action]');
+    if (action) return { name, group: '', value: '', action: action.dataset.panelAction };
+  }
+  return null;
+}
+function restorePanelFocus(snapshot) {
+  if (!snapshot) return;
+  const panel = snapshot.name === 'filter' ? elements.filterPanel : elements.viewSettingsPanel;
+  if (panel.hidden) return;
+  if (snapshot.group) { focusPanelOption(panel, snapshot.group, snapshot.value); return; }
+  requestAnimationFrame(() => [...panel.querySelectorAll('[data-panel-action]')]
+    .find((node) => node.dataset.panelAction === snapshot.action)?.focus());
+}
 
 async function loadWorkspaces() {
   const rows = await api('/api/workspaces');
@@ -167,6 +186,7 @@ function updateSurface() {
 }
 function renderExplorer() {
   if (!state.board || !state.preferences) return;
+  const panelFocus = capturePanelFocus();
   updateSurface(); captureExplorerScroll();
   elements.boardView.setAttribute('aria-pressed', String(state.preferences.view === 'board'));
   elements.listView.setAttribute('aria-pressed', String(state.preferences.view === 'list'));
@@ -180,10 +200,10 @@ function renderExplorer() {
   const visibleStatuses = allStatuses(state.board).filter((status) => !state.preferences.hiddenStatuses.includes(status));
   if (!visibleStatuses.length) {
     const showAll = button('button', 'Show all'); showAll.addEventListener('click', () => { state.preferences.hiddenStatuses = []; savePreferences(); renderExplorer(); });
-    renderEmptyExplorer('All statuses are hidden.', [showAll]); return;
+    renderEmptyExplorer('All statuses are hidden.', [showAll]); restorePanelFocus(panelFocus); return;
   }
   if (state.preferences.view === 'list') renderList(tasks); else renderBoard();
-  restoreExplorerScroll();
+  restoreExplorerScroll(); restorePanelFocus(panelFocus);
 }
 function renderActiveFilters() {
   elements.activeFilters.replaceChildren(); const filters = state.preferences.filters;
@@ -216,7 +236,7 @@ function renderFilterPanel() {
     panelSection('Project', 'projects', options.projects, filters.projects, (value) => value || 'No project', mutate('projects')),
     panelSection('Task state', 'states', ['open', 'terminal', 'waiting'], filters.states, humanize, mutate('states')),
   );
-  const actions = el('div', 'panel-actions'); const clear = button('button quiet', 'Clear all'); clear.addEventListener('click', () => { state.preferences.filters = { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }; savePreferences(); renderExplorer(); }); actions.append(clear); elements.filterPanel.append(actions);
+  const actions = el('div', 'panel-actions'); const clear = button('button quiet', 'Clear all'); clear.dataset.panelAction = 'clear-filters'; clear.addEventListener('click', () => { state.preferences.filters = { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }; savePreferences(); renderExplorer(); }); actions.append(clear); elements.filterPanel.append(actions);
 }
 function renderViewSettings() {
   elements.viewSettingsPanel.replaceChildren(); const viewSection = el('section', 'panel-section'); viewSection.append(el('h3', 'panel-title', 'Board options'));
@@ -225,7 +245,7 @@ function renderViewSettings() {
   elements.viewSettingsPanel.append(viewSection, panelSection('Visible statuses', 'visible-statuses', allStatuses(state.board), allStatuses(state.board).filter((status) => !state.preferences.hiddenStatuses.includes(status)), humanize, (value, checked) => {
     state.preferences.hiddenStatuses = checked ? state.preferences.hiddenStatuses.filter((status) => status !== value) : [...new Set([...state.preferences.hiddenStatuses, value])]; savePreferences(); renderExplorer(); focusPanelOption(elements.viewSettingsPanel, 'visible-statuses', value);
   }));
-  const actions = el('div', 'panel-actions'); const showAll = button('button quiet', 'Show all'); showAll.addEventListener('click', () => { state.preferences.hiddenStatuses = []; savePreferences(); renderExplorer(); }); actions.append(showAll); elements.viewSettingsPanel.append(actions);
+  const actions = el('div', 'panel-actions'); const showAll = button('button quiet', 'Show all'); showAll.dataset.panelAction = 'show-all-statuses'; showAll.addEventListener('click', () => { state.preferences.hiddenStatuses = []; savePreferences(); renderExplorer(); }); actions.append(showAll); elements.viewSettingsPanel.append(actions);
 }
 function renderBoard() {
   const viewport = el('div', 'board-viewport'); const board = el('section', 'board'); board.setAttribute('aria-label', 'Kanban board');
@@ -250,7 +270,7 @@ function renderCard(task) {
   if (task.resource_count) meta.append(el('span', 'reference-chip', `${task.resource_count} resource${task.resource_count === 1 ? '' : 's'}`));
   if (task.assignee) meta.append(el('span', 'card-assignee', task.assignee));
   const updated = el('time', 'card-time', relativeDate(task.updated_at)); updated.dateTime = task.updated_at; updated.title = formatDate(task.updated_at); meta.append(updated); link.append(meta); card.append(link);
-  link.addEventListener('click', (event) => { event.preventDefault(); navigateTask(task.id); });
+  link.addEventListener('click', (event) => { if (!shouldNavigateInApp(event)) return; event.preventDefault(); navigateTask(task.id); });
   card.addEventListener('dragstart', (event) => { state.dragging = true; card.classList.add('dragging'); event.dataTransfer?.setData('text/plain', task.id); });
   card.addEventListener('dragend', () => { state.dragging = false; card.classList.remove('dragging'); document.querySelectorAll('.drag-over').forEach((node) => node.classList.remove('drag-over')); });
   return card;
@@ -276,10 +296,10 @@ function renderList(tasks) {
   ['Status', 'Task', 'Assignee', 'Labels', 'Updated'].forEach((label) => header.append(el('th', '', label))); head.append(header); const body = el('tbody');
   for (const task of tasks) {
     const row = el('tr', 'task-row'); const status = el('td'); const statusWrap = el('span', `list-status ${statusTone(task.status, state.board.terminal.includes(task.status))}`); statusWrap.append(el('span', 'status-mark'), document.createTextNode(humanize(task.status))); status.append(statusWrap);
-    const title = el('td'); const link = el('a', 'task-row-link'); link.href = buildTaskPath(state.workspace, task.id); link.append(el('span', 'task-id list-id', task.id), el('span', 'list-title', task.title)); link.addEventListener('click', (event) => { event.preventDefault(); navigateTask(task.id); }); title.append(link);
+    const title = el('td'); const link = el('a', 'task-row-link'); link.href = buildTaskPath(state.workspace, task.id); link.append(el('span', 'task-id list-id', task.id), el('span', 'list-title', task.title)); link.addEventListener('click', (event) => { if (!shouldNavigateInApp(event)) return; event.preventDefault(); navigateTask(task.id); }); title.append(link);
     row.append(status, title, el('td', '', task.assignee || '—'), el('td', '', (task.labels || []).join(', ') || '—'));
     const updated = el('td', '', relativeDate(task.updated_at)); updated.title = formatDate(task.updated_at); row.append(updated);
-    row.addEventListener('click', (event) => { if (!event.target.closest('a,button,input,select,textarea')) link.click(); }); body.append(row);
+    row.addEventListener('click', (event) => { if (shouldNavigateInApp(event) && !event.target.closest('a,button,input,select,textarea')) link.click(); }); body.append(row);
   }
   table.append(head, body); viewport.append(table); elements.explorer.replaceChildren(viewport);
 }

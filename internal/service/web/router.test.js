@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildExplorerPath, buildTaskAPIPath, buildTaskPath, parseLocation,
-  resolveRoute, routeContext, sameRouteContext,
+  resolveRoute, routeContext, sameRouteContext, shouldNavigateInApp,
 } from './router.js';
 
 describe('router', () => {
@@ -32,5 +32,16 @@ describe('router', () => {
     expect(buildTaskAPIPath(context, '/comments')).toBe('/api/workspaces/client%20a/tasks/TASK-0001/comments');
     expect(sameRouteContext(context, routeContext('client a', 'TASK-0001', 7))).toBe(true);
     expect(sameRouteContext(context, routeContext('client a', 'TASK-0002', 8))).toBe(false);
+  });
+
+  test('uses SPA navigation only for unmodified primary link clicks', () => {
+    const primary = { button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+    expect(shouldNavigateInApp(primary)).toBe(true);
+    for (const override of [
+      { button: 1 }, { defaultPrevented: true }, { metaKey: true },
+      { ctrlKey: true }, { shiftKey: true }, { altKey: true },
+    ]) {
+      expect(shouldNavigateInApp({ ...primary, ...override })).toBe(false);
+    }
   });
 });
