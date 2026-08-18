@@ -183,6 +183,55 @@ func TestManagerReloadsHandlerConfigWithoutNewEvent(t *testing.T) {
 	})
 }
 
+func TestWorkspaceLeaseBlocksPathReplacementUntilRequestCompletes(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	if _, err := workspace.Init(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Init(second); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := service.NewManager(ctx, io.Discard)
+	defer manager.Stop()
+	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: first}})
+
+	leased, release, err := manager.LeaseWorkspace("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leased.Root != filepath.Join(first, workspace.DirName) {
+		t.Fatalf("leased root = %s", leased.Root)
+	}
+	replaced := make(chan struct{})
+	go func() {
+		manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: second}})
+		close(replaced)
+	}()
+	select {
+	case <-replaced:
+		t.Fatal("workspace path was replaced while request lease was active")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-replaced:
+	case <-time.After(time.Second):
+		t.Fatal("workspace replacement did not continue after lease release")
+	}
+
+	leased, release, err = manager.LeaseWorkspace("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if leased.Root != filepath.Join(second, workspace.DirName) {
+		t.Fatalf("replacement root = %s", leased.Root)
+	}
+}
+
 func TestManagerReconcilesWorkspaceSet(t *testing.T) {
 	root, _, _ := createHandledWorkspace(t)
 	ctx, cancel := context.WithCancel(context.Background())

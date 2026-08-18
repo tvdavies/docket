@@ -49,19 +49,34 @@ type Event struct {
 var Now = func() time.Time { return time.Now().UTC() }
 
 // Append writes one event to the log. Seq and Time are filled in if unset.
-// Distinct single-line O_APPEND writes are atomic, so this needs no lock.
-func Append(ws *workspace.Workspace, ev Event) error {
-	if ev.Time == "" {
-		ev.Time = Now().Format(time.RFC3339Nano)
+// Distinct O_APPEND writes are atomic, so this needs no lock.
+func Append(ws *workspace.Workspace, event Event) error {
+	return AppendAll(ws, []Event{event})
+}
+
+// AppendAll writes one ordered event group in a single O_APPEND write. Sequence
+// values remain advisory under concurrent writers, while physical log order is
+// authoritative for durable cursors.
+func AppendAll(ws *workspace.Workspace, input []Event) error {
+	if len(input) == 0 {
+		return nil
 	}
-	if ev.Seq == 0 {
-		ev.Seq = nextSeq(ws)
+	baseSequence := nextSeq(ws)
+	lines := make([][]byte, 0, len(input))
+	for index, event := range input {
+		if event.Time == "" {
+			event.Time = Now().Format(time.RFC3339Nano)
+		}
+		if event.Seq == 0 {
+			event.Seq = baseSequence + index
+		}
+		line, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, line)
 	}
-	line, err := json.Marshal(ev)
-	if err != nil {
-		return err
-	}
-	return store.AppendLine(ws.EventsFile(), line)
+	return store.AppendLines(ws.EventsFile(), lines)
 }
 
 // nextSeq derives a sequence number from the current line count. It is

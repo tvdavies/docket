@@ -1,5 +1,5 @@
 // Package service runs Docket's machine-wide multi-workspace runtime and HTTP
-// status surface. Workspaces remain independent stores; this package only
+// board/API surface. Workspaces remain independent stores; this package only
 // coordinates their watchers in one user process.
 package service
 
@@ -19,6 +19,10 @@ import (
 )
 
 const maxRetry = 30 * time.Second
+
+// ErrWorkspaceNotManaged indicates that a URL workspace name is not registered
+// with this service manager.
+var ErrWorkspaceNotManaged = errors.New("workspace is not managed by this service")
 
 // WorkspaceStatus is the service's live view of one registered workspace.
 type WorkspaceStatus struct {
@@ -143,6 +147,25 @@ func (m *Manager) Statuses() []WorkspaceStatus {
 	}
 	sortStatuses(statuses)
 	return statuses
+}
+
+// LeaseWorkspace opens a fresh authoritative view by registry name and holds a
+// manager read lease until release is called. Reconciliation therefore cannot
+// replace or remove that name while an HTTP request is reading or mutating its
+// store.
+func (m *Manager) LeaseWorkspace(name string) (*workspace.Workspace, func(), error) {
+	m.mu.RLock()
+	running, ok := m.runtimes[name]
+	if !ok {
+		m.mu.RUnlock()
+		return nil, nil, fmt.Errorf("%w: %s", ErrWorkspaceNotManaged, name)
+	}
+	ws, err := workspace.OpenRoot(running.entry.Path)
+	if err != nil {
+		m.mu.RUnlock()
+		return nil, nil, err
+	}
+	return ws, m.mu.RUnlock, nil
 }
 
 // Stop cancels every workspace and waits for its watcher to leave.

@@ -1,6 +1,7 @@
 package actions_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/tvdavies/docket/internal/actions"
@@ -8,6 +9,146 @@ import (
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
 )
+
+func TestTaskActionsCreateAndEdit(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := actions.Tasks{Workspace: ws, Actor: "web"}
+	created, err := operations.Create(task.CreateOptions{Title: "Created through actions", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "Edited title"
+	description := "Edited description\n"
+	edited, err := operations.Edit(created.ID, actions.EditOptions{Title: &title, Description: &description})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Title != title || edited.Description != "Edited description" {
+		t.Fatalf("edited task = %#v", edited)
+	}
+	assignee := "reviewer"
+	if _, err := operations.Edit(created.ID, actions.EditOptions{Assignee: &assignee}); err != nil {
+		t.Fatal(err)
+	}
+	log, err := events.All(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{events.TaskCreated, events.TaskUpdated, events.TaskAssigned}
+	if len(log) != len(want) {
+		t.Fatalf("events = %#v", log)
+	}
+	for index, eventType := range want {
+		if log[index].Type != eventType {
+			t.Fatalf("event %d = %#v", index, log[index])
+		}
+	}
+}
+
+func TestCreateAndCommentRollBackWhenEventsFail(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFailure := errors.New("event disk unavailable")
+	failing := actions.Tasks{
+		Workspace: ws, Actor: "web",
+		Append: func(events.Event) error { return commitFailure },
+	}
+	if _, err := failing.Create(task.CreateOptions{Title: "Must roll back"}); !errors.Is(err, commitFailure) {
+		t.Fatalf("create error = %v", err)
+	}
+	all, err := task.All(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("failed create left tasks: %#v", all)
+	}
+
+	created, err := task.Create(ws, task.CreateOptions{Title: "Existing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failing.Comment(created.ID, "Must roll back"); !errors.Is(err, commitFailure) {
+		t.Fatalf("comment error = %v", err)
+	}
+	comments, err := created.Comments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 0 {
+		t.Fatalf("failed comment left files: %#v", comments)
+	}
+}
+
+func TestTaskPatchIsAtomicAndRollsBackWhenEventsFail(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Original", Status: "ready", Labels: []string{"old"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFailure := errors.New("event disk unavailable")
+	operations := actions.Tasks{
+		Workspace: ws, Actor: "web",
+		Append: func(events.Event) error { return commitFailure },
+	}
+	title, status, labels := "Changed", "done", []string{"new"}
+	if _, err := operations.Patch(created.ID, actions.PatchOptions{Title: &title, Status: &status, Labels: &labels}); !errors.Is(err, commitFailure) {
+		t.Fatalf("patch error = %v", err)
+	}
+	reloaded, err := task.Load(ws, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Title != "Original" || reloaded.Status != "ready" || len(reloaded.Labels) != 1 || reloaded.Labels[0] != "old" {
+		t.Fatalf("failed patch was not rolled back: %#v", reloaded)
+	}
+	if got := events.Count(ws); got != 0 {
+		t.Fatalf("failed patch appended %d events", got)
+	}
+}
+
+func TestTaskPatchWritesOneDossierAndOrderedEventGroup(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Original", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := actions.Tasks{Workspace: ws, Actor: "web"}
+	title, assignee, status, labels := "Changed", "reviewer", "done", []string{"new"}
+	updated, err := operations.Patch(created.ID, actions.PatchOptions{
+		Title: &title, Assignee: &assignee, Status: &status, Labels: &labels,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != title || updated.Assignee != assignee || updated.Status != status {
+		t.Fatalf("patch result = %#v", updated)
+	}
+	log, err := events.All(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{events.TaskAssigned, events.TaskLabeled, events.TaskMoved}
+	if len(log) != len(want) {
+		t.Fatalf("events = %#v", log)
+	}
+	for index, eventType := range want {
+		if log[index].Type != eventType {
+			t.Fatalf("event %d = %#v", index, log[index])
+		}
+	}
+}
 
 func TestTaskActionsMutateAndEmitEvents(t *testing.T) {
 	ws, err := workspace.Init(t.TempDir())

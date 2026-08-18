@@ -100,7 +100,7 @@ A symmetric relationship repeats its own name:
 | `project_prefix` | `PROJ` | Project ID prefix |
 | `project_padding` | `4` | Numeric project ID width |
 
-Treat ID settings as persistent workspace contracts. Changing a prefix after tasks or projects exist can make ID allocation and argument recognition inconsistent with stored files.
+Prefixes must contain only letters, numbers, hyphens, and underscores; padding must be positive. Treat ID settings as persistent workspace contracts. Changing a prefix after tasks or projects exist can make ID allocation and argument recognition inconsistent with stored files. Docket rejects non-canonical or path-like task and project IDs before filesystem resolution.
 
 ## Handler config
 

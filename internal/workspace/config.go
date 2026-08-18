@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-var handlerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+var (
+	handlerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+	idPrefixPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+)
 
 // Config is the parsed `config.yaml`. It declares the status lanes, advisory
 // labels, typed relationship kinds, event handlers, and id-generation settings.
@@ -98,8 +101,17 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// Validate rejects handler declarations that cannot be delivered safely.
+// Validate rejects configuration that cannot be stored or delivered safely.
 func (c *Config) Validate() error {
+	if !idPrefixPattern.MatchString(c.Settings.IDPrefix) {
+		return fmt.Errorf("settings.id_prefix must contain only letters, numbers, hyphens, and underscores")
+	}
+	if !idPrefixPattern.MatchString(c.Settings.ProjectPrefix) {
+		return fmt.Errorf("settings.project_prefix must contain only letters, numbers, hyphens, and underscores")
+	}
+	if c.Settings.IDPadding < 1 || c.Settings.ProjectPadding < 1 {
+		return fmt.Errorf("id padding values must be positive")
+	}
 	for name, handler := range c.Handlers {
 		if !handlerNamePattern.MatchString(name) {
 			return fmt.Errorf("handler %q: name must contain only lowercase letters, numbers, hyphens, and underscores", name)

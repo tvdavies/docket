@@ -3,6 +3,7 @@ package task_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -18,6 +19,17 @@ func newWorkspace(t *testing.T) *workspace.Workspace {
 		t.Fatalf("init: %v", err)
 	}
 	return ws
+}
+
+func TestLoadRejectsNonCanonicalAndTraversingIDs(t *testing.T) {
+	ws := newWorkspace(t)
+	for _, id := range []string{"../outside", "TASK-1", "TASK-0000", "OTHER-0001", "TASK-0001/child"} {
+		t.Run(id, func(t *testing.T) {
+			if _, err := task.Load(ws, id); err == nil || !strings.Contains(err.Error(), "invalid task id") {
+				t.Fatalf("task.Load(%q) error = %v", id, err)
+			}
+		})
+	}
 }
 
 func TestCreateAndLoad(t *testing.T) {

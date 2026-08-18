@@ -8,7 +8,7 @@ Durable tasks are the whole point: plain files in a directory, **no database**, 
 
 A single static Go binary, ~8MB, zero runtime dependencies. The CLI works by
 itself; an optional systemd user service watches all registered workspaces and
-serves one local status interface.
+serves one local writable Kanban board.
 
 ## Install
 
@@ -54,6 +54,7 @@ docket show "$ID"       # description + comments + artifacts + resolved links
 
 - [CLI guide](docs/cli.md) — workflows, command map, flags, errors, and examples
 - [Configuration reference](docs/configuration.md) — workspace and service config
+- [Web interface](docs/web-interface.md) — board features, security, and HTTP API
 - [Lua hooks and SDK](docs/lua-hooks.md) — runtime, event schema, APIs, and debugging
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
 
@@ -97,7 +98,9 @@ missing workspaces unavailable rather than crashing. Without `--all`,
 `docket serve` watches only the current workspace.
 
 The systemd unit runs once per user/machine — never once per workspace — and
-serves one UI with all registered workspaces. It does not enable login lingering
+serves one writable Kanban UI with all registered workspaces. Board mutations
+use the same locks, atomic writes, validation, and events as CLI commands. It
+does not enable login lingering
 automatically; opt in explicitly with `loginctl enable-linger "$USER"` if the
 service must continue outside login sessions. The generated unit captures the
 current `PATH` and optionally loads `~/.config/docket/environment`; use that file

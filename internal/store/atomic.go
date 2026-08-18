@@ -4,7 +4,10 @@
 package store
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -54,18 +57,58 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 // needed. O_APPEND writes of a single small line are atomic on local
 // filesystems, so concurrent appenders never interleave.
 func AppendLine(path string, line []byte) error {
+	return AppendLines(path, [][]byte{line})
+}
+
+// AppendLines appends a group of lines in one O_APPEND write. It is used when
+// one atomic task mutation produces several ordered events that must not be
+// interleaved with another writer's event group.
+func AppendLines(path string, lines [][]byte) error {
+	if len(lines) == 0 {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
+	var payload bytes.Buffer
+	for _, line := range lines {
+		payload.Write(line)
+		payload.WriteByte('\n')
 	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return err
-	}
-	return f.Sync()
+	return WithLock(path+".lock", func() error {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		originalSize := info.Size()
+		rollback := func(cause error) error {
+			truncateErr := f.Truncate(originalSize)
+			syncErr := f.Sync()
+			if truncateErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("truncate partial append: %w", truncateErr))
+			}
+			if syncErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("sync append rollback: %w", syncErr))
+			}
+			return cause
+		}
+		written, err := f.Write(payload.Bytes())
+		if err != nil {
+			return rollback(err)
+		}
+		if written != payload.Len() {
+			return rollback(io.ErrShortWrite)
+		}
+		if err := f.Sync(); err != nil {
+			return rollback(err)
+		}
+		return nil
+	})
 }
 
 // EnsureDir creates a directory (and parents) if absent.

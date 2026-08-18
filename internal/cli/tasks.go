@@ -69,21 +69,18 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			t, err := task.Create(ws, task.CreateOptions{
+			operations := actions.Tasks{
+				Workspace: ws, Actor: actor(), Session: sessionID(),
+				Append: func(event events.Event) error { return appendEvent(ws, event) },
+			}
+			t, err := operations.Create(task.CreateOptions{
 				Title:       title,
 				Description: description,
 				Project:     project,
 				Labels:      labels,
-				Assignee:    "",
 				Status:      status,
 			})
 			if err != nil {
-				return err
-			}
-			if err := appendEvent(ws, events.Event{
-				Type: events.TaskCreated, Task: t.ID, Title: t.Title,
-				Actor: actor(), Assignee: t.Assignee,
-			}); err != nil {
 				return err
 			}
 			if flagJSON {
@@ -255,36 +252,26 @@ when an optional session pointer is attached. Use --assignee "" to clear it.`,
 					return err
 				}
 			}
-			assigneeChanged := cmd.Flags().Changed("assignee")
-			t, err := task.Update(ws, id, func(t *task.Task) error {
-				if title != "" {
-					t.Title = title
-				}
-				if descChanged {
-					t.Description = strings.TrimRight(description, "\n")
-				}
-				if assigneeChanged {
-					t.Assignee = assignee
-				}
-				return nil
+			var titleChange, descriptionChange, assigneeChange *string
+			if cmd.Flags().Changed("title") {
+				titleChange = &title
+			}
+			if descChanged {
+				description = strings.TrimRight(description, "\n")
+				descriptionChange = &description
+			}
+			if cmd.Flags().Changed("assignee") {
+				assigneeChange = &assignee
+			}
+			operations := actions.Tasks{
+				Workspace: ws, Actor: actor(), Session: sessionID(),
+				Append: func(event events.Event) error { return appendEvent(ws, event) },
+			}
+			t, err := operations.Edit(id, actions.EditOptions{
+				Title: titleChange, Description: descriptionChange, Assignee: assigneeChange,
 			})
 			if err != nil {
 				return err
-			}
-			if assigneeChanged {
-				if err := appendEvent(ws, events.Event{
-					Type: events.TaskAssigned, Task: t.ID, Title: t.Title,
-					Actor: actor(), Assignee: t.Assignee,
-				}); err != nil {
-					return err
-				}
-			} else {
-				if err := appendEvent(ws, events.Event{
-					Type: events.TaskUpdated, Task: t.ID, Title: t.Title,
-					Actor: actor(), Assignee: t.Assignee,
-				}); err != nil {
-					return err
-				}
 			}
 			return reportTask(t, "updated")
 		},

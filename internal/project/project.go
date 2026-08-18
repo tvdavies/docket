@@ -47,6 +47,10 @@ func slug(name string) string {
 }
 
 func resolveFile(ws *workspace.Workspace, id string) (string, error) {
+	number, ok := store.ParseIDNumber(ws.Config.Settings.ProjectPrefix, id)
+	if !ok || number < 1 || store.FormatID(ws.Config.Settings.ProjectPrefix, ws.Config.Settings.ProjectPadding, number) != id {
+		return "", fmt.Errorf("invalid project id %q (expected format like %s)", id, store.FormatID(ws.Config.Settings.ProjectPrefix, ws.Config.Settings.ProjectPadding, 1))
+	}
 	matches, _ := filepath.Glob(filepath.Join(ws.ProjectsDir(), id+"-*.md"))
 	exact := filepath.Join(ws.ProjectsDir(), id+".md")
 	if store.Exists(exact) {

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Docket board</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">D</div>
+        <div>
+          <h1>Docket</h1>
+          <p id="workspace-path">The job travels with its context.</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <label class="compact-field">
+          <span>Workspace</span>
+          <select id="workspace-select" aria-label="Workspace"></select>
+        </label>
+        <label class="compact-field actor-field">
+          <span>Acting as</span>
+          <input id="actor-input" type="text" maxlength="100" value="web" aria-label="Actor identity">
+        </label>
+        <button id="refresh-button" class="button quiet" type="button">Refresh</button>
+        <button id="new-task-button" class="button primary" type="button">New task</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="board-heading" aria-labelledby="board-title">
+        <div>
+          <div class="eyebrow"><span id="connection-dot" class="connection-dot"></span><span id="connection-label">Connecting</span></div>
+          <h2 id="board-title">Board</h2>
+        </div>
+        <div id="board-summary" class="board-summary"></div>
+      </section>
+      <div id="notice" class="notice" hidden></div>
+      <section id="board" class="board" aria-label="Kanban board"></section>
+    </main>
+  </div>
+
+  <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+  <aside id="task-drawer" class="task-drawer" aria-labelledby="detail-heading" aria-hidden="true">
+    <div class="drawer-header">
+      <div>
+        <div id="detail-id" class="task-id">Task</div>
+        <h2 id="detail-heading">Task details</h2>
+      </div>
+      <button id="close-drawer" class="icon-button" type="button" aria-label="Close task details">×</button>
+    </div>
+    <div id="detail-loading" class="detail-loading">Loading task…</div>
+    <div id="detail-content" hidden>
+      <form id="task-form" class="task-form">
+        <label class="field full">
+          <span>Title</span>
+          <input id="detail-title" name="title" required>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Status</span>
+            <select id="detail-status" name="status"></select>
+          </label>
+          <label class="field">
+            <span>Assignee</span>
+            <input id="detail-assignee" name="assignee" placeholder="Unassigned">
+          </label>
+        </div>
+        <label class="field full">
+          <span>Labels <small>comma-separated</small></span>
+          <input id="detail-labels" name="labels" placeholder="bug, urgent">
+        </label>
+        <label class="field full">
+          <span>Description</span>
+          <textarea id="detail-description" name="description" rows="9" placeholder="What needs doing, and why?"></textarea>
+        </label>
+        <div class="form-actions">
+          <span id="save-state" class="save-state"></span>
+          <button id="save-task-button" class="button primary" type="submit" disabled>Save changes</button>
+        </div>
+      </form>
+
+      <section class="detail-section" aria-labelledby="relationships-heading">
+        <div class="section-heading"><h3 id="relationships-heading">Relationships</h3></div>
+        <div id="relationships" class="relationship-list"></div>
+      </section>
+
+      <section class="detail-section" aria-labelledby="attachments-heading">
+        <div class="section-heading"><h3 id="attachments-heading">Attachments</h3><span id="attachment-count" class="count"></span></div>
+        <div id="attachments" class="attachment-list"></div>
+      </section>
+
+      <section class="detail-section comments-section" aria-labelledby="comments-heading">
+        <div class="section-heading"><h3 id="comments-heading">Comments</h3><span id="comment-count" class="count"></span></div>
+        <form id="comment-form" class="comment-form">
+          <textarea id="comment-text" rows="3" placeholder="Record a decision, result, or handoff note" required></textarea>
+          <button class="button" type="submit">Add comment</button>
+        </form>
+        <div id="comments" class="comment-list"></div>
+      </section>
+    </div>
+  </aside>
+
+  <dialog id="new-task-dialog" class="task-dialog">
+    <form id="new-task-form" method="dialog">
+      <div class="dialog-header">
+        <div><div class="eyebrow">Create</div><h2>New task</h2></div>
+        <button id="close-new-task" class="icon-button" type="button" aria-label="Close">×</button>
+      </div>
+      <label class="field full">
+        <span>Title</span>
+        <input id="new-title" name="title" required autofocus>
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span>Status</span>
+          <select id="new-status" name="status"></select>
+        </label>
+        <label class="field">
+          <span>Assignee</span>
+          <input id="new-assignee" name="assignee" placeholder="Unassigned">
+        </label>
+      </div>
+      <label class="field full">
+        <span>Labels <small>comma-separated</small></span>
+        <input id="new-labels" name="labels" placeholder="feature, client-visible">
+      </label>
+      <label class="field full">
+        <span>Description</span>
+        <textarea id="new-description" name="description" rows="7"></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button id="cancel-new-task" class="button quiet" type="button">Cancel</button>
+        <button class="button primary" value="create" type="submit">Create task</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

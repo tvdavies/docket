@@ -5,6 +5,7 @@
 package task
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,6 +82,10 @@ func slug(title string) string {
 // resolveDir finds the on-disk folder for an id, which carries a title slug
 // suffix (e.g. tasks/TASK-0007-fix-login-cache). Falls back to an exact match.
 func resolveDir(ws *workspace.Workspace, id string) (string, error) {
+	number, ok := store.ParseIDNumber(ws.Config.Settings.IDPrefix, id)
+	if !ok || number < 1 || store.FormatID(ws.Config.Settings.IDPrefix, ws.Config.Settings.IDPadding, number) != id {
+		return "", fmt.Errorf("invalid task id %q (expected format like %s)", id, store.FormatID(ws.Config.Settings.IDPrefix, ws.Config.Settings.IDPadding, 1))
+	}
 	exact := ws.TaskDir(id)
 	if store.Exists(exact) {
 		return exact, nil
@@ -231,24 +236,45 @@ func Create(ws *workspace.Workspace, opts CreateOptions) (*Task, error) {
 // Update runs fn against the task under an exclusive lock, bumps updated_at,
 // and persists the result. fn mutates the loaded task in place.
 func Update(ws *workspace.Workspace, id string, fn func(t *Task) error) (*Task, error) {
+	return UpdateWithCommit(ws, id, fn, nil)
+}
+
+// UpdateWithCommit keeps the task lock while commit records dependent durable
+// state such as an event group. If commit fails, the original dossier bytes are
+// restored before the lock is released.
+func UpdateWithCommit(ws *workspace.Workspace, id string, fn func(t *Task) error, commit func(t *Task) error) (*Task, error) {
 	dir, err := resolveDir(ws, id)
 	if err != nil {
 		return nil, err
 	}
 	var result *Task
 	err = store.WithLock(filepath.Join(dir, ".lock"), func() error {
-		t, err := loadDir(dir)
+		taskFile := filepath.Join(dir, "task.md")
+		original, err := os.ReadFile(taskFile)
 		if err != nil {
 			return err
 		}
-		if err := fn(t); err != nil {
+		value, err := loadDir(dir)
+		if err != nil {
 			return err
 		}
-		t.UpdatedAt = Now()
-		if err := t.save(); err != nil {
+		if err := fn(value); err != nil {
 			return err
 		}
-		result = t
+		value.UpdatedAt = Now()
+		if err := value.save(); err != nil {
+			return err
+		}
+		if commit != nil {
+			if err := commit(value); err != nil {
+				rollbackErr := store.WriteAtomic(taskFile, original, 0o644)
+				if rollbackErr != nil {
+					return errors.Join(err, fmt.Errorf("roll back task dossier: %w", rollbackErr))
+				}
+				return err
+			}
+		}
+		result = value
 		return nil
 	})
 	if err != nil {

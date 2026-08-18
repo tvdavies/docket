@@ -18,7 +18,7 @@ func newServeCmd() *cobra.Command {
 	var listen string
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Watch handlers and serve the local Docket status UI",
+		Short: "Watch handlers and serve the local Docket Kanban board",
 		Long: `serve runs one foreground Docket service. By default it serves the current
 workspace. With --all it follows the machine-local workspace registry and
 starts or stops workspace runtimes as registrations change. This is the

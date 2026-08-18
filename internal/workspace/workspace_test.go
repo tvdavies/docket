@@ -162,6 +162,22 @@ func TestConfigRejectsInvalidMatchPath(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsUnsafeIDPrefixes(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"task path":    func(config *Config) { config.Settings.IDPrefix = "../TASK" },
+		"project path": func(config *Config) { config.Settings.ProjectPrefix = "PROJ/ECT" },
+		"padding":      func(config *Config) { config.Settings.IDPadding = -1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := DefaultConfig()
+			mutate(config)
+			if err := config.Validate(); err == nil {
+				t.Fatal("expected unsafe ID settings to fail validation")
+			}
+		})
+	}
+}
+
 func TestConfigRejectsUnsafeHandlerName(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Handlers = map[string]HandlerConfig{
