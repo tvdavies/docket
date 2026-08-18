@@ -1,6 +1,7 @@
 package events_test
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/tvdavies/docket/internal/events"
@@ -65,8 +66,13 @@ func TestWatchWithSetupDoesNotMissEventsAppendedDuringSetup(t *testing.T) {
 	_ = events.Append(ws, events.Event{Type: events.TaskCreated, Task: "before"})
 	done := make(chan struct{})
 	var received []events.Event
+	var appendOnce sync.Once
+	var appendErr error
 	err := events.WatchWithSetup(ws, false, done, func() error {
-		return events.Append(ws, events.Event{Type: events.TaskCreated, Task: "during"})
+		appendOnce.Do(func() {
+			appendErr = events.Append(ws, events.Event{Type: events.TaskCreated, Task: "during"})
+		})
+		return appendErr
 	}, func(event events.Event) error {
 		received = append(received, event)
 		close(done)
