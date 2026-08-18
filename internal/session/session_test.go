@@ -8,21 +8,6 @@ import (
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
-func TestActiveEntriesTracksLatestUnmatchedAttach(t *testing.T) {
-	entries := []Entry{
-		{Action: "attach", Session: "finished", Actor: "planner", At: "2026-01-01T10:00:00Z"},
-		{Action: "attach", Session: "active", Actor: "implementer", At: "2026-01-01T10:01:00.1Z"},
-		{Action: "detach", Session: "finished", Actor: "planner", At: "2026-01-01T10:02:00Z"},
-		{Action: "attach", Session: "active", Actor: "implementer-v2", At: "2026-01-01T10:03:00Z"},
-		{Action: "attach", Session: "earlier", Actor: "reviewer", At: "2026-01-01T10:03:00Z"},
-	}
-
-	active := ActiveEntries(entries)
-	if len(active) != 2 || active[0].Session != "active" || active[0].Actor != "implementer-v2" || active[1].Session != "earlier" {
-		t.Fatalf("active entries = %#v", active)
-	}
-}
-
 func TestAttachMovesSessionBetweenTasksAndDetachClearsIt(t *testing.T) {
 	ws, err := workspace.Init(t.TempDir())
 	if err != nil {
@@ -37,8 +22,12 @@ func TestAttachMovesSessionBetweenTasksAndDetachClearsIt(t *testing.T) {
 	if _, err := Attach(ws, second.ID, "run-1", "implementer"); err != nil {
 		t.Fatal(err)
 	}
-	assertActiveSessionCount(t, first, 0)
-	assertActiveSessionCount(t, second, 1)
+	if action := latestSessionAction(t, first, "run-1"); action != "detach" {
+		t.Fatalf("first task latest action = %q, want detach", action)
+	}
+	if action := latestSessionAction(t, second, "run-1"); action != "attach" {
+		t.Fatalf("second task latest action = %q, want attach", action)
+	}
 	if Current(ws, "run-1") != second.ID {
 		t.Fatalf("current = %q", Current(ws, "run-1"))
 	}
@@ -46,10 +35,15 @@ func TestAttachMovesSessionBetweenTasksAndDetachClearsIt(t *testing.T) {
 	if detached, err := Detach(ws, "run-1", "implementer"); err != nil || detached != second.ID {
 		t.Fatalf("detach = %q, %v", detached, err)
 	}
-	assertActiveSessionCount(t, second, 0)
+	if action := latestSessionAction(t, second, "run-1"); action != "detach" {
+		t.Fatalf("second task latest action after detach = %q", action)
+	}
+	if Current(ws, "run-1") != "" {
+		t.Fatalf("current after detach = %q", Current(ws, "run-1"))
+	}
 }
 
-func TestConcurrentAttachLeavesSessionActiveOnOnlyCurrentTask(t *testing.T) {
+func TestConcurrentAttachLeavesOneCurrentTask(t *testing.T) {
 	ws, err := workspace.Init(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +57,7 @@ func TestConcurrentAttachLeavesSessionActiveOnOnlyCurrentTask(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			_, err := Attach(ws, target, "shared-run", "agent")
+			_, err := Attach(ws, target, "shared-run", "worker")
 			errors <- err
 		}()
 	}
@@ -76,28 +70,32 @@ func TestConcurrentAttachLeavesSessionActiveOnOnlyCurrentTask(t *testing.T) {
 	}
 
 	current := Current(ws, "shared-run")
-	firstActive := activeSessionCount(t, first)
-	secondActive := activeSessionCount(t, second)
-	if firstActive+secondActive != 1 {
-		t.Fatalf("active counts = first:%d second:%d", firstActive, secondActive)
+	if current != first.ID && current != second.ID {
+		t.Fatalf("current = %q, want one of %q or %q", current, first.ID, second.ID)
 	}
-	if (current == first.ID) != (firstActive == 1) || (current == second.ID) != (secondActive == 1) {
-		t.Fatalf("current %q disagrees with active counts first:%d second:%d", current, firstActive, secondActive)
+	currentTask, otherTask := first, second
+	if current == second.ID {
+		currentTask, otherTask = second, first
 	}
-}
-
-func assertActiveSessionCount(t *testing.T, value *task.Task, expected int) {
-	t.Helper()
-	if count := activeSessionCount(t, value); count != expected {
-		t.Fatalf("active session count for %s = %d, want %d", value.ID, count, expected)
+	if action := latestSessionAction(t, currentTask, "shared-run"); action != "attach" {
+		t.Fatalf("current task latest action = %q, want attach", action)
+	}
+	if action := latestSessionAction(t, otherTask, "shared-run"); action != "detach" {
+		t.Fatalf("other task latest action = %q, want detach", action)
 	}
 }
 
-func activeSessionCount(t *testing.T, value *task.Task) int {
+func latestSessionAction(t *testing.T, value *task.Task, sessionID string) string {
 	t.Helper()
 	entries, err := Entries(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return len(ActiveEntries(entries))
+	latest := ""
+	for _, entry := range entries {
+		if entry.Session == sessionID {
+			latest = entry.Action
+		}
+	}
+	return latest
 }

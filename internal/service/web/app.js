@@ -26,9 +26,6 @@ const elements = {
   description: $('#detail-description'),
   saveState: $('#save-state'),
   saveTask: $('#save-task-button'),
-  runSection: $('#run-section'),
-  runBadge: $('#run-badge'),
-  runDetail: $('#run-detail'),
   waitSection: $('#wait-section'),
   waitKind: $('#wait-kind'),
   waitReason: $('#wait-reason'),
@@ -74,6 +71,21 @@ function createElement(tag, className, text) {
   if (className) element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
+}
+
+function locationSelection() {
+  const params = new URLSearchParams(window.location.search);
+  return { workspace: params.get('workspace') || '', task: params.get('task') || '' };
+}
+
+function updateLocation({ workspace = state.workspace, task = '' }, { replace = false } = {}) {
+  const url = new URL(window.location.href);
+  if (workspace) url.searchParams.set('workspace', workspace);
+  else url.searchParams.delete('workspace');
+  if (task) url.searchParams.set('task', task);
+  else url.searchParams.delete('task');
+  const method = replace ? 'replaceState' : 'pushState';
+  window.history[method](null, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
 function readStorage(key, fallback = '') {
@@ -124,7 +136,8 @@ async function loadWorkspaces({ preserve = true } = {}) {
   try {
     const rows = await api('/api/workspaces');
     state.workspaces = rows;
-    const previous = preserve ? (state.workspace || readStorage('docket.workspace')) : '';
+    const linkedWorkspace = locationSelection().workspace;
+    const previous = preserve ? (linkedWorkspace || state.workspace || readStorage('docket.workspace')) : '';
     state.workspace = rows.some((row) => row.name === previous) ? previous : (rows[0]?.name || '');
     renderWorkspaceSelect();
     setConnection('live', rows.length === 1 ? '1 workspace' : `${rows.length} workspaces`);
@@ -251,9 +264,7 @@ function renderTaskCard(task) {
   const top = createElement('div', 'card-top');
   top.append(createElement('span', 'task-id', task.id));
   const badges = createElement('div', 'card-badges');
-  const activeSession = task.active_sessions?.[0];
   if (task.wait) badges.append(createElement('span', 'wait-badge', `Waiting · ${humanize(task.wait.kind)}`));
-  if (activeSession) badges.append(createElement('span', 'run-badge', `Working · ${activeSession.actor || task.assignee || 'agent'}`));
   if (badges.childElementCount) top.append(badges);
   card.append(top, createElement('div', 'card-title', task.title));
 
@@ -319,10 +330,11 @@ async function moveTask(id, status) {
   }
 }
 
-async function openTask(id) {
+async function openTask(id, { updateHistory = true } = {}) {
   if (hasDetailDraft() && state.selectedTask?.id === id) return;
   if (hasDetailDraft() && !window.confirm('Discard unsaved task input?')) return;
   clearDetailDrafts();
+  if (updateHistory) updateLocation({ task: id });
   elements.saveState.textContent = '';
   elements.drawer.classList.add('open');
   elements.drawer.setAttribute('aria-hidden', 'false');
@@ -379,7 +391,6 @@ function renderTaskDetail(task) {
   elements.description.value = task.description || '';
   elements.commentText.value = '';
   elements.saveState.textContent = task.project ? `Project ${task.project.id}` : '';
-  renderRun(task.active_sessions || []);
   renderWait(task.wait);
   renderReferences(task.references || []);
   renderRelationships(task.relationships || {});
@@ -399,18 +410,6 @@ function fillStatusSelect(select, selected) {
     option.selected = status === selected;
     select.append(option);
   }
-}
-
-function renderRun(sessions) {
-  elements.runSection.hidden = sessions.length === 0;
-  if (!sessions.length) {
-    elements.runDetail.textContent = '';
-    return;
-  }
-  const session = sessions[0];
-  elements.runBadge.textContent = sessions.length === 1 ? 'Live' : `${sessions.length} live`;
-  const actor = session.actor || 'Agent';
-  elements.runDetail.textContent = `${actor} started ${formatDate(session.at)} · session ${session.session}`;
 }
 
 function renderWait(wait) {
@@ -510,8 +509,8 @@ function activityTitle(entry) {
     case 'task.resumed': return `Resumed · ${humanize(data.result || 'resolved')}`;
     case 'task.reference_added': return `Added ${humanize(data.reference?.kind || '')} reference`;
     case 'task.reference_removed': return `Removed ${humanize(data.reference?.kind || '')} reference`;
-    case 'attach': return 'Attached agent session';
-    case 'detach': return 'Detached agent session';
+    case 'attach': return 'Attached task context';
+    case 'detach': return 'Detached task context';
     default: return humanize(String(entry.type || 'activity').replace(/^task\./, ''));
   }
 }
@@ -524,6 +523,7 @@ function closeDrawer() {
   elements.drawer.classList.remove('open');
   elements.drawer.setAttribute('aria-hidden', 'true');
   elements.scrim.hidden = true;
+  updateLocation({ task: '' });
 }
 
 function labelsFromInput(value) {
@@ -715,11 +715,12 @@ elements.workspace.addEventListener('change', async () => {
     elements.workspace.value = state.workspace;
     return;
   }
-  closeDrawerWithoutPrompt();
+  closeDrawerWithoutPrompt({ updateHistory: false });
   if (elements.newDialog.open) elements.newDialog.close();
   state.workspace = elements.workspace.value;
   state.board = null;
   writeStorage('docket.workspace', state.workspace);
+  updateLocation({ workspace: state.workspace, task: '' });
   updateWorkspaceHeader();
   renderEmptyBoard('Loading board…');
   await loadBoard();
@@ -750,19 +751,48 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && elements.drawer.classList.contains('open') && !elements.newDialog.open) closeDrawer();
 });
 
-function closeDrawerWithoutPrompt() {
+function closeDrawerWithoutPrompt({ updateHistory = true } = {}) {
   state.detailRequest += 1;
   state.selectedTask = null;
   clearDetailDrafts();
   elements.drawer.classList.remove('open');
   elements.drawer.setAttribute('aria-hidden', 'true');
   elements.scrim.hidden = true;
+  if (updateHistory) updateLocation({ task: '' });
 }
+
+window.addEventListener('popstate', async () => {
+  const linked = locationSelection();
+  if (hasDetailDraft() && !window.confirm('Discard unsaved task input?')) {
+    updateLocation({ workspace: state.workspace, task: state.selectedTask?.id || '' }, { replace: true });
+    return;
+  }
+  if (linked.workspace && linked.workspace !== state.workspace && state.workspaces.some((row) => row.name === linked.workspace)) {
+    closeDrawerWithoutPrompt({ updateHistory: false });
+    state.workspace = linked.workspace;
+    elements.workspace.value = linked.workspace;
+    writeStorage('docket.workspace', state.workspace);
+    updateWorkspaceHeader();
+    await loadBoard();
+  }
+  if (linked.task && (!linked.workspace || linked.workspace === state.workspace)) {
+    await openTask(linked.task, { updateHistory: false });
+  } else {
+    closeDrawerWithoutPrompt({ updateHistory: false });
+  }
+});
 
 async function start() {
   renderEmptyBoard('Loading workspaces…');
+  const linked = locationSelection();
   await loadWorkspaces({ preserve: true });
-  if (state.workspace) await loadBoard();
+  if (state.workspace) {
+    await loadBoard();
+    if (linked.task && (!linked.workspace || linked.workspace === state.workspace)) {
+      await openTask(linked.task, { updateHistory: false });
+    }
+  }
+  updateLocation({ workspace: state.workspace, task: state.selectedTask?.id || '' }, { replace: true });
   window.setInterval(async () => {
     if (document.hidden || state.dragging || state.dirty || elements.newDialog.open) return;
     state.workspaceRefreshes += 1;

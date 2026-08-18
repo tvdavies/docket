@@ -1,6 +1,6 @@
 # Session attachment
 
-Session attachment is an optional convenience for interactive agent harnesses. Docket does not require it.
+Session attachment is optional command-context shorthand for interactive tools and terminals. Docket does not require it, and it is not an execution-session model.
 
 ## What attaching does
 
@@ -32,7 +32,7 @@ Assignment is task metadata (`docket edit TASK-ID --assignee ACTOR`). Agent laun
 
 ## Why it exists
 
-Some harnesses give every conversation or worker turn a stable session ID. Attaching once lets later commands omit the repeated task ID:
+Some callers have a stable local context ID. Attaching once lets later commands omit the repeated task ID:
 
 ```sh
 docket session attach TASK-0007 --session agent-turn-42
@@ -81,9 +81,12 @@ Pointers live under the machine-local, gitignored path:
 ```
 
 Attach/detach audit entries are exposed in `docket show --json` under `sessions`
-and interleaved with task events and comments under `activity`. Unmatched attach
-records are also exposed as `active_sessions`; the local board uses that derived
-view for its live working badge. They live with the task at:
+and interleaved with task events and comments under `activity`. They record
+command-context continuity only; Docket does not interpret an unmatched attach
+as a live process or agent. External runs should publish a typed reference to
+their own durable session interface. For compatibility, current JSON responses
+retain a deprecated `active_sessions` field as an empty array; new clients must
+not use it. Audit entries live with the task at:
 
 ```text
 .docket/tasks/TASK-.../sessions.jsonl
@@ -95,4 +98,4 @@ Clear a pointer with:
 docket session detach --session agent-turn-42
 ```
 
-Legacy flat commands (`docket attach`, `docket detach`, and `docket current`) remain compatible but are hidden from root help. New integrations should use `docket session ...`.
+Legacy flat commands (`docket attach`, `docket detach`, and `docket current`) remain compatible but are hidden from root help. New automation should normally use explicit task IDs; interactive integrations that need shorthand can use `docket session ...`.

@@ -56,8 +56,8 @@ func TestBundleIncludesWaitReferencesSessionsAndUnifiedActivity(t *testing.T) {
 	if len(result.Sessions) != 1 || result.Sessions[0].Session != "run-42" {
 		t.Fatalf("sessions = %#v", result.Sessions)
 	}
-	if len(result.ActiveSessions) != 1 || result.ActiveSessions[0].Actor != "planner" {
-		t.Fatalf("active sessions = %#v", result.ActiveSessions)
+	if result.ActiveSessions == nil || len(result.ActiveSessions) != 0 {
+		t.Fatalf("deprecated active sessions field = %#v", result.ActiveSessions)
 	}
 	types := make([]string, 0, len(result.Activity))
 	var previous time.Time

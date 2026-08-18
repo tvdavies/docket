@@ -10,7 +10,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -146,36 +145,6 @@ func Current(ws *workspace.Workspace, sessionID string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
-}
-
-// ActiveEntries reduces an append-only attach/detach history to the currently
-// attached sessions. The latest attach record supplies actor and start time.
-func ActiveEntries(entries []Entry) []Entry {
-	active := map[string]Entry{}
-	for _, entry := range entries {
-		switch entry.Action {
-		case "attach":
-			active[entry.Session] = entry
-		case "detach":
-			delete(active, entry.Session)
-		}
-	}
-	result := make([]Entry, 0, len(active))
-	for _, entry := range active {
-		result = append(result, entry)
-	}
-	sort.Slice(result, func(left, right int) bool {
-		leftTime, leftErr := time.Parse(time.RFC3339Nano, result[left].At)
-		rightTime, rightErr := time.Parse(time.RFC3339Nano, result[right].At)
-		if leftErr == nil && rightErr == nil && !leftTime.Equal(rightTime) {
-			return leftTime.Before(rightTime)
-		}
-		if result[left].At != result[right].At {
-			return result[left].At < result[right].At
-		}
-		return result[left].Session < result[right].Session
-	})
-	return result
 }
 
 // Entries returns the valid session audit records for a task in append order.
