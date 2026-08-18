@@ -41,7 +41,7 @@ attached task.
 Every command supports `--json` for stable machine output.
 
 ### Tasks
-- `docket init` — scaffold `.docket/` in the current directory.
+- `docket init` — ensure the current directory has `.docket/` and is registered with the service; safe to repeat.
 - `docket new --title T [--desc D | --desc-file F] [--project P] [--label L]...` — prints the new id.
 - `docket list [--status S] [--label L] [--project P] [--assignee A]`
 - `docket show [TASK-ID]` — full dossier.

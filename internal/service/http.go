@@ -112,7 +112,7 @@ async function refresh(){
  try{
   const response=await fetch('/api/workspaces',{cache:'no-store'}); if(!response.ok)throw new Error(response.status);
   const rows=await response.json(); document.getElementById('service-state').textContent='service live · '+rows.length+' workspace'+(rows.length===1?'':'s');
-  if(!rows.length){root.innerHTML='<div class="empty">No workspaces registered. Run <code>docket workspace add .</code> inside a Docket workspace.</div>';return}
+  if(!rows.length){root.innerHTML='<div class="empty">No workspaces registered. In the directory you want to use, run <code>docket init</code>. It creates and registers the workspace in one idempotent step.</div>';return}
   root.innerHTML='<div class="grid">'+rows.map(w=>'<article class="card"><div class="card-head"><span class="name">'+esc(w.name)+'</span><span class="state '+esc(w.state)+'">'+esc(w.state)+'</span></div><div class="path">'+esc(w.path)+'</div><div class="metrics"><div class="metric"><strong>'+esc(w.event_count)+'</strong><span>events</span></div><div class="metric"><strong>'+esc(w.handler_count)+'</strong><span>handlers</span></div></div>'+(w.last_error?'<div class="error">'+esc(w.last_error)+'</div>':'')+'</article>').join('')+'</div>';
  }catch(error){document.getElementById('service-state').textContent='service disconnected'}
 }

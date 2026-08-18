@@ -64,8 +64,34 @@ func TestAddIsIdempotentAndRejectsCollisions(t *testing.T) {
 	if _, err := registry.Add(project, "first"); err != nil {
 		t.Fatalf("idempotent add failed: %v", err)
 	}
+	entry, err := registry.Add(project, "")
+	if err != nil || entry.Name != "first" {
+		t.Fatalf("default-name re-registration = %#v, %v", entry, err)
+	}
 	if _, err := registry.Add(project, "second"); err == nil {
 		t.Fatal("expected duplicate path to fail")
+	}
+}
+
+func TestDefaultNameGetsStableSuffixOnCollision(t *testing.T) {
+	_, first := setup(t)
+	firstEntry, err := registry.Add(first, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := filepath.Join(t.TempDir(), "My Project")
+	if err := os.MkdirAll(second, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Init(second); err != nil {
+		t.Fatal(err)
+	}
+	secondEntry, err := registry.Add(second, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstEntry.Name != "my-project" || secondEntry.Name != "my-project-2" {
+		t.Fatalf("collision names = %q, %q", firstEntry.Name, secondEntry.Name)
 	}
 }
 

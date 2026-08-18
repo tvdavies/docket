@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -19,12 +18,12 @@ const internalGitignore = `# Rebuildable cache and machine-local session state â
 .next-project-id.lock
 `
 
-// Init scaffolds a new `.docket/` workspace under root and returns it. It fails
-// if a workspace already exists there.
+// Init ensures a `.docket/` workspace exists under root and returns it.
+// Re-running it is a no-op that loads the existing workspace.
 func Init(root string) (*Workspace, error) {
 	docketDir := filepath.Join(root, DirName)
 	if isDir(docketDir) {
-		return nil, fmt.Errorf("workspace already exists at %s", docketDir)
+		return openRoot(docketDir)
 	}
 	for _, sub := range []string{"", "tasks", "projects"} {
 		if err := os.MkdirAll(filepath.Join(docketDir, sub), 0o755); err != nil {

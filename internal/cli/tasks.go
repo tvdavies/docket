@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/bundle"
 	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
 )
@@ -16,8 +17,11 @@ import (
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Scaffold a .docket/ workspace in the current directory",
-		Args:  cobra.NoArgs,
+		Short: "Ensure this directory is a registered Docket workspace",
+		Long: `init is idempotent: it creates .docket/ when absent and registers the
+workspace with the machine-wide service when unregistered. Re-running it is a
+successful no-op; it never creates duplicate registrations.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -27,10 +31,15 @@ func newInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if flagJSON {
-				return printJSON(map[string]string{"workspace": ws.Root})
+			entry, err := registry.Add(cwd, "")
+			if err != nil {
+				return fmt.Errorf("workspace is ready at %s, but service registration failed: %w", ws.Root, err)
 			}
-			fmt.Printf("Initialized docket workspace at %s\n", ws.Root)
+			if flagJSON {
+				return printJSON(map[string]any{"workspace": ws.Root, "registration": entry})
+			}
+			fmt.Printf("Docket workspace ready at %s\n", ws.Root)
+			fmt.Printf("Registered with the service as %s\n", entry.Name)
 			return nil
 		},
 	}

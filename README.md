@@ -36,7 +36,7 @@ go install github.com/tvdavies/docket@latest
 
 ```sh
 cd my-project
-docket init                                          # scaffold .docket/
+docket init                                          # create + register (safe to repeat)
 ID=$(docket new --title "Fix login cache" --label bug)
 docket attach "$ID"                                  # bind session + print context bundle
 docket comment "$ID" "Root cause: cache key omits pwdVersion"
@@ -60,12 +60,13 @@ resolved to human-meaningful titles.
 ## Workspaces and the machine-wide service
 
 A **Docket workspace** is one `.docket/` store, normally rooted in a repository.
-A Docket **project** is a logical grouping inside that store. One optional user
-service manages any number of explicitly registered workspaces:
+A Docket **project** is a logical grouping inside that store. `docket init` both
+creates and registers the current workspace, and is safe to repeat. One optional
+user service manages any number of registered workspaces:
 
 ```sh
-docket workspace add ~/dev/client-a --name client-a
-docket workspace add ~/dev/client-b --name client-b
+cd ~/dev/client-a && docket init
+docket workspace add ~/dev/client-b --name client-b  # explicit name for an existing store
 docket workspace list
 
 docket serve --all                         # foreground; http://127.0.0.1:7463

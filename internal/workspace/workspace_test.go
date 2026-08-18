@@ -65,13 +65,18 @@ func TestOpenRootNeverFallsBackToParentWorkspace(t *testing.T) {
 	}
 }
 
-func TestInitTwiceFails(t *testing.T) {
+func TestInitTwiceIsIdempotent(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Init(root); err != nil {
+	first, err := Init(root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Init(root); err == nil {
-		t.Fatal("expected second init to fail")
+	second, err := Init(root)
+	if err != nil {
+		t.Fatalf("second init failed: %v", err)
+	}
+	if second.Root != first.Root {
+		t.Fatalf("second init opened %s, want %s", second.Root, first.Root)
 	}
 }
 

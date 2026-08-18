@@ -79,6 +79,7 @@ func loadPath(path string) (*Config, error) {
 
 // Add registers a workspace. Re-adding the same name/path pair is idempotent.
 func Add(path, name string) (WorkspaceEntry, error) {
+	explicitName := name != ""
 	entry, err := resolveEntry(path, name)
 	if err != nil {
 		return WorkspaceEntry{}, err
@@ -93,15 +94,22 @@ func Add(path, name string) (WorkspaceEntry, error) {
 			return err
 		}
 		for _, existing := range config.Workspaces {
-			if existing.Name == entry.Name && samePath(existing.Path, entry.Path) {
+			if samePath(existing.Path, entry.Path) {
+				if explicitName && existing.Name != entry.Name {
+					return fmt.Errorf("workspace %s is already registered as %q", entry.Path, existing.Name)
+				}
+				entry = existing
 				return nil
 			}
-			if existing.Name == entry.Name {
-				return fmt.Errorf("workspace name %q is already registered at %s", entry.Name, existing.Path)
+		}
+		if explicitName {
+			for _, existing := range config.Workspaces {
+				if existing.Name == entry.Name {
+					return fmt.Errorf("workspace name %q is already registered at %s", entry.Name, existing.Path)
+				}
 			}
-			if samePath(existing.Path, entry.Path) {
-				return fmt.Errorf("workspace %s is already registered as %q", entry.Path, existing.Name)
-			}
+		} else {
+			entry.Name = availableName(entry.Name, config.Workspaces)
 		}
 		config.Workspaces = append(config.Workspaces, entry)
 		sort.Slice(config.Workspaces, func(i, j int) bool {
@@ -214,6 +222,22 @@ func slug(value string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+func availableName(base string, entries []WorkspaceEntry) string {
+	used := map[string]bool{}
+	for _, entry := range entries {
+		used[entry.Name] = true
+	}
+	if !used[base] {
+		return base
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s-%d", base, suffix)
+		if !used[candidate] {
+			return candidate
+		}
+	}
 }
 
 func samePath(a, b string) bool {
