@@ -4,9 +4,9 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/tvdavies/tadu/internal/bundle"
-	"github.com/tvdavies/tadu/internal/events"
-	"github.com/tvdavies/tadu/internal/session"
+	"github.com/tvdavies/docket/internal/bundle"
+	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/session"
 )
 
 func newAttachCmd() *cobra.Command {

@@ -7,9 +7,9 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/tvdavies/tadu/internal/events"
-	"github.com/tvdavies/tadu/internal/project"
-	"github.com/tvdavies/tadu/internal/task"
+	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/project"
+	"github.com/tvdavies/docket/internal/task"
 )
 
 // relationshipFlags binds one --<kind> TARGET flag per configured relationship.

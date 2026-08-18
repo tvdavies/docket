@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tvdavies/tadu/internal/store"
-	"github.com/tvdavies/tadu/internal/task"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/store"
+	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // Now is the clock for timestamps; overridable in tests.
@@ -45,7 +45,7 @@ func pointerFile(ws *workspace.Workspace, sessionID string) string {
 }
 
 // Resolve returns the effective session id: the supplied value, else
-// $TADU_SESSION, else the global pointer name.
+// $DOCKET_SESSION, else the global pointer name.
 func Resolve(supplied, envSession string) string {
 	if supplied != "" {
 		return supplied

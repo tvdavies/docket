@@ -1,4 +1,4 @@
-module github.com/tvdavies/tadu
+module github.com/tvdavies/docket
 
 go 1.26.4
 

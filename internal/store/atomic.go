@@ -1,4 +1,4 @@
-// Package store holds the low-level filesystem primitives shared by tadu's
+// Package store holds the low-level filesystem primitives shared by docket's
 // data types: atomic writes, per-resource locking, monotonic id allocation,
 // and YAML-frontmatter parsing. Nothing here knows about tasks specifically.
 package store

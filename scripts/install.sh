@@ -1,24 +1,24 @@
 #!/bin/sh
-# tadu installer — drops the `tadu` binary into a bin dir on PATH.
+# docket installer — drops the `docket` binary into a bin dir on PATH.
 #
 # Usage (humans or agents):
-#   curl -fsSL https://raw.githubusercontent.com/tvdavies/tadu/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/tvdavies/docket/main/scripts/install.sh | sh
 #
 # Env overrides:
-#   TADU_VERSION   release tag to install (default: latest)
-#   TADU_BIN_DIR   install dir (default: $HOME/.local/bin)
-#   TADU_REPO      owner/repo (default: tvdavies/tadu)
+#   DOCKET_VERSION   release tag to install (default: latest)
+#   DOCKET_BIN_DIR   install dir (default: $HOME/.local/bin)
+#   DOCKET_REPO      owner/repo (default: tvdavies/docket)
 #
 # If no prebuilt release asset is found but Go is installed, it builds from
 # source as a fallback.
 set -eu
 
-REPO="${TADU_REPO:-tvdavies/tadu}"
-BIN_DIR="${TADU_BIN_DIR:-$HOME/.local/bin}"
-VERSION="${TADU_VERSION:-latest}"
+REPO="${DOCKET_REPO:-tvdavies/docket}"
+BIN_DIR="${DOCKET_BIN_DIR:-$HOME/.local/bin}"
+VERSION="${DOCKET_VERSION:-latest}"
 
-say()  { printf '%s\n' "tadu-install: $*"; }
-die()  { printf '%s\n' "tadu-install: error: $*" >&2; exit 1; }
+say()  { printf '%s\n' "docket-install: $*"; }
+die()  { printf '%s\n' "docket-install: error: $*" >&2; exit 1; }
 
 detect_os() {
   os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -51,7 +51,7 @@ resolve_version() {
 install_from_release() {
   os=$1 arch=$2 ver=$3
   [ -n "$ver" ] || return 1
-  asset="tadu_${os}_${arch}.tar.gz"
+  asset="docket_${os}_${arch}.tar.gz"
   url="https://github.com/$REPO/releases/download/$ver/$asset"
   say "downloading $url"
   tmp=$(mktemp -d)
@@ -61,7 +61,7 @@ install_from_release() {
   fi
   tar -xzf "$tmp/$asset" -C "$tmp" || return 1
   mkdir -p "$BIN_DIR"
-  install -m 0755 "$tmp/tadu" "$BIN_DIR/tadu" 2>/dev/null || { cp "$tmp/tadu" "$BIN_DIR/tadu"; chmod 0755 "$BIN_DIR/tadu"; }
+  install -m 0755 "$tmp/docket" "$BIN_DIR/docket" 2>/dev/null || { cp "$tmp/docket" "$BIN_DIR/docket"; chmod 0755 "$BIN_DIR/docket"; }
   return 0
 }
 
@@ -88,13 +88,13 @@ main() {
     die "could not install from release or source. Install Go and retry, or download a binary from https://github.com/$REPO/releases"
   fi
 
-  say "installed to $BIN_DIR/tadu"
+  say "installed to $BIN_DIR/docket"
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) say "note: $BIN_DIR is not on PATH. Add: export PATH=\"$BIN_DIR:\$PATH\"" ;;
   esac
-  "$BIN_DIR/tadu" --version || true
-  say "run 'tadu skill' to print the agent usage guide"
+  "$BIN_DIR/docket" --version || true
+  say "run 'docket skill' to print the agent usage guide"
 }
 
 main "$@"

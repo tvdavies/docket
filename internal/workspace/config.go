@@ -29,7 +29,7 @@ type Settings struct {
 	ProjectPadding int    `yaml:"project_padding"`
 }
 
-// DefaultConfig is written by `tadu init`.
+// DefaultConfig is written by `docket init`.
 func DefaultConfig() *Config {
 	c := &Config{
 		Statuses: []string{"backlog", "ready", "in-progress", "blocked", "in-review", "done"},

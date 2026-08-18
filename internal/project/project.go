@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tvdavies/tadu/internal/store"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/store"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // Now is the clock for timestamps; overridable in tests.

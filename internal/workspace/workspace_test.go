@@ -40,20 +40,20 @@ func TestInitTwiceFails(t *testing.T) {
 	}
 }
 
-func TestTaduHomeOverride(t *testing.T) {
+func TestDocketHomeOverride(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Init(root); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("TADU_HOME", root)
-	// cwd is elsewhere, but TADU_HOME points at the project root.
+	t.Setenv("DOCKET_HOME", root)
+	// cwd is elsewhere, but DOCKET_HOME points at the project root.
 	other := t.TempDir()
 	t.Chdir(other)
 	ws, err := Open()
 	if err != nil {
-		t.Fatalf("open via TADU_HOME: %v", err)
+		t.Fatalf("open via DOCKET_HOME: %v", err)
 	}
 	if ws.Root != filepath.Join(root, DirName) {
-		t.Fatalf("wrong root via TADU_HOME: %s", ws.Root)
+		t.Fatalf("wrong root via DOCKET_HOME: %s", ws.Root)
 	}
 }

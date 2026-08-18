@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tvdavies/tadu/internal/bundle"
+	"github.com/tvdavies/docket/internal/bundle"
 )
 
 func readStdin() ([]byte, error) {

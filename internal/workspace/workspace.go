@@ -1,8 +1,8 @@
-// Package workspace handles discovery and configuration of a tadu workspace —
-// a `.tadu/` directory holding all tasks, projects, config, and attachments.
+// Package workspace handles discovery and configuration of a docket workspace —
+// a `.docket/` directory holding all tasks, projects, config, and attachments.
 //
 // Discovery walks up from the current directory like git finds `.git`. The
-// environment variable TADU_HOME overrides discovery with an explicit path.
+// environment variable DOCKET_HOME overrides discovery with an explicit path.
 package workspace
 
 import (
@@ -15,14 +15,14 @@ import (
 )
 
 // DirName is the workspace directory name placed inside a project root.
-const DirName = ".tadu"
+const DirName = ".docket"
 
 // ErrNotFound is returned when no workspace can be discovered.
-var ErrNotFound = errors.New("no tadu workspace found (run `tadu init`)")
+var ErrNotFound = errors.New("no docket workspace found (run `docket init`)")
 
-// Workspace is an opened tadu store rooted at a `.tadu/` directory.
+// Workspace is an opened docket store rooted at a `.docket/` directory.
 type Workspace struct {
-	// Root is the absolute path to the `.tadu` directory itself.
+	// Root is the absolute path to the `.docket` directory itself.
 	Root   string
 	Config *Config
 }
@@ -40,15 +40,15 @@ func Open() (*Workspace, error) {
 	return &Workspace{Root: root, Config: cfg}, nil
 }
 
-// discover locates the `.tadu` directory, honouring TADU_HOME first, then
+// discover locates the `.docket` directory, honouring DOCKET_HOME first, then
 // walking up from the current working directory.
 func discover() (string, error) {
-	if home := os.Getenv("TADU_HOME"); home != "" {
+	if home := os.Getenv("DOCKET_HOME"); home != "" {
 		abs, err := filepath.Abs(home)
 		if err != nil {
 			return "", err
 		}
-		// TADU_HOME may point either at the project root or the `.tadu` dir.
+		// DOCKET_HOME may point either at the project root or the `.docket` dir.
 		if filepath.Base(abs) == DirName {
 			if isDir(abs) {
 				return abs, nil
@@ -58,7 +58,7 @@ func discover() (string, error) {
 		if isDir(candidate) {
 			return candidate, nil
 		}
-		return "", fmt.Errorf("%w (TADU_HOME=%s)", ErrNotFound, home)
+		return "", fmt.Errorf("%w (DOCKET_HOME=%s)", ErrNotFound, home)
 	}
 
 	dir, err := os.Getwd()

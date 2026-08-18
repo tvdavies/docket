@@ -3,10 +3,10 @@ package bundle_test
 import (
 	"testing"
 
-	"github.com/tvdavies/tadu/internal/bundle"
-	"github.com/tvdavies/tadu/internal/project"
-	"github.com/tvdavies/tadu/internal/task"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/bundle"
+	"github.com/tvdavies/docket/internal/project"
+	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 func TestBundleResolvesTitlesAndProject(t *testing.T) {

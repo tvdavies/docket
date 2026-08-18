@@ -3,5 +3,5 @@ dist/
 *.log
 .DS_Store
 
-# Stray workspace from running tadu inside its own source repo during dev.
-/.tadu/
+# Stray workspace from running docket inside its own source repo during dev.
+/.docket/

@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/tvdavies/tadu/internal/store"
-	"github.com/tvdavies/tadu/internal/task"
+	"github.com/tvdavies/docket/internal/store"
+	"github.com/tvdavies/docket/internal/task"
 )
 
 //go:embed skill.md
@@ -46,7 +46,7 @@ func newReindexCmd() *cobra.Command {
 func newSkillCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "skill",
-		Short: "Print the tadu agent skill / usage doc (droppable into any harness)",
+		Short: "Print the docket agent skill / usage doc (droppable into any harness)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Print(skillDoc)

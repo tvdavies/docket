@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/tvdavies/tadu/internal/events"
+	"github.com/tvdavies/docket/internal/events"
 )
 
 func newInboxCmd() *cobra.Command {
@@ -20,7 +20,7 @@ func newInboxCmd() *cobra.Command {
 		Long: `inbox returns events on tasks assigned to you that you have not yet seen,
 tracked by a per-actor cursor. A heartbeat or polling agent runs:
 
-    tadu inbox --mark-read --json
+    docket inbox --mark-read --json
 
 to drain its queue. Use --all to ignore the assignee filter.`,
 		Args: cobra.NoArgs,

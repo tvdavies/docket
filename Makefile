@@ -1,11 +1,11 @@
 VERSION ?= dev
-LDFLAGS := -s -w -X github.com/tvdavies/tadu/internal/cli.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/tvdavies/docket/internal/cli.Version=$(VERSION)
 PREFIX  ?= $(HOME)/.local
 
 .PHONY: build test fmt vet install clean snapshot
 
 build:
-	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o bin/tadu .
+	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o bin/docket .
 
 test:
 	go test ./...
@@ -18,7 +18,7 @@ vet:
 
 install: build
 	install -d $(PREFIX)/bin
-	install -m 0755 bin/tadu $(PREFIX)/bin/tadu
+	install -m 0755 bin/docket $(PREFIX)/bin/docket
 
 # Cross-platform release build (requires goreleaser).
 snapshot:

@@ -1,13 +1,13 @@
 // Package bundle assembles a task's context bundle — the single most important
-// output in tadu. It is what a fresh agent session reads to resume work:
+// output in docket. It is what a fresh agent session reads to resume work:
 // description, history, decisions, artifacts, and relationships resolved to
 // human-meaningful titles rather than bare ids.
 package bundle
 
 import (
-	"github.com/tvdavies/tadu/internal/project"
-	"github.com/tvdavies/tadu/internal/task"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/project"
+	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // TaskRef is a related task resolved to include its title.

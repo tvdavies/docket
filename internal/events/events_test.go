@@ -3,8 +3,8 @@ package events_test
 import (
 	"testing"
 
-	"github.com/tvdavies/tadu/internal/events"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 func newWorkspace(t *testing.T) *workspace.Workspace {

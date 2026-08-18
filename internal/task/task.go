@@ -1,4 +1,4 @@
-// Package task implements tadu's core data type: a file-backed task folder
+// Package task implements docket's core data type: a file-backed task folder
 // containing a markdown dossier (`task.md`), append-only comments, attachments,
 // and a session audit log. All mutating operations take a per-task flock and
 // write atomically.
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tvdavies/tadu/internal/store"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/store"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // Now is the clock used for timestamps; overridable in tests.

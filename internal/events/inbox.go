@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tvdavies/tadu/internal/store"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/store"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // InboxOptions configures an inbox read.

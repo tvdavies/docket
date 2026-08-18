@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tvdavies/tadu/internal/task"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 func newWorkspace(t *testing.T) *workspace.Workspace {

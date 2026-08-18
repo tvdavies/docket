@@ -7,16 +7,16 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/tvdavies/tadu/internal/bundle"
-	"github.com/tvdavies/tadu/internal/events"
-	"github.com/tvdavies/tadu/internal/task"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/bundle"
+	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Scaffold a .tadu/ workspace in the current directory",
+		Short: "Scaffold a .docket/ workspace in the current directory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
@@ -30,7 +30,7 @@ func newInitCmd() *cobra.Command {
 			if flagJSON {
 				return printJSON(map[string]string{"workspace": ws.Root})
 			}
-			fmt.Printf("Initialized tadu workspace at %s\n", ws.Root)
+			fmt.Printf("Initialized docket workspace at %s\n", ws.Root)
 			return nil
 		},
 	}

@@ -1,6 +1,6 @@
-// Package events implements tadu's append-only event log (events.jsonl) — the
+// Package events implements docket's append-only event log (events.jsonl) — the
 // coordination primitive. Every mutation appends one JSON line. Consumers
-// either poll a filtered view (the "inbox") or stream new lines (`tadu watch`).
+// either poll a filtered view (the "inbox") or stream new lines (`docket watch`).
 // The store never executes anything; it only records.
 package events
 
@@ -10,8 +10,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/tvdavies/tadu/internal/store"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/store"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // Event types.

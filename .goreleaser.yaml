@@ -1,6 +1,6 @@
-# goreleaser config for tadu. Produces static, single-file binaries for
+# goreleaser config for docket. Produces static, single-file binaries for
 # linux/darwin on amd64/arm64 and packages them as tar.gz assets matching the
-# names the install script expects (tadu_<os>_<arch>.tar.gz).
+# names the install script expects (docket_<os>_<arch>.tar.gz).
 version: 2
 
 before:
@@ -8,20 +8,20 @@ before:
     - go mod tidy
 
 builds:
-  - id: tadu
+  - id: docket
     main: .
-    binary: tadu
+    binary: docket
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
-      - -s -w -X github.com/tvdavies/tadu/internal/cli.Version={{.Version}}
+      - -s -w -X github.com/tvdavies/docket/internal/cli.Version={{.Version}}
 
 archives:
-  - id: tadu
+  - id: docket
     formats: [tar.gz]
-    name_template: "tadu_{{ .Os }}_{{ .Arch }}"
+    name_template: "docket_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
       - LICENSE

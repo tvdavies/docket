@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // Watch streams events as they are appended, calling handler for each. If

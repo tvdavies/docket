@@ -6,10 +6,10 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tvdavies/tadu/internal/events"
-	"github.com/tvdavies/tadu/internal/store"
-	"github.com/tvdavies/tadu/internal/task"
-	"github.com/tvdavies/tadu/internal/workspace"
+	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/store"
+	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 func newCommentCmd() *cobra.Command {
