@@ -12,10 +12,12 @@ docket session attach TASK-0007
 This operation:
 
 1. verifies that `TASK-0007` exists;
-2. stores a machine-local pointer from `agent-turn-42` to `TASK-0007`;
-3. appends an attach record to the task's `sessions.jsonl` audit;
-4. emits `task.attached`; and
-5. prints the task's context bundle.
+2. serialises changes to the named session pointer;
+3. when that session was attached to another task, records its detach there;
+4. stores a machine-local pointer from `agent-turn-42` to `TASK-0007`;
+5. appends an attach record to the task's `sessions.jsonl` audit;
+6. emits `task.attached`; and
+7. prints the task's context bundle.
 
 It does **not**:
 
@@ -78,7 +80,10 @@ Pointers live under the machine-local, gitignored path:
 .docket/.sessions/<sanitised-session-id>.current
 ```
 
-Attach/detach audit entries are exposed in `docket show --json` under `sessions` and interleaved with task events and comments under `activity`. They live with the task at:
+Attach/detach audit entries are exposed in `docket show --json` under `sessions`
+and interleaved with task events and comments under `activity`. Unmatched attach
+records are also exposed as `active_sessions`; the local board uses that derived
+view for its live working badge. They live with the task at:
 
 ```text
 .docket/tasks/TASK-.../sessions.jsonl

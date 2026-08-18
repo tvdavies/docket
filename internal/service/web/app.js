@@ -26,6 +26,9 @@ const elements = {
   description: $('#detail-description'),
   saveState: $('#save-state'),
   saveTask: $('#save-task-button'),
+  runSection: $('#run-section'),
+  runBadge: $('#run-badge'),
+  runDetail: $('#run-detail'),
   waitSection: $('#wait-section'),
   waitKind: $('#wait-kind'),
   waitReason: $('#wait-reason'),
@@ -247,7 +250,11 @@ function renderTaskCard(task) {
 
   const top = createElement('div', 'card-top');
   top.append(createElement('span', 'task-id', task.id));
-  if (task.wait) top.append(createElement('span', 'wait-badge', `Waiting · ${humanize(task.wait.kind)}`));
+  const badges = createElement('div', 'card-badges');
+  const activeSession = task.active_sessions?.[0];
+  if (task.wait) badges.append(createElement('span', 'wait-badge', `Waiting · ${humanize(task.wait.kind)}`));
+  if (activeSession) badges.append(createElement('span', 'run-badge', `Working · ${activeSession.actor || task.assignee || 'agent'}`));
+  if (badges.childElementCount) top.append(badges);
   card.append(top, createElement('div', 'card-title', task.title));
 
   const meta = createElement('div', 'card-meta');
@@ -291,7 +298,7 @@ async function moveTask(id, status) {
     if (state.workspace !== requestedWorkspace) return;
     toast(`${id} moved to ${status}`);
     await loadBoard({ quiet: true });
-    if (state.selectedTask?.id === id && !state.dirty) await loadTaskDetail(id);
+    if (state.selectedTask?.id === id && !hasDetailDraft()) await loadTaskDetail(id);
   } catch (error) {
     if (state.workspace !== requestedWorkspace) return;
     task.status = previous;
@@ -301,9 +308,9 @@ async function moveTask(id, status) {
 }
 
 async function openTask(id) {
-  if (state.dirty && state.selectedTask?.id !== id && !window.confirm('Discard unsaved task changes?')) return;
-  state.dirty = false;
-  state.editGeneration = 0;
+  if (hasDetailDraft() && state.selectedTask?.id === id) return;
+  if (hasDetailDraft() && !window.confirm('Discard unsaved task input?')) return;
+  clearDetailDrafts();
   elements.saveState.textContent = '';
   elements.drawer.classList.add('open');
   elements.drawer.setAttribute('aria-hidden', 'false');
@@ -316,18 +323,33 @@ async function openTask(id) {
   await loadTaskDetail(id);
 }
 
-async function loadTaskDetail(id) {
+function hasDetailDraft() {
+  return state.dirty || elements.waitResult.value !== '' || elements.waitComment.value !== '' || elements.commentText.value !== '';
+}
+
+function clearDetailDrafts() {
+  state.dirty = false;
+  state.editGeneration = 0;
+  elements.waitResult.value = '';
+  elements.waitComment.value = '';
+  elements.commentText.value = '';
+}
+
+async function loadTaskDetail(id, { background = false } = {}) {
   const requestID = ++state.detailRequest;
   const requestedWorkspace = state.workspace;
+  const requestedGeneration = state.editGeneration;
   try {
     const detail = await api(`/api/workspaces/${encodeURIComponent(requestedWorkspace)}/tasks/${encodeURIComponent(id)}`);
     if (requestID !== state.detailRequest || state.workspace !== requestedWorkspace) return;
+    if (background && (state.editGeneration !== requestedGeneration || hasDetailDraft())) return;
     state.selectedTask = detail;
     state.dirty = false;
     state.editGeneration = 0;
     renderTaskDetail(detail);
   } catch (error) {
     if (requestID !== state.detailRequest || state.workspace !== requestedWorkspace) return;
+    if (background && (state.editGeneration !== requestedGeneration || hasDetailDraft())) return;
     elements.detailLoading.hidden = false;
     elements.detailLoading.textContent = `Could not load task: ${error.message}`;
     elements.detailContent.hidden = true;
@@ -343,7 +365,9 @@ function renderTaskDetail(task) {
   elements.assignee.value = task.assignee || '';
   elements.labels.value = (task.labels || []).join(', ');
   elements.description.value = task.description || '';
+  elements.commentText.value = '';
   elements.saveState.textContent = task.project ? `Project ${task.project.id}` : '';
+  renderRun(task.active_sessions || []);
   renderWait(task.wait);
   renderReferences(task.references || []);
   renderRelationships(task.relationships || {});
@@ -363,6 +387,18 @@ function fillStatusSelect(select, selected) {
     option.selected = status === selected;
     select.append(option);
   }
+}
+
+function renderRun(sessions) {
+  elements.runSection.hidden = sessions.length === 0;
+  if (!sessions.length) {
+    elements.runDetail.textContent = '';
+    return;
+  }
+  const session = sessions[0];
+  elements.runBadge.textContent = sessions.length === 1 ? 'Live' : `${sessions.length} live`;
+  const actor = session.actor || 'Agent';
+  elements.runDetail.textContent = `${actor} started ${formatDate(session.at)} · session ${session.session}`;
 }
 
 function renderWait(wait) {
@@ -469,10 +505,10 @@ function activityTitle(entry) {
 }
 
 function closeDrawer() {
-  if (state.dirty && !window.confirm('Discard unsaved task changes?')) return;
+  if (hasDetailDraft() && !window.confirm('Discard unsaved task input?')) return;
   state.detailRequest += 1;
   state.selectedTask = null;
-  state.dirty = false;
+  clearDetailDrafts();
   elements.drawer.classList.remove('open');
   elements.drawer.setAttribute('aria-hidden', 'true');
   elements.scrim.hidden = true;
@@ -663,7 +699,7 @@ async function addComment(event) {
 }
 
 elements.workspace.addEventListener('change', async () => {
-  if (state.dirty && !window.confirm('Discard unsaved task changes?')) {
+  if (hasDetailDraft() && !window.confirm('Discard unsaved task input?')) {
     elements.workspace.value = state.workspace;
     return;
   }
@@ -705,7 +741,7 @@ document.addEventListener('keydown', (event) => {
 function closeDrawerWithoutPrompt() {
   state.detailRequest += 1;
   state.selectedTask = null;
-  state.dirty = false;
+  clearDetailDrafts();
   elements.drawer.classList.remove('open');
   elements.drawer.setAttribute('aria-hidden', 'true');
   elements.scrim.hidden = true;
@@ -720,6 +756,9 @@ async function start() {
     state.workspaceRefreshes += 1;
     if (state.workspaceRefreshes % 5 === 0) await loadWorkspaces();
     await loadBoard({ quiet: true });
+    if (state.selectedTask && !hasDetailDraft()) {
+      await loadTaskDetail(state.selectedTask.id, { background: true });
+    }
   }, 3000);
 }
 

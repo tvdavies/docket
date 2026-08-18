@@ -52,20 +52,21 @@ type ActivityView struct {
 
 // Bundle is the resolved context handoff payload.
 type Bundle struct {
-	ID            string               `json:"id"`
-	Title         string               `json:"title"`
-	Status        string               `json:"status"`
-	Project       *ProjectRef          `json:"project,omitempty"`
-	Labels        []string             `json:"labels"`
-	Assignee      string               `json:"assignee,omitempty"`
-	Wait          *task.Wait           `json:"wait,omitempty"`
-	References    []task.Reference     `json:"references"`
-	Description   string               `json:"description"`
-	Relationships map[string][]TaskRef `json:"relationships,omitempty"`
-	Comments      []CommentView        `json:"comments"`
-	Attachments   []*task.Attachment   `json:"attachments"`
-	Sessions      []session.Entry      `json:"sessions"`
-	Activity      []ActivityView       `json:"activity"`
+	ID             string               `json:"id"`
+	Title          string               `json:"title"`
+	Status         string               `json:"status"`
+	Project        *ProjectRef          `json:"project,omitempty"`
+	Labels         []string             `json:"labels"`
+	Assignee       string               `json:"assignee,omitempty"`
+	Wait           *task.Wait           `json:"wait,omitempty"`
+	References     []task.Reference     `json:"references"`
+	Description    string               `json:"description"`
+	Relationships  map[string][]TaskRef `json:"relationships,omitempty"`
+	Comments       []CommentView        `json:"comments"`
+	Attachments    []*task.Attachment   `json:"attachments"`
+	Sessions       []session.Entry      `json:"sessions"`
+	ActiveSessions []session.Entry      `json:"active_sessions"`
+	Activity       []ActivityView       `json:"activity"`
 }
 
 // Build assembles the bundle for a task. commentLimit > 0 keeps only the most
@@ -155,6 +156,7 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 	if err != nil {
 		return nil, err
 	}
+	b.ActiveSessions = session.ActiveEntries(b.Sessions)
 	for _, entry := range b.Sessions {
 		eventType := events.TaskAttached
 		if entry.Action == "detach" {

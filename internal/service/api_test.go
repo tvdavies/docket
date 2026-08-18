@@ -15,6 +15,7 @@ import (
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/service"
+	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
 )
@@ -27,6 +28,9 @@ func TestBoardAPICreatesReadsAndUpdatesTasks(t *testing.T) {
 	}
 	seed, err := task.Create(ws, task.CreateOptions{Title: "Existing card", Status: "ready"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Attach(ws, seed.ID, "agent-run", "implementer"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -42,13 +46,28 @@ func TestBoardAPICreatesReadsAndUpdatesTasks(t *testing.T) {
 		Workspace string   `json:"workspace"`
 		Statuses  []string `json:"statuses"`
 		Tasks     []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
+			ID             string          `json:"id"`
+			Status         string          `json:"status"`
+			ActiveSessions []session.Entry `json:"active_sessions"`
 		} `json:"tasks"`
 	}
 	decodeResponse(t, response, &board)
 	if board.Workspace != "demo" || len(board.Statuses) == 0 || len(board.Tasks) != 1 || board.Tasks[0].ID != seed.ID {
 		t.Fatalf("board = %#v", board)
+	}
+	if len(board.Tasks[0].ActiveSessions) != 1 || board.Tasks[0].ActiveSessions[0].Actor != "implementer" {
+		t.Fatalf("board active sessions = %#v", board.Tasks[0].ActiveSessions)
+	}
+	if _, err := session.Detach(ws, "agent-run", "implementer"); err != nil {
+		t.Fatal(err)
+	}
+	response = getJSON(t, server.URL+"/api/workspaces/demo/board")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("board after detach status = %d", response.StatusCode)
+	}
+	decodeResponse(t, response, &board)
+	if len(board.Tasks[0].ActiveSessions) != 0 {
+		t.Fatalf("board active sessions after detach = %#v", board.Tasks[0].ActiveSessions)
 	}
 
 	response = sendJSON(t, http.MethodPost, server.URL+"/api/workspaces/demo/tasks", map[string]any{
