@@ -2,6 +2,8 @@ package actions_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tvdavies/docket/internal/actions"
@@ -301,6 +303,9 @@ func TestAttachmentActionEmitsEventAndRollsBackOnFailure(t *testing.T) {
 	}
 	if len(attachments) != 1 || attachments[0].File != "report.txt" {
 		t.Fatalf("failed attachment was not rolled back: %#v", attachments)
+	}
+	if _, err := os.Stat(filepath.Join(reloaded.AttachmentsDir(), "rollback.txt")); !os.IsNotExist(err) {
+		t.Fatalf("failed attachment file remains on disk: %v", err)
 	}
 }
 

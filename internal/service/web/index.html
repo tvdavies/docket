@@ -55,9 +55,9 @@
     <main id="task-root" class="task-root" hidden></main>
   </div>
 
-  <dialog id="new-task-dialog" class="task-dialog">
+  <dialog id="new-task-dialog" class="task-dialog" aria-labelledby="new-task-heading">
     <form id="new-task-form" method="dialog">
-      <div class="dialog-header"><div><span class="eyebrow">Create</span><h2>New task</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
+      <div class="dialog-header"><div><span class="eyebrow">Create</span><h2 id="new-task-heading">New task</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
       <label class="field"><span>Title</span><input id="new-title" required autofocus></label>
       <div class="field-row"><label class="field"><span>Status</span><select id="new-status"></select></label><label class="field"><span>Assignee</span><input id="new-assignee" placeholder="Unassigned"></label></div>
       <label class="field"><span>Labels <small>comma-separated</small></span><input id="new-labels" placeholder="bug, urgent"></label>
@@ -66,9 +66,9 @@
     </form>
   </dialog>
 
-  <dialog id="link-dialog" class="task-dialog small-dialog">
+  <dialog id="link-dialog" class="task-dialog small-dialog" aria-labelledby="link-dialog-heading">
     <form id="link-form" method="dialog">
-      <div class="dialog-header"><div><span class="eyebrow">Resource</span><h2>Add link</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
+      <div class="dialog-header"><div><span class="eyebrow">Resource</span><h2 id="link-dialog-heading">Add link</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
       <label class="field"><span>Kind</span><input id="link-kind" value="plan" pattern="[A-Za-z0-9._-]+" required></label>
       <label class="field"><span>URL</span><input id="link-url" type="url" required placeholder="https://…"></label>
       <label class="field"><span>Title <small>optional</small></span><input id="link-title"></label>
@@ -76,9 +76,9 @@
     </form>
   </dialog>
 
-  <dialog id="upload-dialog" class="task-dialog small-dialog">
+  <dialog id="upload-dialog" class="task-dialog small-dialog" aria-labelledby="upload-dialog-heading">
     <form id="upload-form" method="dialog">
-      <div class="dialog-header"><div><span class="eyebrow">Resource</span><h2>Upload file</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
+      <div class="dialog-header"><div><span class="eyebrow">Resource</span><h2 id="upload-dialog-heading">Upload file</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
       <label class="field"><span>File <small>maximum 25 MiB</small></span><input id="upload-file" type="file" required></label>
       <label class="field"><span>Caption <small>optional</small></span><input id="upload-caption"></label>
       <div class="dialog-actions"><button class="button dialog-close" type="button">Cancel</button><button class="button primary" value="upload" type="submit">Upload</button></div>

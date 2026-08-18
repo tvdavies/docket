@@ -1,5 +1,8 @@
 import { icon } from './icons.js';
-import { buildExplorerPath, buildTaskPath, parseLocation } from './router.js';
+import {
+  buildExplorerPath, buildTaskAPIPath, buildTaskPath, parseLocation,
+  resolveRoute, routeContext, sameRouteContext,
+} from './router.js';
 import { activeFilterCount, allStatuses, filterAndSortTasks, filterOptions, groupTasks, normalisePreferences } from './view-model.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -18,8 +21,8 @@ const elements = {
 
 const state = {
   workspaces: [], workspace: '', board: null, preferences: null, selectedTask: null, routeTask: '',
-  dragging: false, detailRequest: 0, refreshes: 0, activeEditor: null, pendingSave: false,
-  scroll: new Map(),
+  dragging: false, detailRequest: 0, boardRequest: 0, routeGeneration: 0, refreshes: 0,
+  activeEditor: null, pendingSave: false, panelTrigger: null, scroll: new Map(),
 };
 
 function el(tag, className = '', text) {
@@ -57,7 +60,10 @@ async function api(path, options = {}) {
   if (!response.ok) throw new Error(payload?.error || `${response.status} ${response.statusText}`);
   return payload;
 }
-function taskAPI(suffix = '') { return `/api/workspaces/${encodeURIComponent(state.workspace)}/tasks/${encodeURIComponent(state.routeTask)}${suffix}`; }
+function currentRoute() { return routeContext(state.workspace, state.routeTask, state.routeGeneration); }
+function routeIsCurrent(context) { return sameRouteContext(context, currentRoute()); }
+function advanceRoute() { state.routeGeneration += 1; state.detailRequest += 1; return currentRoute(); }
+function taskAPI(suffix = '') { return buildTaskAPIPath(currentRoute(), suffix); }
 function setConnection(kind, label) { elements.connectionDot.className = `connection-dot ${kind}`; elements.connectionLabel.textContent = label; }
 function showNotice(message, isError = false) { elements.notice.hidden = !message; elements.notice.textContent = message || ''; elements.notice.className = `notice${isError ? ' error' : ''}`; }
 function toast(message, isError = false) { const item = el('div', `toast${isError ? ' error' : ''}`, message); elements.toasts.append(item); setTimeout(() => item.remove(), 3800); }
@@ -84,9 +90,16 @@ function setMarkdown(node, html) {
   else node.append(el('p', 'empty-detail', 'No content yet.'));
   node.querySelectorAll('a').forEach((link) => { link.target = '_blank'; link.rel = 'noopener noreferrer'; });
 }
-function closePanels() {
+function closePanels({ restoreFocus = false } = {}) {
+  const trigger = state.panelTrigger;
   elements.filterPanel.hidden = true; elements.viewSettingsPanel.hidden = true;
   elements.filterButton.setAttribute('aria-expanded', 'false'); elements.viewSettingsButton.setAttribute('aria-expanded', 'false');
+  state.panelTrigger = null;
+  if (restoreFocus && trigger) trigger.focus();
+}
+function openPanel(panel, trigger) {
+  closePanels(); panel.hidden = false; trigger.setAttribute('aria-expanded', 'true'); state.panelTrigger = trigger;
+  requestAnimationFrame(() => panel.querySelector('input,select,button')?.focus());
 }
 
 async function loadWorkspaces() {
@@ -106,18 +119,18 @@ function updateWorkspaceChrome() {
 }
 async function loadBoard({ quiet = false } = {}) {
   if (!state.workspace || state.dragging) return;
-  const workspace = state.workspace;
+  const workspace = state.workspace; const request = ++state.boardRequest;
   try {
     if (!quiet) setConnection('', 'Refreshing');
     const board = await api(`/api/workspaces/${encodeURIComponent(workspace)}/board`);
-    if (workspace !== state.workspace) return;
+    if (request !== state.boardRequest || workspace !== state.workspace) return;
     state.board = board;
     if (!state.preferences) loadPreferences(); else state.preferences = normalisePreferences(state.preferences, board);
     savePreferences();
     if (!state.routeTask) renderExplorer();
     showNotice(''); setConnection('live', 'Live');
   } catch (error) {
-    if (workspace !== state.workspace) return;
+    if (request !== state.boardRequest || workspace !== state.workspace) return;
     setConnection('error', 'Unavailable'); showNotice(`Could not load board: ${error.message}`, true);
     if (!state.board && !state.routeTask) renderEmptyExplorer('This workspace board could not be loaded.');
   }
@@ -148,12 +161,16 @@ function updateSurface() {
   elements.appShell.classList.toggle('detail-mode', detail);
   elements.explorerToolbar.hidden = detail; elements.explorer.hidden = detail; elements.task.hidden = !detail;
   elements.taskCrumbWrap.hidden = !detail; elements.taskCrumb.textContent = detail ? state.routeTask : '';
+  if (detail) { elements.tasksCrumb.removeAttribute('aria-current'); elements.taskCrumb.setAttribute('aria-current', 'page'); }
+  else { elements.tasksCrumb.setAttribute('aria-current', 'page'); elements.taskCrumb.removeAttribute('aria-current'); }
+  document.title = detail ? `${state.routeTask} · Docket` : `${state.workspace || 'Docket'} tasks · Docket`;
 }
 function renderExplorer() {
   if (!state.board || !state.preferences) return;
   updateSurface(); captureExplorerScroll();
   elements.boardView.setAttribute('aria-pressed', String(state.preferences.view === 'board'));
   elements.listView.setAttribute('aria-pressed', String(state.preferences.view === 'list'));
+  elements.explorer.setAttribute('aria-label', state.preferences.view === 'board' ? 'Task board' : 'Task list');
   elements.search.value = state.preferences.filters.query; elements.order.value = state.preferences.order;
   const count = activeFilterCount(state.preferences); elements.filterCount.textContent = count ? String(count) : '';
   renderActiveFilters(); renderFilterPanel(); renderViewSettings();
@@ -176,32 +193,37 @@ function renderActiveFilters() {
     const chip = button('filter-chip', `${humanize(key)} ${filters[key].length} ×`); chip.addEventListener('click', () => { filters[key] = []; savePreferences(); renderExplorer(); }); elements.activeFilters.append(chip);
   }
 }
-function panelSection(title, values, selected, display, onChange) {
+function focusPanelOption(panel, group, value) {
+  requestAnimationFrame(() => [...panel.querySelectorAll('input[data-panel-group]')]
+    .find((input) => input.dataset.panelGroup === group && input.dataset.panelValue === String(value))?.focus());
+}
+function panelSection(title, group, values, selected, display, onChange) {
   const section = el('section', 'panel-section'); section.append(el('h3', 'panel-title', title)); const list = el('div', 'option-list');
   for (const value of values) {
     const label = el('label', 'check-row'); const input = el('input'); input.type = 'checkbox'; input.checked = selected.includes(value);
+    input.dataset.panelGroup = group; input.dataset.panelValue = String(value);
     input.addEventListener('change', () => onChange(value, input.checked)); label.append(input, document.createTextNode(display(value))); list.append(label);
   }
   section.append(list); return section;
 }
 function renderFilterPanel() {
   const options = filterOptions(state.board); const filters = state.preferences.filters; elements.filterPanel.replaceChildren();
-  const mutate = (key) => (value, checked) => { filters[key] = checked ? [...new Set([...filters[key], value])] : filters[key].filter((item) => item !== value); savePreferences(); renderExplorer(); };
+  const mutate = (key) => (value, checked) => { filters[key] = checked ? [...new Set([...filters[key], value])] : filters[key].filter((item) => item !== value); savePreferences(); renderExplorer(); focusPanelOption(elements.filterPanel, key, value); };
   elements.filterPanel.append(
-    panelSection('Status', options.statuses, filters.statuses, humanize, mutate('statuses')),
-    panelSection('Assignee', options.assignees, filters.assignees, (value) => value || 'Unassigned', mutate('assignees')),
-    panelSection('Labels', options.labels, filters.labels, (value) => value, mutate('labels')),
-    panelSection('Project', options.projects, filters.projects, (value) => value || 'No project', mutate('projects')),
-    panelSection('Task state', ['open', 'terminal', 'waiting'], filters.states, humanize, mutate('states')),
+    panelSection('Status', 'statuses', options.statuses, filters.statuses, humanize, mutate('statuses')),
+    panelSection('Assignee', 'assignees', options.assignees, filters.assignees, (value) => value || 'Unassigned', mutate('assignees')),
+    panelSection('Labels', 'labels', options.labels, filters.labels, (value) => value, mutate('labels')),
+    panelSection('Project', 'projects', options.projects, filters.projects, (value) => value || 'No project', mutate('projects')),
+    panelSection('Task state', 'states', ['open', 'terminal', 'waiting'], filters.states, humanize, mutate('states')),
   );
   const actions = el('div', 'panel-actions'); const clear = button('button quiet', 'Clear all'); clear.addEventListener('click', () => { state.preferences.filters = { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }; savePreferences(); renderExplorer(); }); actions.append(clear); elements.filterPanel.append(actions);
 }
 function renderViewSettings() {
   elements.viewSettingsPanel.replaceChildren(); const viewSection = el('section', 'panel-section'); viewSection.append(el('h3', 'panel-title', 'Board options'));
-  const showEmpty = el('label', 'check-row'); const emptyCheck = el('input'); emptyCheck.type = 'checkbox'; emptyCheck.checked = state.preferences.showEmpty;
-  emptyCheck.addEventListener('change', () => { state.preferences.showEmpty = emptyCheck.checked; savePreferences(); renderExplorer(); }); showEmpty.append(emptyCheck, document.createTextNode('Show empty statuses')); viewSection.append(showEmpty);
-  elements.viewSettingsPanel.append(viewSection, panelSection('Visible statuses', allStatuses(state.board), allStatuses(state.board).filter((status) => !state.preferences.hiddenStatuses.includes(status)), humanize, (value, checked) => {
-    state.preferences.hiddenStatuses = checked ? state.preferences.hiddenStatuses.filter((status) => status !== value) : [...new Set([...state.preferences.hiddenStatuses, value])]; savePreferences(); renderExplorer();
+  const showEmpty = el('label', 'check-row'); const emptyCheck = el('input'); emptyCheck.type = 'checkbox'; emptyCheck.checked = state.preferences.showEmpty; emptyCheck.dataset.panelGroup = 'board-options'; emptyCheck.dataset.panelValue = 'show-empty';
+  emptyCheck.addEventListener('change', () => { state.preferences.showEmpty = emptyCheck.checked; savePreferences(); renderExplorer(); focusPanelOption(elements.viewSettingsPanel, 'board-options', 'show-empty'); }); showEmpty.append(emptyCheck, document.createTextNode('Show empty statuses')); viewSection.append(showEmpty);
+  elements.viewSettingsPanel.append(viewSection, panelSection('Visible statuses', 'visible-statuses', allStatuses(state.board), allStatuses(state.board).filter((status) => !state.preferences.hiddenStatuses.includes(status)), humanize, (value, checked) => {
+    state.preferences.hiddenStatuses = checked ? state.preferences.hiddenStatuses.filter((status) => status !== value) : [...new Set([...state.preferences.hiddenStatuses, value])]; savePreferences(); renderExplorer(); focusPanelOption(elements.viewSettingsPanel, 'visible-statuses', value);
   }));
   const actions = el('div', 'panel-actions'); const showAll = button('button quiet', 'Show all'); showAll.addEventListener('click', () => { state.preferences.hiddenStatuses = []; savePreferences(); renderExplorer(); }); actions.append(showAll); elements.viewSettingsPanel.append(actions);
 }
@@ -220,14 +242,15 @@ function renderBoard() {
   viewport.append(board); elements.explorer.replaceChildren(viewport);
 }
 function renderCard(task) {
-  const card = el('article', 'task-card'); card.draggable = true; card.tabIndex = 0; card.dataset.task = task.id;
+  const card = el('article', 'task-card'); card.draggable = true; card.dataset.task = task.id;
+  const link = el('a', 'task-card-link'); link.href = buildTaskPath(state.workspace, task.id); link.setAttribute('aria-label', `${task.id}: ${task.title}`);
   const top = el('div', 'card-top'); top.append(el('span', 'task-id', task.id)); if (task.wait) top.append(el('span', 'wait-badge', `Waiting · ${humanize(task.wait.kind)}`));
-  card.append(top, el('div', 'card-title', task.title)); const meta = el('div', 'card-meta');
+  link.append(top, el('div', 'card-title', task.title)); const meta = el('div', 'card-meta');
   (task.labels || []).forEach((label) => meta.append(el('span', `tag ${labelTone(label)}`, label)));
   if (task.resource_count) meta.append(el('span', 'reference-chip', `${task.resource_count} resource${task.resource_count === 1 ? '' : 's'}`));
   if (task.assignee) meta.append(el('span', 'card-assignee', task.assignee));
-  const updated = el('time', 'card-time', relativeDate(task.updated_at)); updated.dateTime = task.updated_at; updated.title = formatDate(task.updated_at); meta.append(updated); card.append(meta);
-  const open = () => navigateTask(task.id); card.addEventListener('click', open); card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+  const updated = el('time', 'card-time', relativeDate(task.updated_at)); updated.dateTime = task.updated_at; updated.title = formatDate(task.updated_at); meta.append(updated); link.append(meta); card.append(link);
+  link.addEventListener('click', (event) => { event.preventDefault(); navigateTask(task.id); });
   card.addEventListener('dragstart', (event) => { state.dragging = true; card.classList.add('dragging'); event.dataTransfer?.setData('text/plain', task.id); });
   card.addEventListener('dragend', () => { state.dragging = false; card.classList.remove('dragging'); document.querySelectorAll('.drag-over').forEach((node) => node.classList.remove('drag-over')); });
   return card;
@@ -238,63 +261,81 @@ function attachDropHandlers(lane, status) {
   lane.addEventListener('drop', async (event) => { event.preventDefault(); lane.classList.remove('drag-over'); const id = event.dataTransfer?.getData('text/plain'); if (id) await moveTask(id, status); });
 }
 async function moveTask(id, status) {
-  const task = state.board.tasks.find((item) => item.id === id); if (!task || task.status === status) return;
+  const context = currentRoute(); const task = state.board.tasks.find((item) => item.id === id); if (!task || task.status === status) return;
   const previous = task.status; task.status = status; renderExplorer();
-  try { await api(`/api/workspaces/${encodeURIComponent(state.workspace)}/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }); toast(`${id} moved to ${humanize(status)}`); await loadBoard({ quiet: true }); }
-  catch (error) { task.status = previous; renderExplorer(); toast(`Move failed: ${error.message}`, true); }
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(context.workspace)}/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    if (!routeIsCurrent(context)) return; toast(`${id} moved to ${humanize(status)}`); await loadBoard({ quiet: true });
+  } catch (error) {
+    if (!routeIsCurrent(context)) return; const current = state.board.tasks.find((item) => item.id === id); if (current?.status === status) current.status = previous;
+    renderExplorer(); toast(`Move failed: ${error.message}`, true);
+  }
 }
 function renderList(tasks) {
   const viewport = el('div', 'list-viewport'); const table = el('table', 'task-table'); const head = el('thead'); const header = el('tr');
   ['Status', 'Task', 'Assignee', 'Labels', 'Updated'].forEach((label) => header.append(el('th', '', label))); head.append(header); const body = el('tbody');
   for (const task of tasks) {
-    const row = el('tr', 'task-row'); row.tabIndex = 0; const status = el('td'); const statusWrap = el('span', `list-status ${statusTone(task.status, state.board.terminal.includes(task.status))}`); statusWrap.append(el('span', 'status-mark'), document.createTextNode(humanize(task.status))); status.append(statusWrap);
-    const title = el('td'); title.append(el('span', 'task-id list-id', task.id), el('span', 'list-title', task.title));
+    const row = el('tr', 'task-row'); const status = el('td'); const statusWrap = el('span', `list-status ${statusTone(task.status, state.board.terminal.includes(task.status))}`); statusWrap.append(el('span', 'status-mark'), document.createTextNode(humanize(task.status))); status.append(statusWrap);
+    const title = el('td'); const link = el('a', 'task-row-link'); link.href = buildTaskPath(state.workspace, task.id); link.append(el('span', 'task-id list-id', task.id), el('span', 'list-title', task.title)); link.addEventListener('click', (event) => { event.preventDefault(); navigateTask(task.id); }); title.append(link);
     row.append(status, title, el('td', '', task.assignee || '—'), el('td', '', (task.labels || []).join(', ') || '—'));
     const updated = el('td', '', relativeDate(task.updated_at)); updated.title = formatDate(task.updated_at); row.append(updated);
-    const open = () => navigateTask(task.id); row.addEventListener('click', open); row.addEventListener('keydown', (event) => { if (event.key === 'Enter') open(); }); body.append(row);
+    row.addEventListener('click', (event) => { if (!event.target.closest('a,button,input,select,textarea')) link.click(); }); body.append(row);
   }
   table.append(head, body); viewport.append(table); elements.explorer.replaceChildren(viewport);
 }
 
 function hasDraft() {
   if (state.activeEditor || state.pendingSave) return true;
-  return Boolean($('#comment-text', elements.task)?.value || $('#wait-result', elements.task)?.value || $('#wait-comment', elements.task)?.value || elements.linkDialog.open || elements.uploadDialog.open);
+  return Boolean($('#comment-text', elements.task)?.value || $('#wait-result', elements.task)?.value || $('#wait-comment', elements.task)?.value || elements.linkDialog.open || elements.uploadDialog.open || elements.newDialog.open);
 }
+function closeTaskDialogs() { if (elements.linkDialog.open) elements.linkDialog.close(); if (elements.uploadDialog.open) elements.uploadDialog.close(); }
+function closeDraftDialogs() { closeTaskDialogs(); if (elements.newDialog.open) elements.newDialog.close(); }
 function confirmNavigation() { return !hasDraft() || window.confirm('Discard unsaved task input?'); }
 function setHistory(path, replace = false) { window.history[replace ? 'replaceState' : 'pushState'](null, '', path); }
 async function navigateTask(id, { replace = false } = {}) {
-  if (!confirmNavigation()) return; captureExplorerScroll(); closePanels(); state.routeTask = id; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false;
-  setHistory(buildTaskPath(state.workspace, id), replace); updateSurface(); await loadTask(id);
+  if (!confirmNavigation()) return; captureExplorerScroll(); closePanels(); closeDraftDialogs(); state.routeTask = id; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();
+  setHistory(buildTaskPath(state.workspace, id), replace); updateSurface(); await loadTask(id, { focusContent: true });
 }
 async function navigateExplorer({ replace = false } = {}) {
-  if (!confirmNavigation()) return; state.detailRequest += 1; state.routeTask = ''; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false;
-  setHistory(buildExplorerPath(state.workspace), replace); updateSurface(); renderExplorer();
+  if (!confirmNavigation()) return; closeDraftDialogs(); state.routeTask = ''; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();
+  setHistory(buildExplorerPath(state.workspace), replace); updateSurface(); renderExplorer(); elements.tasksCrumb.focus();
 }
 async function switchWorkspace(workspace, routeTask = '', { replace = false } = {}) {
   if (!confirmNavigation()) { elements.workspace.value = state.workspace; return; }
-  state.workspace = workspace; state.board = null; state.preferences = null; state.routeTask = routeTask; state.selectedTask = null; updateWorkspaceChrome();
+  closeDraftDialogs(); state.workspace = workspace; state.board = null; state.preferences = null; state.routeTask = routeTask; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute(); updateWorkspaceChrome();
   setHistory(routeTask ? buildTaskPath(workspace, routeTask) : buildExplorerPath(workspace), replace); await loadBoard();
-  if (routeTask) await loadTask(routeTask); else renderExplorer();
+  if (routeTask) await loadTask(routeTask, { focusContent: true }); else renderExplorer();
 }
-async function loadTask(id, { background = false } = {}) {
-  const request = ++state.detailRequest; const workspace = state.workspace;
+async function loadTask(id, { background = false, focusContent = false } = {}) {
+  const request = ++state.detailRequest; const context = currentRoute();
   try {
-    const detail = await api(`/api/workspaces/${encodeURIComponent(workspace)}/tasks/${encodeURIComponent(id)}`);
-    if (request !== state.detailRequest || workspace !== state.workspace || id !== state.routeTask) return;
-    if (background && hasDraft()) return; state.selectedTask = detail; renderTask(detail);
+    const detail = await api(buildTaskAPIPath(context));
+    if (request !== state.detailRequest || !routeIsCurrent(context)) return;
+    if (background && hasDraft()) return; state.selectedTask = detail; renderTask(detail, { focusContent });
   } catch (error) {
-    if (request !== state.detailRequest) return; elements.task.replaceChildren(); const back = button('button', 'Back to tasks', 'back'); back.addEventListener('click', () => navigateExplorer());
+    if (request !== state.detailRequest || !routeIsCurrent(context)) return; elements.task.replaceChildren(); const back = button('button', 'Back to tasks', 'back'); back.addEventListener('click', () => navigateExplorer());
     const empty = el('div', 'empty-board'); const inner = el('div'); inner.append(el('p', '', `Could not load ${id}: ${error.message}`), back); empty.append(inner); elements.task.append(empty);
   }
 }
-function renderTask(task) {
+function taskFocusKey() {
+  const active = document.activeElement; const named = active?.closest?.('[data-focus-key]')?.dataset.focusKey;
+  return named || (active?.id ? `id:${active.id}` : '');
+}
+function restoreTaskFocus(key, fallback = '') {
+  const targetKey = key || fallback; if (!targetKey) return;
+  requestAnimationFrame(() => {
+    if (targetKey.startsWith('id:')) { elements.task.querySelector(`#${CSS.escape(targetKey.slice(3))}`)?.focus(); return; }
+    [...elements.task.querySelectorAll('[data-focus-key]')].find((node) => node.dataset.focusKey === targetKey)?.focus();
+  });
+}
+function renderTask(task, { focusContent = false, restoreFocusKey = '' } = {}) {
   updateSurface(); const scrollTop = elements.task.scrollTop; elements.task.replaceChildren();
-  const layout = el('div', 'task-layout'); const documentColumn = el('article', 'task-document'); const aside = el('aside', 'properties');
-  const kicker = el('div', 'task-kicker'); const back = button('button quiet', 'Back to tasks', 'back'); back.addEventListener('click', () => navigateExplorer()); kicker.append(el('span', 'task-id', task.id), back);
-  const titleWrap = el('div'); const title = button('task-title-button', task.title); title.setAttribute('aria-label', 'Edit title'); title.addEventListener('click', () => startEditor(titleWrap, 'title', 'title')); titleWrap.append(title);
-  const saveBanner = el('div', 'save-banner'); saveBanner.id = 'save-banner';
+  const layout = el('div', 'task-layout'); const documentColumn = el('article', 'task-document'); documentColumn.setAttribute('aria-labelledby', 'task-heading'); const aside = el('aside', 'properties');
+  const kicker = el('div', 'task-kicker'); const back = button('button quiet', 'Back to tasks', 'back'); back.dataset.focusKey = 'back'; back.addEventListener('click', () => navigateExplorer()); kicker.append(el('span', 'task-id', task.id), back);
+  const titleWrap = el('h1'); titleWrap.id = 'task-heading'; const title = button('task-title-button', task.title); title.dataset.focusKey = 'field-title'; title.setAttribute('aria-label', `Edit title: ${task.title}`); title.addEventListener('click', () => startEditor(titleWrap, 'title', 'title')); titleWrap.append(title);
+  const saveBanner = el('div', 'save-banner'); saveBanner.id = 'save-banner'; saveBanner.setAttribute('role', 'status'); saveBanner.setAttribute('aria-live', 'polite'); saveBanner.setAttribute('aria-atomic', 'true');
   const descriptionSection = el('section', 'document-description'); const descriptionHeading = el('div', 'section-heading'); descriptionHeading.append(el('h2', '', 'Description'));
-  const editDescription = button('document-edit', 'Edit'); editDescription.addEventListener('click', () => startEditor(descriptionBody, 'description', 'description')); descriptionHeading.append(editDescription);
+  const editDescription = button('document-edit', 'Edit'); editDescription.dataset.focusKey = 'field-description'; editDescription.setAttribute('aria-label', 'Edit description'); editDescription.addEventListener('click', () => startEditor(descriptionBody, 'description', 'description')); descriptionHeading.append(editDescription);
   const descriptionBody = el('div', 'markdown'); setMarkdown(descriptionBody, task.description_html); descriptionSection.append(descriptionHeading, descriptionBody);
   documentColumn.append(kicker, titleWrap, saveBanner, descriptionSection);
   if (task.wait) documentColumn.append(renderWait(task.wait));
@@ -303,38 +344,46 @@ function renderTask(task) {
   properties.append(propertyRow('Status', 'status', humanize(task.status), 'select'), propertyRow('Assignee', 'assignee', task.assignee || 'Unassigned', 'input'), propertyRow('Labels', 'labels', (task.labels || []).join(', ') || 'None', 'input'));
   properties.append(staticProperty('Project', task.project?.name || task.project?.id || 'None'), staticProperty('Created', formatDate(task.created_at)), staticProperty('Updated', formatDate(task.updated_at)));
   aside.append(properties); layout.append(documentColumn, aside); elements.task.append(layout); elements.task.scrollTop = scrollTop;
+  if (focusContent) { titleWrap.tabIndex = -1; requestAnimationFrame(() => titleWrap.focus()); }
+  else restoreTaskFocus(restoreFocusKey);
 }
 function staticProperty(label, value) { const row = el('div', 'property-row'); row.append(el('span', 'property-label', label), el('span', 'property-value', value)); return row; }
 function propertyRow(label, field, value, kind) {
-  const row = el('div', 'property-row'); const holder = el('div'); const edit = button('property-value', value); edit.setAttribute('aria-label', `Edit ${label}`); edit.addEventListener('click', () => startEditor(holder, field, kind)); holder.append(edit); row.append(el('span', 'property-label', label), holder); return row;
+  const row = el('div', 'property-row'); const holder = el('div'); const edit = button('property-value', value); edit.dataset.focusKey = `field-${field}`; edit.setAttribute('aria-label', `Edit ${label}: ${value}`); edit.addEventListener('click', () => startEditor(holder, field, kind)); holder.append(edit); row.append(el('span', 'property-label', label), holder); return row;
 }
 function startEditor(container, field, kind) {
   if (state.pendingSave || state.activeEditor) return;
-  const task = state.selectedTask; let original = field === 'labels' ? (task.labels || []).join(', ') : String(task[field] || ''); let editor;
+  const task = state.selectedTask; const original = field === 'labels' ? (task.labels || []).join(', ') : String(task[field] || ''); let editor;
   if (kind === 'description') { editor = el('textarea', 'inline-editor'); editor.value = original; editor.rows = 14; }
   else if (kind === 'select') { editor = el('select', 'inline-editor'); const statuses = [...(state.board?.statuses || [])]; if (original && !statuses.includes(original)) statuses.push(original); for (const status of statuses) { const option = el('option', '', humanize(status)); option.value = status; option.selected = status === original; editor.append(option); } }
   else { editor = el('input', `inline-editor${kind === 'title' ? ' title-editor' : ''}`); editor.value = original; }
+  editor.setAttribute('aria-label', `Edit ${humanize(field)}`); editor.setAttribute('aria-describedby', 'save-banner'); editor.dataset.focusKey = `editor-${field}`;
   container.replaceChildren(editor); state.activeEditor = { container, editor, field, original, failed: false };
-  editor.addEventListener('input', () => { state.activeEditor.failed = false; editor.classList.remove('save-error'); });
-  editor.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); cancelEditor(); } if (kind === 'description' && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) editor.blur(); });
+  editor.addEventListener('input', () => { if (!state.activeEditor) return; state.activeEditor.failed = false; editor.classList.remove('save-error'); editor.removeAttribute('aria-invalid'); setSaveMessage(''); });
+  editor.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); cancelEditor(field); } if (kind === 'description' && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) editor.blur(); });
   editor.addEventListener('blur', () => { setTimeout(() => { if (state.activeEditor?.editor === editor && !state.activeEditor.failed) saveEditor(); }, 0); });
   if (kind === 'select') editor.addEventListener('change', () => editor.blur()); editor.focus(); if (editor.select) editor.select();
 }
-function cancelEditor() { state.activeEditor = null; if (state.selectedTask) renderTask(state.selectedTask); }
+function cancelEditor(field = state.activeEditor?.field) { state.activeEditor = null; if (state.selectedTask) renderTask(state.selectedTask, { restoreFocusKey: `field-${field}` }); }
 async function saveEditor() {
   const active = state.activeEditor; if (!active || state.pendingSave) return; let value = active.editor.value;
   if (active.field === 'title' || active.field === 'assignee') value = value.trim();
   if (active.field === 'title' && !value) { markSaveFailure(active, 'Title cannot be empty'); return; }
   const payloadValue = active.field === 'labels' ? labelsFromInput(value) : value;
   const originalValue = active.field === 'labels' ? labelsFromInput(active.original) : active.original;
-  if (JSON.stringify(payloadValue) === JSON.stringify(originalValue)) { cancelEditor(); return; }
+  if (JSON.stringify(payloadValue) === JSON.stringify(originalValue)) { cancelEditor(active.field); return; }
+  const context = currentRoute(); const field = active.field; const submitted = JSON.stringify({ [field]: payloadValue });
   state.pendingSave = true; setSaveMessage('Saving…'); active.editor.disabled = true;
   try {
-    const updated = await api(taskAPI(), { method: 'PATCH', body: JSON.stringify({ [active.field]: payloadValue }) });
-    state.selectedTask = updated; state.activeEditor = null; state.pendingSave = false; renderTask(updated); setSaveMessage('Saved'); await loadBoard({ quiet: true });
-  } catch (error) { state.pendingSave = false; active.editor.disabled = false; markSaveFailure(active, error.message); }
+    const updated = await api(buildTaskAPIPath(context), { method: 'PATCH', body: submitted });
+    if (!routeIsCurrent(context)) return;
+    const focusKey = taskFocusKey(); state.selectedTask = updated; state.activeEditor = null; state.pendingSave = false; renderTask(updated, { restoreFocusKey: focusKey || `field-${field}` }); setSaveMessage('Saved'); await loadBoard({ quiet: true });
+  } catch (error) {
+    if (!routeIsCurrent(context)) return;
+    state.pendingSave = false; active.editor.disabled = false; markSaveFailure(active, error.message);
+  }
 }
-function markSaveFailure(active, message) { active.failed = true; active.editor.classList.add('save-error'); setSaveMessage(`Not saved · ${message}`, true, () => { active.failed = false; saveEditor(); }); }
+function markSaveFailure(active, message) { active.failed = true; active.editor.classList.add('save-error'); active.editor.setAttribute('aria-invalid', 'true'); setSaveMessage(`Not saved · ${message}`, true, () => { active.failed = false; active.editor.removeAttribute('aria-invalid'); saveEditor(); }); }
 function setSaveMessage(message, error = false, retry) {
   const banner = $('#save-banner', elements.task); if (!banner) return; banner.className = `save-banner${error ? ' error' : ''}`; banner.replaceChildren(document.createTextNode(message));
   if (retry) { const action = button('button quiet', 'Retry'); action.addEventListener('click', retry); banner.append(document.createTextNode(' '), action); }
@@ -342,21 +391,27 @@ function setSaveMessage(message, error = false, retry) {
 function renderWait(wait) {
   const section = el('section', 'wait-callout'); section.append(el('h2', '', `Waiting · ${humanize(wait.kind)}`), el('p', '', wait.reason));
   const url = safeURL(wait.reference); if (url) { const link = el('a', '', wait.reference); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; section.append(link); }
-  const form = el('form', 'wait-form'); const result = el('input'); result.id = 'wait-result'; result.placeholder = 'Resolution (for example approved)'; const comment = el('textarea'); comment.id = 'wait-comment'; comment.rows = 2; comment.placeholder = 'Optional feedback'; const submit = button('button primary', 'Resolve wait'); submit.type = 'submit'; form.append(result, comment, submit);
+  const form = el('form', 'wait-form'); const resultLabel = el('label', 'field'); resultLabel.append(el('span', '', 'Resolution')); const result = el('input'); result.id = 'wait-result'; result.placeholder = 'For example: approved'; resultLabel.append(result);
+  const commentLabel = el('label', 'field'); commentLabel.append(el('span', '', 'Feedback (optional)')); const comment = el('textarea'); comment.id = 'wait-comment'; comment.rows = 2; comment.placeholder = 'Explain what changed'; commentLabel.append(comment);
+  const submit = button('button primary', 'Resolve wait'); submit.type = 'submit'; form.append(resultLabel, commentLabel, submit);
   form.addEventListener('submit', resolveWait); section.append(form); return section;
 }
 async function resolveWait(event) {
-  event.preventDefault(); const submit = $('button[type="submit"]', event.currentTarget); submit.disabled = true;
+  event.preventDefault(); const context = currentRoute(); const submit = $('button[type="submit"]', event.currentTarget);
+  const note = $('#wait-comment', event.currentTarget).value.trim(); const result = $('#wait-result', event.currentTarget).value.trim(); const waitID = state.selectedTask?.wait?.id;
+  submit.disabled = true;
   try {
-    const note = $('#wait-comment', elements.task).value.trim(); if (note) { await api(taskAPI('/comments'), { method: 'POST', body: JSON.stringify({ text: note }) }); $('#wait-comment', elements.task).value = ''; }
-    const updated = await api(taskAPI('/wait/resolve'), { method: 'POST', body: JSON.stringify({ wait_id: state.selectedTask.wait.id, result: $('#wait-result', elements.task).value.trim() }) });
+    if (note) await api(buildTaskAPIPath(context, '/comments'), { method: 'POST', body: JSON.stringify({ text: note }) });
+    const updated = await api(buildTaskAPIPath(context, '/wait/resolve'), { method: 'POST', body: JSON.stringify({ wait_id: waitID, result }) });
+    if (!routeIsCurrent(context)) return;
     state.selectedTask = updated; renderTask(updated); toast(`${updated.id} resumed`); await loadBoard({ quiet: true });
-  } catch (error) { toast(`Could not resolve wait: ${error.message}`, true); } finally { submit.disabled = false; }
+  } catch (error) { if (routeIsCurrent(context)) toast(`Could not resolve wait: ${error.message}`, true); }
+  finally { if (routeIsCurrent(context) && submit.isConnected) submit.disabled = false; }
 }
 function renderResources(task) {
   const section = el('section', 'document-section'); const heading = el('div', 'section-heading'); heading.append(el('h2', '', `Resources · ${(task.references || []).length + (task.attachments || []).length}`));
-  const actions = el('div', 'section-actions'); const addLink = button('icon-button', '', 'link'); addLink.setAttribute('aria-label', 'Add link'); addLink.addEventListener('click', () => { elements.linkForm.reset(); elements.linkKind.value = 'plan'; elements.linkDialog.showModal(); });
-  const upload = button('icon-button', '', 'file'); upload.setAttribute('aria-label', 'Upload file'); upload.addEventListener('click', () => { elements.uploadForm.reset(); elements.uploadDialog.showModal(); }); actions.append(addLink, upload); heading.append(actions); section.append(heading);
+  const actions = el('div', 'section-actions'); const addLink = button('icon-button', '', 'link'); addLink.dataset.focusKey = 'add-link'; addLink.setAttribute('aria-label', 'Add link'); addLink.addEventListener('click', () => { elements.linkForm.reset(); elements.linkKind.value = 'plan'; elements.linkDialog.showModal(); });
+  const upload = button('icon-button', '', 'file'); upload.dataset.focusKey = 'upload-file'; upload.setAttribute('aria-label', 'Upload file'); upload.addEventListener('click', () => { elements.uploadForm.reset(); elements.uploadDialog.showModal(); }); actions.append(addLink, upload); heading.append(actions); section.append(heading);
   const list = el('div', 'resource-list');
   for (const reference of [...(task.references || [])].reverse()) list.append(referenceRow(reference));
   for (const attachment of task.attachments || []) list.append(attachmentRow(attachment));
@@ -365,7 +420,11 @@ function renderResources(task) {
 function referenceRow(reference) {
   const row = el('div', 'resource-row'); const mark = el('span', 'resource-icon'); mark.append(icon('link')); const content = el('div'); content.append(el('div', 'resource-title', reference.title || reference.url), el('div', 'resource-meta', `${humanize(reference.kind)} · ${reference.added_by || 'unknown'} · ${formatDate(reference.added_at)}`));
   const actions = el('div', 'resource-actions'); const url = safeURL(reference.url); if (url) { const open = el('a', 'icon-button'); open.href = url; open.target = '_blank'; open.rel = 'noopener noreferrer'; open.setAttribute('aria-label', 'Open resource'); open.append(icon('link')); actions.append(open); }
-  const remove = button('icon-button', '', 'close'); remove.setAttribute('aria-label', 'Remove resource'); remove.addEventListener('click', async () => { if (!window.confirm('Remove this link resource?')) return; try { const updated = await api(taskAPI(`/references/${encodeURIComponent(reference.id)}`), { method: 'DELETE', body: '{}' }); state.selectedTask = updated; renderTask(updated); } catch (error) { toast(`Could not remove link: ${error.message}`, true); } }); actions.append(remove); row.append(mark, content, actions); return row;
+  const remove = button('icon-button', '', 'close'); remove.setAttribute('aria-label', 'Remove resource'); remove.addEventListener('click', async () => {
+    if (!window.confirm('Remove this link resource?')) return; const context = currentRoute(); const referenceID = reference.id;
+    try { const updated = await api(buildTaskAPIPath(context, `/references/${encodeURIComponent(referenceID)}`), { method: 'DELETE', body: '{}' }); if (!routeIsCurrent(context)) return; state.selectedTask = updated; renderTask(updated); await loadBoard({ quiet: true }); }
+    catch (error) { if (routeIsCurrent(context)) toast(`Could not remove link: ${error.message}`, true); }
+  }); actions.append(remove); row.append(mark, content, actions); return row;
 }
 function attachmentRow(attachment) {
   const row = el('div', 'resource-row'); const mark = el('span', 'resource-icon'); mark.append(icon('file')); const content = el('div'); content.append(el('div', 'resource-title', attachment.caption || attachment.file), el('div', 'resource-meta', `${attachment.file} · ${formatBytes(attachment.bytes || 0)} · ${attachment.added_by || 'unknown'}`));
@@ -402,29 +461,29 @@ function renderActivity(activity) {
   section.append(list); const form = el('form', 'comment-form'); const label = el('label', 'field'); label.append(el('span', '', `Comment as ${currentActor()}`)); const textarea = el('textarea'); textarea.id = 'comment-text'; textarea.required = true; textarea.placeholder = 'Record a decision, result, or handoff note'; label.append(textarea); const submit = button('button', 'Add comment', 'comment'); submit.type = 'submit'; form.append(label, submit); form.addEventListener('submit', addComment); section.append(form); return section;
 }
 async function addComment(event) {
-  event.preventDefault(); const textarea = $('#comment-text', elements.task); const text = textarea.value.trim(); if (!text) return; const submit = $('button[type="submit"]', event.currentTarget); submit.disabled = true;
-  try { const updated = await api(taskAPI('/comments'), { method: 'POST', body: JSON.stringify({ text }) }); state.selectedTask = updated; renderTask(updated); toast('Comment added'); elements.task.scrollTop = elements.task.scrollHeight; }
-  catch (error) { toast(`Comment failed: ${error.message}`, true); } finally { submit.disabled = false; }
+  event.preventDefault(); const context = currentRoute(); const textarea = $('#comment-text', event.currentTarget); const text = textarea.value.trim(); if (!text) return; const submit = $('button[type="submit"]', event.currentTarget); submit.disabled = true;
+  try { const updated = await api(buildTaskAPIPath(context, '/comments'), { method: 'POST', body: JSON.stringify({ text }) }); if (!routeIsCurrent(context)) return; state.selectedTask = updated; renderTask(updated); toast('Comment added'); elements.task.scrollTop = elements.task.scrollHeight; }
+  catch (error) { if (routeIsCurrent(context)) toast(`Comment failed: ${error.message}`, true); } finally { if (routeIsCurrent(context) && submit.isConnected) submit.disabled = false; }
 }
 
 async function submitNewTask(event) {
-  event.preventDefault(); const submit = $('button[type="submit"]', elements.newForm); submit.disabled = true;
+  event.preventDefault(); const context = currentRoute(); const submit = $('button[type="submit"]', elements.newForm); const payload = JSON.stringify({ title: elements.newTitle.value, description: elements.newDescription.value, status: elements.newStatus.value, assignee: elements.newAssignee.value.trim(), labels: labelsFromInput(elements.newLabels.value) }); submit.disabled = true;
   try {
-    const created = await api(`/api/workspaces/${encodeURIComponent(state.workspace)}/tasks`, { method: 'POST', body: JSON.stringify({ title: elements.newTitle.value, description: elements.newDescription.value, status: elements.newStatus.value, assignee: elements.newAssignee.value.trim(), labels: labelsFromInput(elements.newLabels.value) }) });
-    elements.newDialog.close(); await loadBoard({ quiet: true }); await navigateTask(created.id); toast(`${created.id} created`);
-  } catch (error) { toast(`Create failed: ${error.message}`, true); } finally { submit.disabled = false; }
+    const created = await api(`/api/workspaces/${encodeURIComponent(context.workspace)}/tasks`, { method: 'POST', body: payload });
+    if (!routeIsCurrent(context)) return; elements.newDialog.close(); await loadBoard({ quiet: true }); if (!routeIsCurrent(context)) return; await navigateTask(created.id); toast(`${created.id} created`);
+  } catch (error) { if (routeIsCurrent(context)) toast(`Create failed: ${error.message}`, true); } finally { submit.disabled = false; }
 }
 function openNewTask() { elements.newForm.reset(); fillStatusSelect(elements.newStatus, state.board?.statuses?.[0] || ''); elements.newDialog.showModal(); setTimeout(() => elements.newTitle.focus(), 0); }
 function fillStatusSelect(select, selected) { select.replaceChildren(); const statuses = [...(state.board?.statuses || [])]; if (selected && !statuses.includes(selected)) statuses.push(selected); for (const status of statuses) { const option = el('option', '', humanize(status)); option.value = status; option.selected = status === selected; select.append(option); } }
 async function submitLink(event) {
-  event.preventDefault(); const submit = $('button[type="submit"]', elements.linkForm); submit.disabled = true;
-  try { const updated = await api(taskAPI('/references'), { method: 'POST', body: JSON.stringify({ kind: elements.linkKind.value.trim(), url: elements.linkURL.value.trim(), title: elements.linkTitle.value.trim() }) }); state.selectedTask = updated; elements.linkDialog.close(); renderTask(updated); toast('Link added'); }
-  catch (error) { toast(`Could not add link: ${error.message}`, true); } finally { submit.disabled = false; }
+  event.preventDefault(); const context = currentRoute(); const submit = $('button[type="submit"]', elements.linkForm); const payload = JSON.stringify({ kind: elements.linkKind.value.trim(), url: elements.linkURL.value.trim(), title: elements.linkTitle.value.trim() }); submit.disabled = true;
+  try { const updated = await api(buildTaskAPIPath(context, '/references'), { method: 'POST', body: payload }); if (!routeIsCurrent(context)) return; state.selectedTask = updated; elements.linkDialog.close(); renderTask(updated); await loadBoard({ quiet: true }); if (routeIsCurrent(context)) toast('Link added'); }
+  catch (error) { if (routeIsCurrent(context)) toast(`Could not add link: ${error.message}`, true); } finally { submit.disabled = false; }
 }
 async function submitUpload(event) {
-  event.preventDefault(); const file = elements.uploadFile.files[0]; if (!file) return; const submit = $('button[type="submit"]', elements.uploadForm); submit.disabled = true; const form = new FormData(); form.append('file', file); form.append('caption', elements.uploadCaption.value.trim());
-  try { const updated = await api(taskAPI('/attachments'), { method: 'POST', body: form }); state.selectedTask = updated; elements.uploadDialog.close(); renderTask(updated); await loadBoard({ quiet: true }); toast(`${file.name} uploaded`); }
-  catch (error) { toast(`Upload failed: ${error.message}`, true); } finally { submit.disabled = false; }
+  event.preventDefault(); const context = currentRoute(); const file = elements.uploadFile.files[0]; if (!file) return; const submit = $('button[type="submit"]', elements.uploadForm); const caption = elements.uploadCaption.value.trim(); submit.disabled = true; const form = new FormData(); form.append('file', file); form.append('caption', caption);
+  try { const updated = await api(buildTaskAPIPath(context, '/attachments'), { method: 'POST', body: form }); if (!routeIsCurrent(context)) return; state.selectedTask = updated; elements.uploadDialog.close(); renderTask(updated); await loadBoard({ quiet: true }); if (routeIsCurrent(context)) toast(`${file.name} uploaded`); }
+  catch (error) { if (routeIsCurrent(context)) toast(`Upload failed: ${error.message}`, true); } finally { submit.disabled = false; }
 }
 
 function wireControls() {
@@ -437,29 +496,33 @@ function wireControls() {
   elements.newTask.addEventListener('click', openNewTask); elements.boardView.addEventListener('click', () => { state.preferences.view = 'board'; savePreferences(); renderExplorer(); }); elements.listView.addEventListener('click', () => { state.preferences.view = 'list'; savePreferences(); renderExplorer(); });
   elements.search.addEventListener('input', () => { state.preferences.filters.query = elements.search.value; savePreferences(); renderExplorer(); elements.search.focus(); });
   elements.order.addEventListener('change', () => { state.preferences.order = elements.order.value; savePreferences(); renderExplorer(); });
-  elements.filterButton.addEventListener('click', (event) => { event.stopPropagation(); const open = elements.filterPanel.hidden; closePanels(); elements.filterPanel.hidden = !open; elements.filterButton.setAttribute('aria-expanded', String(open)); });
-  elements.viewSettingsButton.addEventListener('click', (event) => { event.stopPropagation(); const open = elements.viewSettingsPanel.hidden; closePanels(); elements.viewSettingsPanel.hidden = !open; elements.viewSettingsButton.setAttribute('aria-expanded', String(open)); });
+  elements.filterButton.addEventListener('click', (event) => { event.stopPropagation(); if (elements.filterPanel.hidden) openPanel(elements.filterPanel, elements.filterButton); else closePanels({ restoreFocus: true }); });
+  elements.viewSettingsButton.addEventListener('click', (event) => { event.stopPropagation(); if (elements.viewSettingsPanel.hidden) openPanel(elements.viewSettingsPanel, elements.viewSettingsButton); else closePanels({ restoreFocus: true }); });
   document.addEventListener('click', (event) => { if (!event.target.closest('.control-panel') && !event.target.closest('#filter-button') && !event.target.closest('#view-settings-button')) closePanels(); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && state.panelTrigger) { event.preventDefault(); closePanels({ restoreFocus: true }); } });
   elements.newForm.addEventListener('submit', submitNewTask); elements.linkForm.addEventListener('submit', submitLink); elements.uploadForm.addEventListener('submit', submitUpload);
   document.querySelectorAll('.dialog-close').forEach((node) => node.addEventListener('click', () => node.closest('dialog').close()));
   window.addEventListener('popstate', handlePopState);
 }
 async function handlePopState() {
   if (!confirmNavigation()) { setHistory(state.routeTask ? buildTaskPath(state.workspace, state.routeTask) : buildExplorerPath(state.workspace), true); return; }
-  const route = parseLocation(window.location); if (!route.valid) { showNotice('This Docket route is not valid.', true); return; }
-  const workspace = route.workspace || state.workspace;
-  if (workspace !== state.workspace && state.workspaces.some((row) => row.name === workspace)) { state.workspace = workspace; state.board = null; state.preferences = null; updateWorkspaceChrome(); await loadBoard(); }
-  state.routeTask = route.task; state.selectedTask = null; state.activeEditor = null; updateSurface(); if (route.task) await loadTask(route.task); else renderExplorer();
+  const rawRoute = parseLocation(window.location); const route = resolveRoute(rawRoute, state.workspaces.map((row) => row.name), state.workspace);
+  if (!route.valid) { showNotice(route.reason === 'unknown-workspace' ? 'That workspace is not registered.' : 'This Docket route is not valid.', true); setHistory(state.routeTask ? buildTaskPath(state.workspace, state.routeTask) : buildExplorerPath(state.workspace), true); return; }
+  closeDraftDialogs(); const workspaceChanged = route.workspace !== state.workspace; state.workspace = route.workspace; state.routeTask = route.task; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();
+  if (workspaceChanged) { state.board = null; state.preferences = null; updateWorkspaceChrome(); await loadBoard(); }
+  if (rawRoute.legacy) setHistory(route.task ? buildTaskPath(route.workspace, route.task) : buildExplorerPath(route.workspace), true);
+  updateSurface(); if (route.task) await loadTask(route.task, { focusContent: true }); else renderExplorer();
 }
 async function start() {
   wireControls(); elements.explorer.replaceChildren(el('div', 'empty-board', 'Loading workspaces…'));
   try {
-    await loadWorkspaces(); const route = parseLocation(window.location); const preferred = route.workspace || readStorage('docket.workspace'); state.workspace = state.workspaces.some((row) => row.name === preferred) ? preferred : state.workspaces[0]?.name || '';
+    await loadWorkspaces(); const rawRoute = parseLocation(window.location); const stored = readStorage('docket.workspace'); const route = resolveRoute(rawRoute, state.workspaces.map((row) => row.name), stored);
+    state.workspace = route.workspace;
     if (!state.workspace) { renderEmptyExplorer('No workspaces registered. Run docket init in a workspace directory.'); elements.newTask.disabled = true; return; }
-    updateWorkspaceChrome(); state.routeTask = route.valid ? route.task : ''; await loadBoard();
+    state.routeTask = route.task; advanceRoute(); updateWorkspaceChrome(); await loadBoard();
     setHistory(state.routeTask ? buildTaskPath(state.workspace, state.routeTask) : buildExplorerPath(state.workspace), true);
-    if (!route.valid) showNotice('The requested route was invalid; showing the default workspace.', true);
-    if (state.routeTask) await loadTask(state.routeTask); else renderExplorer();
+    if (!route.valid) showNotice(route.reason === 'unknown-workspace' ? 'The requested workspace is not registered; showing your default workspace.' : 'The requested route was invalid; showing your default workspace.', true);
+    if (state.routeTask) await loadTask(state.routeTask, { focusContent: true }); else renderExplorer();
     setInterval(async () => { if (document.hidden || state.dragging || elements.newDialog.open) return; state.refreshes += 1; if (state.refreshes % 5 === 0) { await loadWorkspaces(); updateWorkspaceChrome(); } await loadBoard({ quiet: true }); if (state.routeTask && !hasDraft()) await loadTask(state.routeTask, { background: true }); }, 3000);
   } catch (error) { setConnection('error', 'Disconnected'); showNotice(`Could not start Docket: ${error.message}`, true); }
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -173,6 +174,54 @@ func TestAttachFile(t *testing.T) {
 	}
 	if _, _, err := reloaded.AttachmentPath("../repro.log"); err == nil {
 		t.Fatal("attachment download traversal unexpectedly accepted")
+	}
+}
+
+func TestAttachDataWithCommitHoldsTaskLockThroughCommit(t *testing.T) {
+	ws := newWorkspace(t)
+	created, err := task.Create(ws, task.CreateOptions{Title: "locked attachment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := task.AttachDataWithCommit(ws, created.ID, "first.txt", []byte("one"), "", "actor", func(value *task.Task, attachment *task.Attachment) error {
+			if value.Title != created.Title || attachment.File != "first.txt" {
+				return os.ErrInvalid
+			}
+			close(commitStarted)
+			<-releaseCommit
+			return nil
+		})
+		firstDone <- err
+	}()
+	<-commitStarted
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := task.AttachData(ws, created.ID, "second.txt", []byte("two"), "", "actor")
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second attachment completed before commit released the task lock: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	close(releaseCommit)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := task.Load(ws, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments, err := reloaded.Attachments()
+	if err != nil || len(attachments) != 2 {
+		t.Fatalf("attachments after serialized commits = %#v, %v", attachments, err)
 	}
 }
 

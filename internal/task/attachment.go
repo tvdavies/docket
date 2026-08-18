@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -35,8 +36,19 @@ func AttachFile(ws *workspace.Workspace, id, src, caption, addedBy string) (*Att
 	return AttachData(ws, id, filepath.Base(src), data, caption, addedBy)
 }
 
+// AttachmentCommit records durable state that must succeed atomically with an
+// attachment write. The task lock remains held while the callback runs.
+type AttachmentCommit func(*Task, *Attachment) error
+
 // AttachData stores in-memory file data as a durable task attachment.
 func AttachData(ws *workspace.Workspace, id, name string, data []byte, caption, addedBy string) (*Attachment, error) {
+	return AttachDataWithCommit(ws, id, name, data, caption, addedBy, nil)
+}
+
+// AttachDataWithCommit writes the file and manifest and invokes commit while
+// holding the task lock. A failed commit restores the exact previous manifest
+// and removes the newly written file before releasing the lock.
+func AttachDataWithCommit(ws *workspace.Workspace, id, name string, data []byte, caption, addedBy string, commit AttachmentCommit) (*Attachment, error) {
 	dir, err := resolveDir(ws, id)
 	if err != nil {
 		return nil, err
@@ -54,12 +66,22 @@ func AttachData(ws *workspace.Workspace, id, name string, data []byte, caption, 
 		AddedBy: strings.TrimSpace(addedBy), AddedAt: Now().Format(timeLayout), Bytes: int64(len(data)),
 	}
 	err = store.WithLock(filepath.Join(dir, ".lock"), func() error {
-		dest := uniqueDest(attachDir, base)
-		att.File = filepath.Base(dest)
+		value, err := loadDir(dir)
+		if err != nil {
+			return err
+		}
+		manifestPath := filepath.Join(attachDir, manifestName)
+		originalManifest, readErr := os.ReadFile(manifestPath)
+		manifestExisted := readErr == nil
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return readErr
+		}
 		manifest, err := loadManifest(attachDir)
 		if err != nil {
 			return err
 		}
+		dest := uniqueDest(attachDir, base)
+		att.File = filepath.Base(dest)
 		if err := store.WriteAtomic(dest, data, 0o644); err != nil {
 			return err
 		}
@@ -67,6 +89,22 @@ func AttachData(ws *workspace.Workspace, id, name string, data []byte, caption, 
 		if err := saveManifest(attachDir, manifest); err != nil {
 			_ = os.Remove(dest)
 			return err
+		}
+		if commit == nil {
+			return nil
+		}
+		if err := commit(value, att); err != nil {
+			rollbackErr := os.Remove(dest)
+			if rollbackErr != nil && os.IsNotExist(rollbackErr) {
+				rollbackErr = nil
+			}
+			var manifestRollbackErr error
+			if manifestExisted {
+				manifestRollbackErr = store.WriteAtomic(manifestPath, originalManifest, 0o644)
+			} else if removeErr := os.Remove(manifestPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				manifestRollbackErr = removeErr
+			}
+			return errors.Join(err, rollbackErr, manifestRollbackErr)
 		}
 		return nil
 	})
@@ -77,37 +115,6 @@ func AttachData(ws *workspace.Workspace, id, name string, data []byte, caption, 
 }
 
 const timeLayout = "2006-01-02T15:04:05Z07:00"
-
-// RemoveAttachment removes an exact manifest entry and its file. It is used to
-// roll back an attachment when the corresponding durable event cannot commit.
-func RemoveAttachment(ws *workspace.Workspace, id, name string) error {
-	dir, err := resolveDir(ws, id)
-	if err != nil {
-		return err
-	}
-	return store.WithLock(filepath.Join(dir, ".lock"), func() error {
-		attachDir := filepath.Join(dir, "attachments")
-		manifest, err := loadManifest(attachDir)
-		if err != nil {
-			return err
-		}
-		index := -1
-		for i, item := range manifest {
-			if item != nil && item.File == name {
-				index = i
-				break
-			}
-		}
-		if index < 0 {
-			return fmt.Errorf("attachment %q not found", name)
-		}
-		if err := os.Remove(filepath.Join(attachDir, name)); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		manifest = append(manifest[:index], manifest[index+1:]...)
-		return saveManifest(attachDir, manifest)
-	})
-}
 
 // AttachmentPath returns an exact manifest-backed path. Names not recorded in
 // the manifest are rejected even if a similarly named file exists on disk.

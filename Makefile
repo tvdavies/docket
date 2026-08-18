@@ -9,6 +9,7 @@ build:
 
 test:
 	go test ./...
+	bun test internal/service/web/*.test.js
 
 test-web:
 	bun test internal/service/web/*.test.js

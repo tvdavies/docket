@@ -252,6 +252,21 @@ func TestBoardAPIValidatesBeforeMutationAndProtectsWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://"+strings.TrimPrefix(server.URL, "http://"))
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("same-host different-scheme response = %d", response.StatusCode)
+	}
+	response.Body.Close()
+
+	request, err = http.NewRequest(http.MethodPatch, server.URL+"/api/workspaces/demo/tasks/"+created.ID, strings.NewReader(`{"status":"done"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.Host = "attacker.example"
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "http://attacker.example")
@@ -418,6 +433,12 @@ func TestAttachmentUploadDownloadAndSecurity(t *testing.T) {
 	response = sendMultipart(t, target, "cross.txt", []byte("x"), "", map[string]string{"Origin": "https://malicious.example"})
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-origin upload = %d", response.StatusCode)
+	}
+	response.Body.Close()
+
+	response = sendMultipart(t, target, "wrong-scheme.txt", []byte("x"), "", map[string]string{"Origin": "https://" + strings.TrimPrefix(server.URL, "http://")})
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("same-host different-scheme upload = %d", response.StatusCode)
 	}
 	response.Body.Close()
 

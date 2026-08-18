@@ -352,29 +352,16 @@ func (operations Tasks) AddReference(id, kind, referenceURL, title string) (*tas
 	return value, &reference, nil
 }
 
-// Attach stores a browser/SDK-provided file and emits task.file_attached. If
-// the event commit fails, both the file and manifest entry are rolled back.
+// Attach stores a browser/SDK-provided file and emits task.file_attached in
+// the same per-task-lock transaction as the file and manifest write.
 func (operations Tasks) Attach(id, name string, data []byte, caption string) (*task.Attachment, error) {
-	value, err := task.Load(operations.Workspace, id)
-	if err != nil {
-		return nil, err
-	}
-	attachment, err := task.AttachData(operations.Workspace, id, name, data, caption, operations.Actor)
-	if err != nil {
-		return nil, err
-	}
-	if err := operations.append(events.Event{
-		Type: events.FileAttached, Task: value.ID, Title: value.Title,
-		Actor: operations.Actor, Assignee: value.Assignee,
-		Data: map[string]any{"file": attachment.File, "mime": attachment.Mime},
-	}); err != nil {
-		rollbackErr := task.RemoveAttachment(operations.Workspace, id, attachment.File)
-		if rollbackErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("roll back attachment: %w", rollbackErr))
-		}
-		return nil, err
-	}
-	return attachment, nil
+	return task.AttachDataWithCommit(operations.Workspace, id, name, data, caption, operations.Actor, func(value *task.Task, attachment *task.Attachment) error {
+		return operations.append(events.Event{
+			Type: events.FileAttached, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{"file": attachment.File, "mime": attachment.Mime},
+		})
+	})
 }
 
 // RemoveReference removes one reference by its stable ID.

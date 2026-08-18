@@ -26,8 +26,11 @@ jobs:
         with:
           go-version: stable
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Run tests
-        run: go test ./...
+        run: make test
 
       - name: Release with GoReleaser
         uses: goreleaser/goreleaser-action@v6

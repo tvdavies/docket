@@ -494,11 +494,27 @@ func allowMutationOrigin(writer http.ResponseWriter, request *http.Request, allo
 		return true
 	}
 	parsed, err := url.Parse(origin)
-	if err != nil || !strings.EqualFold(parsed.Host, request.Host) {
+	expectedScheme := "http"
+	if request.TLS != nil {
+		expectedScheme = "https"
+	}
+	expected, expectedErr := url.Parse(expectedScheme + "://" + request.Host)
+	if err != nil || expectedErr != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		!strings.EqualFold(parsed.Scheme, expected.Scheme) || !strings.EqualFold(parsed.Hostname(), expected.Hostname()) || canonicalPort(parsed) != canonicalPort(expected) {
 		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "cross-origin writes are not allowed"})
 		return false
 	}
 	return true
+}
+
+func canonicalPort(value *url.URL) string {
+	if value.Port() != "" {
+		return value.Port()
+	}
+	if strings.EqualFold(value.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 func isLoopbackRequestHost(hostPort string) bool {
