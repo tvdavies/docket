@@ -32,8 +32,9 @@ func newRootCmd() *cobra.Command {
 		Short: "The docket that travels with the work — a file-backed task store that hands context between agent sessions",
 		Long: `docket — the slip that travels with the job.
 
-A lightweight, file-backed, CLI-only task store for agents. No server, no
-database: tasks are plain markdown + YAML on disk. An agent picks up a task,
+A lightweight, file-backed task store for agents. Tasks are plain markdown +
+YAML on disk; an optional local service watches multiple workspaces and serves
+status. An agent picks up a task,
 does work, and hands full context to the next session by attaching to the task.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -64,6 +65,9 @@ does work, and hands full context to the next session by attaching to the task.`
 		newWatchCmd(),
 		newEventsCmd(),
 		newReindexCmd(),
+		newWorkspaceCmd(),
+		newServeCmd(),
+		newServiceCmd(),
 		newSkillCmd(),
 	)
 	return root

@@ -30,6 +30,41 @@ func TestInitAndDiscoverUpward(t *testing.T) {
 	}
 }
 
+func TestOpenAtProjectDocketAndDescendant(t *testing.T) {
+	root := t.TempDir()
+	ws, err := Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "src", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{root, ws.Root, nested} {
+		opened, err := OpenAt(path)
+		if err != nil {
+			t.Fatalf("OpenAt(%s): %v", path, err)
+		}
+		if opened.Root != ws.Root {
+			t.Fatalf("OpenAt(%s) root = %s, want %s", path, opened.Root, ws.Root)
+		}
+	}
+}
+
+func TestOpenRootNeverFallsBackToParentWorkspace(t *testing.T) {
+	parent := t.TempDir()
+	if _, err := Init(parent); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(parent, "child")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRoot(child); err == nil {
+		t.Fatal("OpenRoot silently fell back to parent workspace")
+	}
+}
+
 func TestInitTwiceFails(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Init(root); err != nil {

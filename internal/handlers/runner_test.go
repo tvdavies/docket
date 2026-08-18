@@ -133,6 +133,73 @@ func TestFailureLeavesCursorForRetry(t *testing.T) {
 	}
 }
 
+func TestLegacyPlainCursorReplaysAndUpgrades(t *testing.T) {
+	ws, root := newWorkspace(t)
+	output := filepath.Join(root, "legacy.jsonl")
+	t.Setenv("HANDLER_OUTPUT", output)
+	run := writeScript(t, root, "legacy", `cat >> "$HANDLER_OUTPUT"`+"\n")
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{
+		"legacy": {On: []string{"*"}, Run: run},
+	}
+	appendEvent(t, ws, events.TaskCreated)
+	if err := os.MkdirAll(ws.HandlerStateDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cursorPath := filepath.Join(ws.HandlerStateDir(), "legacy.cursor")
+	if err := os.WriteFile(cursorPath, []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if failures := handlers.DrainAll(ws, handlers.Options{}); len(failures) != 0 {
+		t.Fatalf("legacy replay failed: %v", failures)
+	}
+	if got := len(nonEmptyLines(t, output)); got != 1 {
+		t.Fatalf("legacy cursor silently skipped history; delivered %d events", got)
+	}
+	cursor, err := os.ReadFile(cursorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cursor), `"prefix_hash"`) {
+		t.Fatalf("legacy cursor was not upgraded: %s", cursor)
+	}
+}
+
+func TestRewrittenEventLogResetsHandlerCursor(t *testing.T) {
+	ws, root := newWorkspace(t)
+	output := filepath.Join(root, "rewritten.jsonl")
+	t.Setenv("HANDLER_OUTPUT", output)
+	run := writeScript(t, root, "rewritten", `cat >> "$HANDLER_OUTPUT"`+"\n")
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{
+		"rewritten": {On: []string{"*"}, Run: run},
+	}
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "AAAA"}); err != nil {
+		t.Fatal(err)
+	}
+	if failures := handlers.DrainAll(ws, handlers.Options{}); len(failures) != 0 {
+		t.Fatalf("first drain failed: %v", failures)
+	}
+	original, err := os.ReadFile(ws.EventsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := strings.Replace(string(original), `"task":"AAAA"`, `"task":"BBBB"`, 1)
+	if len(rewritten) != len(original) {
+		t.Fatalf("test replacement changed file size: %d != %d", len(rewritten), len(original))
+	}
+	if err := os.WriteFile(ws.EventsFile(), []byte(rewritten), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if failures := handlers.DrainAll(ws, handlers.Options{}); len(failures) != 0 {
+		t.Fatalf("replacement drain failed: %v", failures)
+	}
+	lines := nonEmptyLines(t, output)
+	if len(lines) != 2 || !strings.Contains(lines[1], `"task":"BBBB"`) {
+		t.Fatalf("replacement was not safely replayed: %q", lines)
+	}
+}
+
 func TestHandlerCursorIsIsolatedFromActorInbox(t *testing.T) {
 	ws, root := newWorkspace(t)
 	output := filepath.Join(root, "isolated.jsonl")

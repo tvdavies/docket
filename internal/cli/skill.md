@@ -1,11 +1,12 @@
 # docket — agent skill
 
-`docket` is a file-backed, CLI-only task store. It is your **durable memory across
+`docket` is a file-backed task store. It is your **durable memory across
 sessions**: the task folder *is* the context. You do not serialize your own
 working memory — you attach to a task, and everything you need is printed back.
 
-No server, no database. Tasks are plain markdown + YAML under a `.docket/`
-directory, discovered by walking up from the current directory like `.git`.
+Tasks are plain markdown + YAML under a `.docket/` directory, discovered by
+walking up from the current directory like `.git`. An optional machine-wide
+service watches registered workspaces; task files remain the source of truth.
 
 ## The core loop
 
@@ -69,7 +70,9 @@ handlers after the event is durable.
 
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
   you, since your last cursor.
-- `docket watch` — **stream**: blocks and emits each new event as a JSON line.
+- `docket watch` — **stream**: blocks and emits one workspace's events as JSON lines.
+- `docket serve --all` — watches every registered workspace and drains handlers.
+- `docket workspace add [PATH] --name NAME` — register a workspace with that service.
 - `docket events [--since N]` — the raw event log.
 
 ## How to use this as durable context

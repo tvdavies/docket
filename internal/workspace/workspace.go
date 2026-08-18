@@ -33,6 +33,59 @@ func Open() (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openRoot(root)
+}
+
+// OpenRoot loads exactly the workspace rooted at path. Path may be the project
+// directory or its .docket directory, but discovery never walks into a parent.
+// Services use this to pin a registration to one store.
+func OpenRoot(path string) (*Workspace, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	root := abs
+	if filepath.Base(root) != DirName {
+		root = filepath.Join(root, DirName)
+	}
+	if !isDir(root) {
+		return nil, fmt.Errorf("%w (path=%s)", ErrNotFound, path)
+	}
+	return openRoot(root)
+}
+
+// OpenAt discovers and loads the workspace containing path. Path may be the
+// project directory, its .docket directory, or any descendant. It does not
+// consult DOCKET_HOME and is used when registering a workspace from inside it.
+func OpenAt(path string) (*Workspace, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("open workspace at %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		abs = filepath.Dir(abs)
+	}
+	for {
+		if filepath.Base(abs) == DirName && isDir(abs) {
+			return openRoot(abs)
+		}
+		candidate := filepath.Join(abs, DirName)
+		if isDir(candidate) {
+			return openRoot(candidate)
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return nil, fmt.Errorf("%w (path=%s)", ErrNotFound, path)
+		}
+		abs = parent
+	}
+}
+
+func openRoot(root string) (*Workspace, error) {
 	cfg, err := loadConfig(filepath.Join(root, "config.yaml"))
 	if err != nil {
 		return nil, err

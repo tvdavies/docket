@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +30,9 @@ const (
 
 // Options controls handler execution. Zero values use safe defaults.
 type Options struct {
+	// Context cancels lock waits and the entire handler process group. A nil
+	// context means background execution bounded only by Timeout.
+	Context context.Context
 	// Output receives handler stdout and stderr. It is normally the parent
 	// command's stderr so handler logs cannot corrupt --json output.
 	Output io.Writer
@@ -57,6 +59,9 @@ func DrainAll(ws *workspace.Workspace, opts Options) []Failure {
 	if len(ws.Config.Handlers) == 0 {
 		return nil
 	}
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
 	if opts.Output == nil {
 		opts.Output = io.Discard
 	}
@@ -68,6 +73,10 @@ func DrainAll(ws *workspace.Workspace, opts Options) []Failure {
 	nested := os.Getenv("DOCKET_HANDLER_STACK") != ""
 	var failures []Failure
 	for round := 0; round < maxDrainRounds; round++ {
+		if err := opts.Context.Err(); err != nil {
+			failures = append(failures, Failure{Handler: "runner", Err: err})
+			return failures
+		}
 		progressed := false
 		for _, name := range ws.Config.HandlerNames() {
 			if failed[name] {
@@ -100,7 +109,7 @@ func drainOne(ws *workspace.Workspace, name string, cfg workspace.HandlerConfig,
 	advanced := false
 	drain := func() error {
 		cursor := Cursor(ws, name)
-		batch, end, err := events.ReadBatch(ws, cursor)
+		batch, end, checkpoint, err := events.ReadBatchCheckpoint(ws, cursor)
 		if err != nil {
 			return err
 		}
@@ -119,7 +128,7 @@ func drainOne(ws *workspace.Workspace, name string, cfg workspace.HandlerConfig,
 				return err
 			}
 		}
-		if err := advanceCursor(ws, name, end); err != nil {
+		if err := advanceCursor(ws, name, end, checkpoint); err != nil {
 			return err
 		}
 		advanced = true
@@ -137,7 +146,7 @@ func drainOne(ws *workspace.Workspace, name string, cfg workspace.HandlerConfig,
 		}
 		return advanced, err
 	}
-	return advanced, store.WithLock(lockPath, drain)
+	return advanced, store.WithLockContext(opts.Context, lockPath, drain)
 }
 
 func execute(ws *workspace.Workspace, name, run string, batch []events.Event, opts Options) error {
@@ -156,7 +165,7 @@ func execute(ws *workspace.Workspace, name, run string, batch []events.Event, op
 		program = filepath.Join(projectRoot, program)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	ctx, cancel := context.WithTimeout(opts.Context, opts.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, program)
 	// Handlers are scripts and may launch children. Put the invocation in its
@@ -198,15 +207,46 @@ func Cursor(ws *workspace.Workspace, name string) int {
 	if err != nil {
 		return 0
 	}
-	position, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
+	var state cursorState
+	if err := json.Unmarshal(data, &state); err != nil {
+		// v0.2 cursors were unverifiable plain line counts. Replay once rather
+		// than risk silently skipping rewritten history; successful delivery
+		// upgrades the cursor to a checkpointed JSON record.
 		return 0
 	}
-	return position
+	if state.Position <= 0 {
+		return 0
+	}
+	prefixHash, found, err := events.PrefixHash(ws, state.Position)
+	if err != nil || found < state.Position || prefixHash != state.PrefixHash {
+		return 0
+	}
+	return state.Position
 }
 
-func advanceCursor(ws *workspace.Workspace, name string, position int) error {
-	return store.WriteAtomic(handlerCursorFile(ws, name), []byte(strconv.Itoa(position)+"\n"), 0o644)
+func advanceCursor(ws *workspace.Workspace, name string, position int, expectedHash string) error {
+	prefixHash, found, err := events.PrefixHash(ws, position)
+	if err != nil {
+		return err
+	}
+	if found < position {
+		return fmt.Errorf("event log shortened while advancing handler %q cursor", name)
+	}
+	if prefixHash != expectedHash {
+		return fmt.Errorf("event log changed while handler %q was running; batch will replay", name)
+	}
+	data, err := json.Marshal(cursorState{Position: position, PrefixHash: expectedHash})
+	if err != nil {
+		return err
+	}
+	return store.WriteAtomic(handlerCursorFile(ws, name), append(data, '\n'), 0o644)
+}
+
+// cursorState ties a line position to the exact log prefix it acknowledged.
+// If git or another process replaces history, Cursor resets to replay.
+type cursorState struct {
+	Position   int    `json:"position"`
+	PrefixHash string `json:"prefix_hash"`
 }
 
 func handlerCursorFile(ws *workspace.Workspace, name string) string {

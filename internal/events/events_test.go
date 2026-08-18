@@ -60,6 +60,26 @@ func TestInboxCursorDrains(t *testing.T) {
 	}
 }
 
+func TestWatchWithSetupDoesNotMissEventsAppendedDuringSetup(t *testing.T) {
+	ws := newWorkspace(t)
+	_ = events.Append(ws, events.Event{Type: events.TaskCreated, Task: "before"})
+	done := make(chan struct{})
+	var received []events.Event
+	err := events.WatchWithSetup(ws, false, done, func() error {
+		return events.Append(ws, events.Event{Type: events.TaskCreated, Task: "during"})
+	}, func(event events.Event) error {
+		received = append(received, event)
+		close(done)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(received) != 1 || received[0].Task != "during" {
+		t.Fatalf("received %#v, want only event appended during setup", received)
+	}
+}
+
 func TestInboxAllIgnoresAssignee(t *testing.T) {
 	ws := newWorkspace(t)
 	_ = events.Append(ws, events.Event{Type: events.TaskCreated, Task: "T1"})

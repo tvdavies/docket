@@ -1,12 +1,14 @@
 # docket
 
-A file-backed, CLI-only task store that hands context between agent sessions.
+A file-backed task system that hands context between agent sessions.
 
 > A **docket** is the slip that travels with a job through the shop, carrying its details; a court docket is a list of cases moving through their stages. Both readings are the product: the task folder is the docket — it carries the work, and all its context, from one agent session to the next.
 
-Durable tasks are the whole point: plain files in a directory, **no database**, surviving across sessions, machines, and `git clone`. An agent picks up a task, does work, and hands full context to the next session by *attaching to the task*. Harness-neutral — it stores and reports; something else runs the agent.
+Durable tasks are the whole point: plain files in a directory, **no database**, surviving across sessions, machines, and `git clone`. An agent picks up a task, does work, and hands full context to the next session by *attaching to the task*. Harness-neutral — workspace handlers decide what runs when events arrive.
 
-A single static Go binary, ~8MB, zero runtime dependencies.
+A single static Go binary, ~8MB, zero runtime dependencies. The CLI works by
+itself; an optional systemd user service watches all registered workspaces and
+serves one local status interface.
 
 ## Install
 
@@ -55,6 +57,39 @@ what the last one knew — it `attach`es and reads the **context bundle**:
 description, comments (decisions and dead ends), attachments, and relationships
 resolved to human-meaningful titles.
 
+## Workspaces and the machine-wide service
+
+A **Docket workspace** is one `.docket/` store, normally rooted in a repository.
+A Docket **project** is a logical grouping inside that store. One optional user
+service manages any number of explicitly registered workspaces:
+
+```sh
+docket workspace add ~/dev/client-a --name client-a
+docket workspace add ~/dev/client-b --name client-b
+docket workspace list
+
+docket serve --all                         # foreground; http://127.0.0.1:7463
+docket service install                     # write the systemd user unit
+docket service start                       # enable and start it
+docket service status
+docket service logs                        # journalctl follow
+```
+
+The machine-local registry is `~/.config/docket/config.yaml` (or
+`$DOCKET_CONFIG`). It contains only names, paths, and the listen address; task
+data stays in each workspace. The service notices registry changes within two
+seconds, isolates each workspace runtime, drains handler backlogs, and marks
+missing workspaces unavailable rather than crashing. Without `--all`,
+`docket serve` watches only the current workspace.
+
+The systemd unit runs once per user/machine — never once per workspace — and
+serves one UI with all registered workspaces. It does not enable login lingering
+automatically; opt in explicitly with `loginctl enable-linger "$USER"` if the
+service must continue outside login sessions. The generated unit captures the
+current `PATH` and optionally loads `~/.config/docket/environment`; use that file
+for variables required by handler scripts. The UI has no authentication and
+refuses non-loopback binds unless `--allow-remote` is passed explicitly.
+
 ## Coordination (triggering work elsewhere)
 
 Every mutation appends to an append-only event log. There are three ways to
@@ -67,8 +102,10 @@ react:
   synchronously after the event is durable.
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
   you, tracked by a per-actor cursor.
-- `docket watch` — **stream**: emits each new event as a JSON line. (Having this
-  command also drain configured handlers is the next implementation step.)
+- `docket watch` — **stream**: emits each new event as a JSON line for one
+  workspace; it remains a diagnostic primitive rather than the daemon.
+- `docket serve [--all]` — **service**: watches registered workspaces and drains
+  handlers for events written outside a synchronous CLI mutation.
 - `docket events [--since N]` — the raw log.
 
 A handler declaration is deliberately only delivery configuration; decisions
@@ -106,7 +143,7 @@ make snapshot     # cross-platform release build (needs goreleaser)
 
 ## On-disk layout
 
-Everything is text-first and git-trackable:
+Each workspace is text-first and git-trackable:
 
 ```
 .docket/
@@ -121,7 +158,8 @@ Everything is text-first and git-trackable:
 ```
 
 The filesystem is the source of truth. `.index/` (if present) is a rebuildable
-cache (`docket reindex`), never authoritative.
+cache (`docket reindex`), never authoritative. Machine-local handler cursors
+live under the gitignored `.cursors/handlers/` directory.
 
 ## License
 

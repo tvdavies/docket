@@ -3,6 +3,7 @@ package events
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +17,14 @@ import (
 // context channel `done` is closed or a fatal error occurs. This is the
 // push-based consumer path: a harness reacts to state changes without polling.
 func Watch(ws *workspace.Workspace, fromStart bool, done <-chan struct{}, handler func(Event) error) error {
+	return WatchWithSetup(ws, fromStart, done, nil, handler)
+}
+
+// WatchWithSetup is Watch with a callback run after fsnotify is armed and the
+// initial byte offset is captured, but before queued events are drained. A
+// service uses setup to drain handler backlog without a race: any event appended
+// during setup is still observed from the captured offset afterwards.
+func WatchWithSetup(ws *workspace.Workspace, fromStart bool, done <-chan struct{}, setup func() error, handler func(Event) error) error {
 	path := ws.EventsFile()
 
 	w, err := fsnotify.NewWatcher()
@@ -30,9 +39,17 @@ func Watch(ws *workspace.Workspace, fromStart bool, done <-chan struct{}, handle
 	}
 
 	var offset int64
-	if !fromStart {
-		if info, err := os.Stat(path); err == nil {
+	var identity os.FileInfo
+	if info, err := os.Stat(path); err == nil {
+		identity = info
+		if !fromStart {
 			offset = info.Size()
+		}
+	}
+
+	if setup != nil {
+		if err := setup(); err != nil {
+			return err
 		}
 	}
 
@@ -45,6 +62,14 @@ func Watch(ws *workspace.Workspace, fromStart bool, done <-chan struct{}, handle
 			return err
 		}
 		defer f.Close()
+		if info, err := f.Stat(); err == nil {
+			if (identity != nil && !os.SameFile(identity, info)) || info.Size() < offset {
+				// The log was truncated or replaced. Replay the new file; durable
+				// consumers validate their own prefix checkpoints as well.
+				offset = 0
+			}
+			identity = info
+		}
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			return err
 		}
@@ -80,7 +105,29 @@ func Watch(ws *workspace.Workspace, fromStart bool, done <-chan struct{}, handle
 			if !ok {
 				return nil
 			}
-			if filepath.Clean(ev.Name) == filepath.Clean(path) {
+			cleanName := filepath.Clean(ev.Name)
+			if cleanName == filepath.Clean(ws.Root) && ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+				return fmt.Errorf("workspace directory changed: %s", ws.Root)
+			}
+			if cleanName == filepath.Clean(ws.Path("config.yaml")) {
+				if setup != nil {
+					if err := setup(); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			if cleanName == filepath.Clean(path) {
+				if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+					return fmt.Errorf("event log changed: %s", path)
+				}
+				// Let durable consumers validate and drain their cursor before
+				// streaming individual lines. This also catches in-place rewrites.
+				if setup != nil {
+					if err := setup(); err != nil {
+						return err
+					}
+				}
 				if err := drain(); err != nil {
 					return err
 				}

@@ -14,11 +14,17 @@ import (
 // another holder rather than failing immediately, so concurrent writers
 // serialise instead of erroring.
 func WithLock(lockPath string, fn func() error) error {
+	return WithLockContext(context.Background(), lockPath, fn)
+}
+
+// WithLockContext is WithLock with cancellation propagated by the caller. A
+// 30-second upper bound still protects callers that provide no deadline.
+func WithLockContext(parent context.Context, lockPath string, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return err
 	}
 	fl := flock.New(lockPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	if _, err := fl.TryLockContext(ctx, 25*time.Millisecond); err != nil {
 		return err

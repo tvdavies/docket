@@ -6,7 +6,9 @@ package events
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 
@@ -103,19 +105,28 @@ func Since(ws *workspace.Workspace, n int) ([]Event, error) {
 // included in end, so a consumer can advance past them instead of getting
 // permanently stuck. Positions count non-empty lines, matching Count.
 func ReadBatch(ws *workspace.Workspace, cursor int) ([]Event, int, error) {
+	events, end, _, err := ReadBatchCheckpoint(ws, cursor)
+	return events, end, err
+}
+
+// ReadBatchCheckpoint is ReadBatch plus a hash of the exact log prefix read.
+// A durable consumer verifies this before advancing its cursor so a concurrent
+// history replacement cannot acknowledge events it never received.
+func ReadBatchCheckpoint(ws *workspace.Workspace, cursor int) ([]Event, int, string, error) {
 	return readFrom(ws.EventsFile(), cursor)
 }
 
-func readFrom(path string, skip int) ([]Event, int, error) {
+func readFrom(path string, skip int) ([]Event, int, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, skip, nil
+			return nil, skip, "", nil
 		}
-		return nil, skip, err
+		return nil, skip, "", err
 	}
 	defer f.Close()
 	var out []Event
+	hash := sha256.New()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	i := 0
@@ -125,6 +136,8 @@ func readFrom(path string, skip int) ([]Event, int, error) {
 			continue
 		}
 		i++
+		_, _ = hash.Write(line)
+		_, _ = hash.Write([]byte{'\n'})
 		if i <= skip {
 			continue
 		}
@@ -134,7 +147,45 @@ func readFrom(path string, skip int) ([]Event, int, error) {
 		}
 		out = append(out, ev)
 	}
-	return out, i, sc.Err()
+	return out, i, fmt.Sprintf("%x", hash.Sum(nil)), sc.Err()
+}
+
+// PrefixHash returns a SHA-256 checkpoint for the first position non-empty log
+// lines and the number actually found. Consumers persist this with a cursor so
+// replacement, truncation, or history rewrites reset to safe replay instead of
+// silently skipping events.
+func PrefixHash(ws *workspace.Workspace, position int) (string, int, error) {
+	if position <= 0 {
+		return "", 0, nil
+	}
+	file, err := os.Open(ws.EventsFile())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", 0, nil
+		}
+		return "", 0, err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	count := 0
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		count++
+		_, _ = hash.Write(line)
+		_, _ = hash.Write([]byte{'\n'})
+		if count == position {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", count, err
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), count, nil
 }
 
 // Count returns the number of events currently in the log.
