@@ -55,6 +55,8 @@ type Bundle struct {
 	ID            string               `json:"id"`
 	Title         string               `json:"title"`
 	Status        string               `json:"status"`
+	CreatedAt     string               `json:"created_at"`
+	UpdatedAt     string               `json:"updated_at"`
 	Project       *ProjectRef          `json:"project,omitempty"`
 	Labels        []string             `json:"labels"`
 	Assignee      string               `json:"assignee,omitempty"`
@@ -84,6 +86,8 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 		ActiveSessions: []session.Entry{},
 		Title:          t.Title,
 		Status:         t.Status,
+		CreatedAt:      t.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:      t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		Labels:         t.Labels,
 		Assignee:       t.Assignee,
 		Wait:           t.Wait,

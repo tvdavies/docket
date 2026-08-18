@@ -161,6 +161,19 @@ func TestAttachFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(reloaded.AttachmentsDir(), "repro.log")); err != nil {
 		t.Fatal("attached file missing on disk")
 	}
+	duplicate, err := task.AttachData(ws, created.ID, "repro.log", []byte("new"), "", "tom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.File != "repro-1.log" {
+		t.Fatalf("duplicate filename = %q", duplicate.File)
+	}
+	if _, err := task.AttachData(ws, created.ID, "../outside.txt", []byte("bad"), "", "tom"); err == nil {
+		t.Fatal("attachment traversal unexpectedly accepted")
+	}
+	if _, _, err := reloaded.AttachmentPath("../repro.log"); err == nil {
+		t.Fatal("attachment download traversal unexpectedly accepted")
+	}
 }
 
 func TestLinkMaintainsInverse(t *testing.T) {

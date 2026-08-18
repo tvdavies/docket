@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -19,7 +20,10 @@ import (
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
-const maxAPIRequestBytes = 1 << 20
+const (
+	maxAPIRequestBytes = 1 << 20
+	maxAttachmentBytes = 25 << 20
+)
 
 type boardResponse struct {
 	Workspace string      `json:"workspace"`
@@ -43,7 +47,20 @@ type boardTask struct {
 	// ActiveSessions is a deprecated compatibility placeholder. Docket no
 	// longer infers external process liveness from command-context pointers.
 	ActiveSessions []session.Entry `json:"active_sessions"`
+	CreatedAt      string          `json:"created_at"`
 	UpdatedAt      string          `json:"updated_at"`
+	ResourceCount  int             `json:"resource_count"`
+}
+
+type activityResponse struct {
+	bundle.ActivityView
+	BodyHTML string `json:"body_html,omitempty"`
+}
+
+type taskDetailResponse struct {
+	*bundle.Bundle
+	DescriptionHTML string             `json:"description_html"`
+	Activity        []activityResponse `json:"activity"`
 }
 
 type createTaskRequest struct {
@@ -267,6 +284,87 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		writeTaskBundle(writer, http.StatusOK, ws, id)
 	})
+	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/attachments", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowMultipartMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		request.Body = http.MaxBytesReader(writer, request.Body, maxAttachmentBytes+maxAPIRequestBytes)
+		if err := request.ParseMultipartForm(maxAttachmentBytes); err != nil {
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "request body too large") {
+				status = http.StatusRequestEntityTooLarge
+			}
+			writeJSON(writer, status, map[string]string{"error": "invalid multipart upload: " + err.Error()})
+			return
+		}
+		if request.MultipartForm != nil {
+			defer request.MultipartForm.RemoveAll()
+		}
+		file, header, err := request.FormFile("file")
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "file is required"})
+			return
+		}
+		defer file.Close()
+		if header.Size > maxAttachmentBytes {
+			writeJSON(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "attachment exceeds 25 MiB"})
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(file, maxAttachmentBytes+1))
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		if len(data) > maxAttachmentBytes {
+			writeJSON(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "attachment exceeds 25 MiB"})
+			return
+		}
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		id := request.PathValue("task")
+		if _, err := webTaskActions(ws, request).Attach(id, header.Filename, data, request.FormValue("caption")); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeTaskBundle(writer, http.StatusCreated, ws, id)
+	})
+	mux.HandleFunc("GET /api/workspaces/{workspace}/tasks/{task}/attachments/{file}", func(writer http.ResponseWriter, request *http.Request) {
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		value, err := task.Load(ws, request.PathValue("task"))
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		path, attachment, err := value.AttachmentPath(request.PathValue("file"))
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writer.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachment.File}))
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		writer.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+		writer.Header().Set("Content-Type", attachment.Mime)
+		http.ServeContent(writer, request, attachment.File, info.ModTime(), file)
+	})
 	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/comments", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowJSONMutation(writer, request, allowRemoteHost) {
 			return
@@ -326,27 +424,69 @@ func writeTaskBundle(writer http.ResponseWriter, status int, ws *workspace.Works
 		writeAPIError(writer, err)
 		return
 	}
-	writeJSON(writer, status, result)
+	descriptionHTML, err := renderMarkdown(result.Description)
+	if err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+	activity := make([]activityResponse, 0, len(result.Activity))
+	for _, entry := range result.Activity {
+		bodyHTML := ""
+		if entry.Body != "" {
+			bodyHTML, err = renderMarkdown(entry.Body)
+			if err != nil {
+				writeAPIError(writer, err)
+				return
+			}
+		}
+		activity = append(activity, activityResponse{ActivityView: entry, BodyHTML: bodyHTML})
+	}
+	writeJSON(writer, status, taskDetailResponse{Bundle: result, DescriptionHTML: descriptionHTML, Activity: activity})
 }
 
 func summariseTask(value *task.Task) (boardTask, error) {
+	attachments, err := value.Attachments()
+	if err != nil {
+		return boardTask{}, err
+	}
 	return boardTask{
 		ID: value.ID, Title: value.Title, Status: value.Status, Project: value.Project,
 		Labels: nonNilStrings(value.Labels), Assignee: value.Assignee, Wait: value.Wait,
 		References:     nonNilReferences(value.References),
 		ActiveSessions: []session.Entry{},
-		UpdatedAt:      value.UpdatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:      value.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:      value.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		ResourceCount:  len(value.References) + len(attachments),
 	}, nil
 }
 
 func allowJSONMutation(writer http.ResponseWriter, request *http.Request, allowRemoteHost bool) bool {
-	if !allowRemoteHost && !isLoopbackRequestHost(request.Host) {
-		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "non-loopback Host is not allowed"})
+	if !allowMutationOrigin(writer, request, allowRemoteHost) {
 		return false
 	}
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		writeJSON(writer, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
+		return false
+	}
+	return true
+}
+
+func allowMultipartMutation(writer http.ResponseWriter, request *http.Request, allowRemoteHost bool) bool {
+	if !allowMutationOrigin(writer, request, allowRemoteHost) {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/form-data" {
+		writeJSON(writer, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be multipart/form-data"})
+		return false
+	}
+	return true
+}
+
+func allowMutationOrigin(writer http.ResponseWriter, request *http.Request, allowRemoteHost bool) bool {
+	if !allowRemoteHost && !isLoopbackRequestHost(request.Host) {
+		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "non-loopback Host is not allowed"})
 		return false
 	}
 	origin := request.Header.Get("Origin")
@@ -409,6 +549,7 @@ func writeAPIError(writer http.ResponseWriter, err error) {
 		strings.Contains(message, "invalid project id"),
 		strings.Contains(message, "invalid wait"),
 		strings.Contains(message, "invalid reference"),
+		strings.Contains(message, "invalid attachment filename"),
 		strings.Contains(message, "not waiting"),
 		strings.Contains(message, "cannot be empty"),
 		strings.Contains(message, "unknown status"),

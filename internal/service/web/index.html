@@ -4,165 +4,88 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Docket board</title>
+  <title>Docket tasks</title>
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true">D</div>
-        <div>
-          <h1>Docket</h1>
-          <p id="workspace-path">The job travels with its context.</p>
-        </div>
-      </div>
-      <div class="topbar-actions">
-        <label class="compact-field">
-          <span>Workspace</span>
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <button id="home-button" class="brand-button" type="button"><span class="brand-mark" aria-hidden="true">D</span><strong>Docket</strong></button>
+        <span class="crumb-separator" aria-hidden="true">/</span>
+        <label class="workspace-crumb">
+          <span class="sr-only">Workspace</span>
           <select id="workspace-select" aria-label="Workspace"></select>
         </label>
-        <label class="compact-field actor-field">
-          <span>Acting as</span>
-          <input id="actor-input" type="text" maxlength="100" value="web" aria-label="Actor identity">
-        </label>
-        <button id="refresh-button" class="button quiet" type="button">Refresh</button>
+        <span class="crumb-separator" aria-hidden="true">/</span>
+        <button id="tasks-crumb" class="crumb-button" type="button">Tasks</button>
+        <span id="task-crumb-wrap" hidden><span class="crumb-separator" aria-hidden="true">/</span><span id="task-crumb" class="task-id"></span></span>
+      </nav>
+      <div class="topbar-actions">
+        <span id="workspace-path" class="workspace-path"></span>
+        <label class="actor-control"><span>Acting as</span><input id="actor-input" maxlength="100" value="web" aria-label="Actor identity"></label>
+        <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh tasks"></button>
+        <span class="connection"><span id="connection-dot" class="connection-dot"></span><span id="connection-label">Connecting</span></span>
         <button id="new-task-button" class="button primary" type="button">New task</button>
       </div>
     </header>
 
-    <main>
-      <section class="board-heading" aria-labelledby="board-title">
-        <div>
-          <div class="eyebrow"><span id="connection-dot" class="connection-dot"></span><span id="connection-label">Connecting</span></div>
-          <h2 id="board-title">Board</h2>
-        </div>
-        <div id="board-summary" class="board-summary"></div>
-      </section>
-      <div id="notice" class="notice" hidden></div>
-      <section id="board" class="board" aria-label="Kanban board"></section>
-    </main>
-  </div>
-
-  <div id="drawer-scrim" class="drawer-scrim" hidden></div>
-  <aside id="task-drawer" class="task-drawer" aria-labelledby="detail-heading" aria-hidden="true">
-    <div class="drawer-header">
-      <div>
-        <div id="detail-id" class="task-id">Task</div>
-        <h2 id="detail-heading">Task details</h2>
+    <section id="explorer-toolbar" class="explorer-toolbar" aria-label="Task view controls">
+      <div class="segmented" role="group" aria-label="View">
+        <button id="board-view-button" type="button" aria-pressed="true">Board</button>
+        <button id="list-view-button" type="button" aria-pressed="false">List</button>
       </div>
-      <button id="close-drawer" class="icon-button" type="button" aria-label="Close task details">×</button>
-    </div>
-    <div id="detail-loading" class="detail-loading">Loading task…</div>
-    <div id="detail-content" hidden>
-      <form id="task-form" class="task-form">
-        <label class="field full">
-          <span>Title</span>
-          <input id="detail-title" name="title" required>
-        </label>
-        <div class="field-row">
-          <label class="field">
-            <span>Status</span>
-            <select id="detail-status" name="status"></select>
-          </label>
-          <label class="field">
-            <span>Assignee</span>
-            <input id="detail-assignee" name="assignee" placeholder="Unassigned">
-          </label>
-        </div>
-        <label class="field full">
-          <span>Labels <small>comma-separated</small></span>
-          <input id="detail-labels" name="labels" placeholder="bug, urgent">
-        </label>
-        <label class="field full">
-          <span>Description</span>
-          <textarea id="detail-description" name="description" rows="9" placeholder="What needs doing, and why?"></textarea>
-        </label>
-        <div class="form-actions">
-          <span id="save-state" class="save-state"></span>
-          <button id="save-task-button" class="button primary" type="submit" disabled>Save changes</button>
-        </div>
-      </form>
+      <label class="search-control"><span class="sr-only">Search tasks</span><input id="search-input" type="search" placeholder="Search tasks…"></label>
+      <button id="filter-button" class="button quiet" type="button" aria-expanded="false" aria-controls="filter-panel">Filter <span id="filter-count"></span></button>
+      <label class="order-control"><span class="sr-only">Order tasks</span><select id="order-select">
+        <option value="updated-desc">Updated · newest</option><option value="updated-asc">Updated · oldest</option>
+        <option value="created-desc">Created · newest</option><option value="created-asc">Created · oldest</option>
+        <option value="id-asc">ID · ascending</option><option value="id-desc">ID · descending</option>
+        <option value="title-asc">Title · A–Z</option><option value="title-desc">Title · Z–A</option>
+      </select></label>
+      <button id="view-settings-button" class="icon-button" type="button" aria-label="View settings" aria-expanded="false" aria-controls="view-settings-panel"></button>
+      <div id="active-filters" class="active-filters" aria-live="polite"></div>
+      <div id="board-summary" class="board-summary"></div>
+      <div id="filter-panel" class="control-panel filter-panel" hidden></div>
+      <div id="view-settings-panel" class="control-panel view-settings-panel" hidden></div>
+    </section>
 
-      <section id="wait-section" class="detail-section wait-section" aria-labelledby="wait-heading" hidden>
-        <div class="section-heading"><h3 id="wait-heading">Waiting</h3><span id="wait-kind" class="wait-badge"></span></div>
-        <p id="wait-reason" class="wait-reason"></p>
-        <a id="wait-reference" class="wait-reference" target="_blank" rel="noopener noreferrer" hidden></a>
-        <form id="resolve-wait-form" class="resolve-wait-form">
-          <label class="field full">
-            <span>Resolution <small>for example: approved or changes_requested</small></span>
-            <input id="wait-result" name="result" placeholder="resolved">
-          </label>
-          <label class="field full">
-            <span>Comment <small>optional; recorded before resuming</small></span>
-            <textarea id="wait-comment" rows="3" placeholder="Add feedback or explain what changed"></textarea>
-          </label>
-          <button class="button primary" type="submit">Resolve wait</button>
-        </form>
-      </section>
-
-      <section class="detail-section" aria-labelledby="references-heading">
-        <div class="section-heading"><h3 id="references-heading">References</h3><span id="reference-count" class="count"></span></div>
-        <div id="references" class="reference-list"></div>
-      </section>
-
-      <section class="detail-section" aria-labelledby="relationships-heading">
-        <div class="section-heading"><h3 id="relationships-heading">Relationships</h3></div>
-        <div id="relationships" class="relationship-list"></div>
-      </section>
-
-      <section class="detail-section" aria-labelledby="attachments-heading">
-        <div class="section-heading"><h3 id="attachments-heading">Attachments</h3><span id="attachment-count" class="count"></span></div>
-        <div id="attachments" class="attachment-list"></div>
-      </section>
-
-      <section class="detail-section activity-section" aria-labelledby="activity-heading">
-        <div class="section-heading"><h3 id="activity-heading">Activity</h3><span id="activity-count" class="count"></span></div>
-        <form id="comment-form" class="comment-form">
-          <textarea id="comment-text" rows="3" placeholder="Record a decision, result, or handoff note" required></textarea>
-          <button class="button" type="submit">Add comment</button>
-        </form>
-        <div id="activity" class="activity-list"></div>
-      </section>
-    </div>
-  </aside>
+    <div id="notice" class="notice" hidden></div>
+    <main id="explorer-root" class="explorer-root" aria-label="Kanban board"></main>
+    <main id="task-root" class="task-root" hidden></main>
+  </div>
 
   <dialog id="new-task-dialog" class="task-dialog">
     <form id="new-task-form" method="dialog">
-      <div class="dialog-header">
-        <div><div class="eyebrow">Create</div><h2>New task</h2></div>
-        <button id="close-new-task" class="icon-button" type="button" aria-label="Close">×</button>
-      </div>
-      <label class="field full">
-        <span>Title</span>
-        <input id="new-title" name="title" required autofocus>
-      </label>
-      <div class="field-row">
-        <label class="field">
-          <span>Status</span>
-          <select id="new-status" name="status"></select>
-        </label>
-        <label class="field">
-          <span>Assignee</span>
-          <input id="new-assignee" name="assignee" placeholder="Unassigned">
-        </label>
-      </div>
-      <label class="field full">
-        <span>Labels <small>comma-separated</small></span>
-        <input id="new-labels" name="labels" placeholder="feature, client-visible">
-      </label>
-      <label class="field full">
-        <span>Description</span>
-        <textarea id="new-description" name="description" rows="7"></textarea>
-      </label>
-      <div class="dialog-actions">
-        <button id="cancel-new-task" class="button quiet" type="button">Cancel</button>
-        <button class="button primary" value="create" type="submit">Create task</button>
-      </div>
+      <div class="dialog-header"><div><span class="eyebrow">Create</span><h2>New task</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
+      <label class="field"><span>Title</span><input id="new-title" required autofocus></label>
+      <div class="field-row"><label class="field"><span>Status</span><select id="new-status"></select></label><label class="field"><span>Assignee</span><input id="new-assignee" placeholder="Unassigned"></label></div>
+      <label class="field"><span>Labels <small>comma-separated</small></span><input id="new-labels" placeholder="bug, urgent"></label>
+      <label class="field"><span>Description</span><textarea id="new-description" rows="7"></textarea></label>
+      <div class="dialog-actions"><button class="button dialog-close" type="button">Cancel</button><button class="button primary" value="create" type="submit">Create task</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="link-dialog" class="task-dialog small-dialog">
+    <form id="link-form" method="dialog">
+      <div class="dialog-header"><div><span class="eyebrow">Resource</span><h2>Add link</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
+      <label class="field"><span>Kind</span><input id="link-kind" value="plan" pattern="[A-Za-z0-9._-]+" required></label>
+      <label class="field"><span>URL</span><input id="link-url" type="url" required placeholder="https://…"></label>
+      <label class="field"><span>Title <small>optional</small></span><input id="link-title"></label>
+      <div class="dialog-actions"><button class="button dialog-close" type="button">Cancel</button><button class="button primary" value="add" type="submit">Add link</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="upload-dialog" class="task-dialog small-dialog">
+    <form id="upload-form" method="dialog">
+      <div class="dialog-header"><div><span class="eyebrow">Resource</span><h2>Upload file</h2></div><button class="icon-button dialog-close" type="button" aria-label="Close"></button></div>
+      <label class="field"><span>File <small>maximum 25 MiB</small></span><input id="upload-file" type="file" required></label>
+      <label class="field"><span>Caption <small>optional</small></span><input id="upload-caption"></label>
+      <div class="dialog-actions"><button class="button dialog-close" type="button">Cancel</button><button class="button primary" value="upload" type="submit">Upload</button></div>
     </form>
   </dialog>
 
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
-  <script src="/assets/app.js" defer></script>
+  <script type="module" src="/assets/app.js"></script>
 </body>
 </html>
