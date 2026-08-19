@@ -12,7 +12,28 @@ function textContent(node) {
   return children(node).map(textContent).join('');
 }
 function escapeText(value) {
-  return String(value).replace(/\u00a0/g, ' ').replace(/\\/g, '\\\\').replace(/([`*_[\]])/g, '\\$1');
+  return String(value)
+    .replace(/\u00a0/g, ' ')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\\/g, '\\\\')
+    .replace(/([`*_[\]])/g, '\\$1');
+}
+function escapeBlockStarts(value) {
+  return String(value).split('\n').map((line) => {
+    const match = line.match(/^( {0,3})(.*)$/s);
+    const indent = match?.[1] || '';
+    const body = match?.[2] || line;
+    if (/^#{1,6}(?:[ \t]|$)/.test(body)) return `${indent}\\${body}`;
+    if (/^>(?:[ \t]|$)/.test(body)) return `${indent}\\${body}`;
+    if (/^[-+*][ \t]+/.test(body)) return `${indent}\\${body}`;
+    if (/^\d{1,9}[.)][ \t]+/.test(body)) return `${indent}${body.replace(/^\d{1,9}([.)])/, (marker) => `${marker.slice(0, -1)}\\${marker.slice(-1)}`)}`;
+    if (/^(?:`{3,}|~{3,})/.test(body)) return `${indent}\\${body}`;
+    if (/^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,}|=+)[ \t]*$/.test(body)) return `${indent}\\${body}`;
+    if (/^\[[^\]]+\]:/.test(body)) return `${indent}\\${body}`;
+    return line;
+  }).join('\n');
 }
 function escapeDestination(value) { return String(value).replace(/\\/g, '\\\\').replace(/([()])/g, '\\$1'); }
 function safeDestination(value) {
@@ -22,7 +43,12 @@ function safeDestination(value) {
 function hasBlockChildren(node) { return children(node).some((child) => child.nodeType === ELEMENT_NODE && BLOCKS.has(tag(child))); }
 function serializeChildren(node, context = {}) {
   const blockChildren = hasBlockChildren(node);
-  return children(node).map((child) => {
+  const nodes = children(node);
+  return nodes.map((child, index) => {
+    if (child.nodeType === TEXT_NODE && index > 0 && tag(nodes[index - 1]) === 'BR' && /^\r?\n/.test(textContent(child))) {
+      const value = textContent(child).replace(/^\r?\n/, '');
+      return context.raw ? value : escapeText(value);
+    }
     if (blockChildren && child.nodeType === TEXT_NODE && !textContent(child).trim()) return '';
     return serialize(child, context);
   }).join('');
@@ -60,21 +86,33 @@ function descendants(node, target) {
   }
   return found;
 }
+function tableAlignment(cell) {
+  const direct = attribute(cell, 'align').toLowerCase();
+  const styled = (attribute(cell, 'style').match(/(?:^|;)\s*text-align\s*:\s*(left|right|center)\b/i) || [])[1]?.toLowerCase();
+  const alignment = direct || styled || '';
+  if (alignment === 'left') return ':---';
+  if (alignment === 'right') return '---:';
+  if (alignment === 'center') return ':---:';
+  return '---';
+}
 function serializeTable(node) {
-  const rows = descendants(node, 'TR').map((row) => children(row).filter((cell) => ['TH', 'TD'].includes(tag(cell))).map((cell) => serializeChildren(cell).trim().replace(/\|/g, '\\|').replace(/\n+/g, ' ')));
+  const rowNodes = descendants(node, 'TR');
+  const cellNodes = rowNodes.map((row) => children(row).filter((cell) => ['TH', 'TD'].includes(tag(cell))));
+  const rows = cellNodes.map((cells) => cells.map((cell) => serializeChildren(cell).trim().replace(/\|/g, '\\|').replace(/\n+/g, ' ')));
   if (!rows.length) return '';
   const width = Math.max(...rows.map((row) => row.length));
   const normalized = rows.map((row) => [...row, ...Array(Math.max(0, width - row.length)).fill('')]);
+  const alignments = Array.from({ length: width }, (_, index) => tableAlignment(cellNodes[0]?.[index]));
   const line = (row) => `| ${row.join(' | ')} |`;
-  return `${line(normalized[0])}\n${line(Array(width).fill('---'))}\n${normalized.slice(1).map(line).join('\n')}${normalized.length > 1 ? '\n' : ''}\n`;
+  return `${line(normalized[0])}\n${line(alignments)}\n${normalized.slice(1).map(line).join('\n')}${normalized.length > 1 ? '\n' : ''}\n`;
 }
 function serialize(node, context = {}) {
   if (!node) return '';
   if (node.nodeType === TEXT_NODE) return context.raw ? textContent(node) : escapeText(textContent(node));
   if (node.nodeType !== ELEMENT_NODE) return serializeChildren(node, context);
   const name = tag(node);
-  if (name === 'BR') return '\n';
-  if (name === 'P' || name === 'DIV') return `${serializeChildren(node, context).trim()}\n\n`;
+  if (name === 'BR') return '  \n';
+  if (name === 'P' || name === 'DIV') return `${escapeBlockStarts(serializeChildren(node, context).trim())}\n\n`;
   if (/^H[1-6]$/.test(name)) return `${'#'.repeat(Number(name[1]))} ${serializeChildren(node, context).trim()}\n\n`;
   if (name === 'STRONG' || name === 'B') return `**${serializeChildren(node, context)}**`;
   if (name === 'EM' || name === 'I') return `_${serializeChildren(node, context)}_`;
@@ -112,8 +150,9 @@ function serialize(node, context = {}) {
 }
 
 export function markdownFromElement(root) {
-  return serializeChildren(root)
-    .replace(/[ \t]+\n/g, '\n')
+  const serialized = serializeChildren(root);
+  return (hasBlockChildren(root) ? serialized : escapeBlockStarts(serialized))
+    .replace(/[ \t]+\n/g, (spacing) => !spacing.includes('\t') && spacing.length > 2 ? '  \n' : '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

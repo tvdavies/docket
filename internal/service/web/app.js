@@ -5,7 +5,7 @@ import {
 } from './router.js';
 import { activeFilterCount, allStatuses, filterAndSortTasks, filterOptions, groupTasks, normalisePreferences } from './view-model.js';
 import { markdownFromElement, normalizedTitle, plainPasteText } from './markdown-edit.js';
-import { nextWorkspaceIndex, workspaceOptionText } from './workspace-picker.js';
+import { nextWorkspaceIndex, workspaceIsAvailable, workspaceOptionText } from './workspace-picker.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const elements = {
@@ -24,7 +24,8 @@ const elements = {
 const state = {
   workspaces: [], workspace: '', board: null, preferences: null, selectedTask: null, routeTask: '',
   dragging: false, detailRequest: 0, boardRequest: 0, routeGeneration: 0, refreshes: 0,
-  activeEditor: null, pendingSave: false, panelTrigger: null, workspacePickerOpen: false, scroll: new Map(),
+  activeEditor: null, pendingSave: false, pendingSavePromise: null, panelTrigger: null,
+  workspacePickerOpen: false, workspacePickerStale: false, scroll: new Map(),
 };
 
 function el(tag, className = '', text) {
@@ -124,7 +125,8 @@ function restorePanelFocus(snapshot) {
 
 async function loadWorkspaces() {
   state.workspaces = await api('/api/workspaces');
-  if (!state.workspacePickerOpen) renderWorkspacePicker();
+  if (state.workspacePickerOpen) state.workspacePickerStale = true;
+  else renderWorkspacePicker();
 }
 function renderWorkspacePicker() {
   elements.workspaceMenu.replaceChildren();
@@ -136,7 +138,7 @@ function renderWorkspacePicker() {
     option.addEventListener('click', () => chooseWorkspace(workspace.name));
     option.addEventListener('keydown', workspaceOptionKeydown); elements.workspaceMenu.append(option);
   }
-  elements.workspaceButton.disabled = !state.workspaces.length;
+  elements.workspaceButton.disabled = !state.workspaces.length; state.workspacePickerStale = false;
 }
 function workspaceOptions() { return [...elements.workspaceMenu.querySelectorAll('[role="option"]')]; }
 function focusWorkspaceOption(index) { const options = workspaceOptions(); options[index]?.focus(); }
@@ -148,6 +150,7 @@ function openWorkspacePicker(key = '') {
 }
 function closeWorkspacePicker({ restoreFocus = false } = {}) {
   state.workspacePickerOpen = false; elements.workspaceMenu.hidden = true; elements.workspaceButton.setAttribute('aria-expanded', 'false');
+  if (state.workspacePickerStale) renderWorkspacePicker();
   if (restoreFocus) elements.workspaceButton.focus();
 }
 function workspaceOptionKeydown(event) {
@@ -157,7 +160,11 @@ function workspaceOptionKeydown(event) {
   else if (event.key === 'Escape') { event.preventDefault(); closeWorkspacePicker({ restoreFocus: true }); }
   else if (event.key === 'Tab') closeWorkspacePicker();
 }
-async function chooseWorkspace(workspace) { closeWorkspacePicker({ restoreFocus: true }); if (workspace !== state.workspace) await switchWorkspace(workspace); }
+async function chooseWorkspace(workspace) {
+  closeWorkspacePicker({ restoreFocus: true });
+  if (!workspaceIsAvailable(state.workspaces, workspace)) return;
+  if (workspace !== state.workspace) await switchWorkspace(workspace);
+}
 function updateWorkspaceChrome() {
   const workspace = state.workspaces.find((row) => row.name === state.workspace); const copy = workspaceOptionText(workspace);
   elements.workspaceName.textContent = copy.name; elements.workspaceButton.title = copy.detail; elements.workspacePath.textContent = workspace?.path || '';
@@ -340,17 +347,26 @@ function hasActiveTaskEdit() { return Boolean(state.activeEditor || state.pendin
 function closeTaskDialogs() { if (elements.linkDialog.open) elements.linkDialog.close(); if (elements.uploadDialog.open) elements.uploadDialog.close(); }
 function closeDraftDialogs() { closeTaskDialogs(); if (elements.newDialog.open) elements.newDialog.close(); }
 function confirmNavigation() { return !hasDraft() || window.confirm('Discard unsaved task input?'); }
+async function flushContentEditor() {
+  const active = state.activeEditor;
+  if (active?.content && !active.failed) await saveContentEditor();
+  if (state.pendingSavePromise) await state.pendingSavePromise;
+  const failed = state.activeEditor?.content && state.activeEditor.failed;
+  if (failed) state.activeEditor.editor.focus();
+  return !failed;
+}
+async function prepareNavigation() { await flushContentEditor(); return confirmNavigation(); }
 function setHistory(path, replace = false) { window.history[replace ? 'replaceState' : 'pushState'](null, '', path); }
 async function navigateTask(id, { replace = false } = {}) {
-  if (!confirmNavigation()) return; captureExplorerScroll(); closePanels(); closeDraftDialogs(); state.routeTask = id; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();
+  if (!(await prepareNavigation())) return; captureExplorerScroll(); closePanels(); closeDraftDialogs(); state.routeTask = id; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();
   setHistory(buildTaskPath(state.workspace, id), replace); updateSurface(); await loadTask(id, { focusContent: true });
 }
 async function navigateExplorer({ replace = false } = {}) {
-  if (!confirmNavigation()) return; closeDraftDialogs(); state.routeTask = ''; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();
+  if (!(await prepareNavigation())) return; closeDraftDialogs(); state.routeTask = ''; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();
   setHistory(buildExplorerPath(state.workspace), replace); updateSurface(); renderExplorer(); elements.tasksCrumb.focus();
 }
 async function switchWorkspace(workspace, routeTask = '', { replace = false } = {}) {
-  if (!confirmNavigation()) { updateWorkspaceChrome(); return; }
+  if (!(await prepareNavigation())) { updateWorkspaceChrome(); return; }
   closeDraftDialogs(); state.workspace = workspace; state.board = null; state.preferences = null; state.routeTask = routeTask; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute(); updateWorkspaceChrome();
   setHistory(routeTask ? buildTaskPath(workspace, routeTask) : buildExplorerPath(workspace), replace); await loadBoard();
   if (routeTask) await loadTask(routeTask, { focusContent: true }); else renderExplorer();
@@ -359,10 +375,10 @@ async function loadTask(id, { background = false, focusContent = false } = {}) {
   const request = ++state.detailRequest; const context = currentRoute();
   try {
     const detail = await api(buildTaskAPIPath(context));
-    if (request !== state.detailRequest || !routeIsCurrent(context)) return;
-    if (background && hasActiveTaskEdit()) return; state.selectedTask = detail; renderTask(detail, { focusContent });
+    if (request !== state.detailRequest || !routeIsCurrent(context) || hasActiveTaskEdit()) return;
+    state.selectedTask = detail; renderTask(detail, { focusContent });
   } catch (error) {
-    if (request !== state.detailRequest || !routeIsCurrent(context)) return; elements.task.replaceChildren(); const back = button('button', 'Back to tasks', 'back'); back.addEventListener('click', () => navigateExplorer());
+    if (request !== state.detailRequest || !routeIsCurrent(context) || hasActiveTaskEdit()) return; elements.task.replaceChildren(); const back = button('button', 'Back to tasks', 'back'); back.addEventListener('click', () => navigateExplorer());
     const empty = el('div', 'empty-board'); const inner = el('div'); inner.append(el('p', '', `Could not load ${id}: ${error.message}`), back); empty.append(inner); elements.task.append(empty);
   }
 }
@@ -398,7 +414,13 @@ function renderTask(task, { focusContent = false, restoreFocusKey = '' } = {}) {
 }
 function staticProperty(label, value) { const row = el('div', 'property-row'); row.append(el('span', 'property-label', label), el('span', 'property-value', value)); return row; }
 function propertyRow(label, field, value, kind) {
-  const row = el('div', 'property-row'); const holder = el('div'); const edit = button('property-value', value); edit.dataset.focusKey = `field-${field}`; edit.setAttribute('aria-label', `Edit ${label}: ${value}`); edit.addEventListener('click', () => startEditor(holder, field, kind)); holder.append(edit); row.append(el('span', 'property-label', label), holder); return row;
+  const row = el('div', 'property-row'); const holder = el('div'); const edit = button('property-value', value); edit.dataset.focusKey = `field-${field}`; edit.dataset.propertyField = field;
+  edit.setAttribute('aria-label', `Edit ${label}: ${value}`); edit.addEventListener('click', () => openPropertyEditor(field, kind)); holder.append(edit); row.append(el('span', 'property-label', label), holder); return row;
+}
+async function openPropertyEditor(field, kind) {
+  if (!(await flushContentEditor())) return;
+  const trigger = elements.task.querySelector(`[data-property-field="${CSS.escape(field)}"]`);
+  if (trigger) startEditor(trigger.parentElement, field, kind);
 }
 function insertPlainText(editor, value, singleLine) {
   const selection = window.getSelection(); if (!selection?.rangeCount) return;
@@ -426,16 +448,18 @@ function configureContentEditor(editor, field, { singleLine = false } = {}) {
     if (event.key === 'Escape') { event.preventDefault(); restoreContentEditor(); }
     else if (singleLine && event.key === 'Enter') { event.preventDefault(); editor.blur(); }
   });
-  editor.addEventListener('blur', () => { setTimeout(() => { if (state.activeEditor?.editor === editor && !state.activeEditor.failed) saveContentEditor(); }, 0); });
+  editor.addEventListener('blur', () => { const blurred = state.activeEditor; setTimeout(() => { if (state.activeEditor === blurred && blurred?.editor === editor && !blurred.failed) saveContentEditor(); }, 0); });
 }
 function restoreContentEditor() {
   const active = state.activeEditor; if (!active?.content) return;
-  if (active.field === 'title') active.editor.textContent = active.original; else active.editor.innerHTML = active.originalHTML;
-  active.editor.classList.remove('save-error'); active.editor.removeAttribute('aria-invalid'); state.activeEditor = null; setSaveMessage(''); active.editor.blur();
+  const editor = active.editor;
+  if (active.field === 'title') editor.textContent = active.original; else editor.innerHTML = active.originalHTML;
+  editor.classList.remove('save-error'); editor.removeAttribute('aria-invalid'); state.activeEditor = null; setSaveMessage(''); editor.blur();
+  requestAnimationFrame(() => editor.focus());
 }
 async function saveContentEditor() {
   const active = state.activeEditor; if (!active?.content || state.pendingSave) return;
-  if (!active.dirty) { state.activeEditor = null; return; }
+  if (!active.dirty || (active.field === 'description' && active.editor.innerHTML === active.originalHTML)) { state.activeEditor = null; return; }
   const value = active.field === 'title' ? normalizedTitle(active.editor.textContent) : markdownFromElement(active.editor);
   if (active.field === 'title' && !value) { markSaveFailure(active, 'Title cannot be empty'); return; }
   if (value === active.original) { state.activeEditor = null; return; }
@@ -450,7 +474,7 @@ function startEditor(container, field, kind) {
   container.replaceChildren(editor); state.activeEditor = { container, editor, field, original, failed: false, dirty: false, content: false };
   editor.addEventListener('input', () => { if (!state.activeEditor) return; state.activeEditor.dirty = true; state.activeEditor.failed = false; editor.classList.remove('save-error'); editor.removeAttribute('aria-invalid'); setSaveMessage(''); });
   editor.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); cancelEditor(field); } });
-  editor.addEventListener('blur', () => { setTimeout(() => { if (state.activeEditor?.editor === editor && !state.activeEditor.failed) saveEditor(); }, 0); });
+  editor.addEventListener('blur', () => { const blurred = state.activeEditor; setTimeout(() => { if (state.activeEditor === blurred && blurred?.editor === editor && !blurred.failed) saveEditor(); }, 0); });
   if (kind === 'select') editor.addEventListener('change', () => { if (state.activeEditor) state.activeEditor.dirty = true; editor.blur(); }); editor.focus(); if (editor.select) editor.select();
 }
 function cancelEditor(field = state.activeEditor?.field) { state.activeEditor = null; if (state.selectedTask) renderTask(state.selectedTask, { restoreFocusKey: `field-${field}` }); }
@@ -464,16 +488,20 @@ async function saveEditor() {
 }
 async function submitEditorValue(active, payloadValue) {
   const context = currentRoute(); const field = active.field; const submitted = JSON.stringify({ [field]: payloadValue });
-  state.pendingSave = true; setSaveMessage('Saving…');
-  if (active.content) active.editor.contentEditable = 'false'; else active.editor.disabled = true;
-  try {
-    const updated = await api(buildTaskAPIPath(context), { method: 'PATCH', body: submitted });
-    if (!routeIsCurrent(context)) return;
-    const focusKey = taskFocusKey(); state.selectedTask = updated; state.activeEditor = null; state.pendingSave = false; renderTask(updated, { restoreFocusKey: focusKey || `field-${field}` }); setSaveMessage('Saved'); await loadBoard({ quiet: true });
-  } catch (error) {
-    if (!routeIsCurrent(context)) return;
-    state.pendingSave = false; if (active.content) active.editor.contentEditable = 'true'; else active.editor.disabled = false; markSaveFailure(active, error.message);
-  }
+  const operation = (async () => {
+    state.pendingSave = true; setSaveMessage('Saving…');
+    if (active.content) active.editor.contentEditable = 'false'; else active.editor.disabled = true;
+    try {
+      const updated = await api(buildTaskAPIPath(context), { method: 'PATCH', body: submitted });
+      if (!routeIsCurrent(context)) return;
+      const focusKey = taskFocusKey(); state.selectedTask = updated; state.activeEditor = null; state.pendingSave = false; renderTask(updated, { restoreFocusKey: focusKey || `field-${field}` }); setSaveMessage('Saved'); await loadBoard({ quiet: true });
+    } catch (error) {
+      if (!routeIsCurrent(context)) return;
+      state.pendingSave = false; if (active.content) active.editor.contentEditable = 'true'; else active.editor.disabled = false; markSaveFailure(active, error.message);
+    }
+  })();
+  state.pendingSavePromise = operation;
+  try { await operation; } finally { if (state.pendingSavePromise === operation) state.pendingSavePromise = null; }
 }
 function markSaveFailure(active, message) {
   active.failed = true; active.editor.classList.add('save-error'); active.editor.setAttribute('aria-invalid', 'true');
@@ -588,7 +616,7 @@ function wireControls() {
   elements.workspaceButton.addEventListener('click', (event) => { event.stopPropagation(); if (state.workspacePickerOpen) closeWorkspacePicker({ restoreFocus: true }); else openWorkspacePicker(); });
   elements.workspaceButton.addEventListener('keydown', (event) => { if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); openWorkspacePicker(event.key); } else if (event.key === 'Escape' && state.workspacePickerOpen) { event.preventDefault(); closeWorkspacePicker({ restoreFocus: true }); } });
   elements.actor.value = readStorage('docket.actor', 'web'); elements.actor.addEventListener('change', () => writeStorage('docket.actor', currentActor()));
-  elements.refresh.addEventListener('click', async () => { try { await loadWorkspaces(); updateWorkspaceChrome(); await loadBoard(); if (state.routeTask && !hasActiveTaskEdit()) await loadTask(state.routeTask); } catch (error) { showNotice(error.message, true); } });
+  elements.refresh.addEventListener('click', async () => { try { await loadWorkspaces(); updateWorkspaceChrome(); await loadBoard(); if (state.routeTask && !hasActiveTaskEdit()) await loadTask(state.routeTask, { background: true }); } catch (error) { showNotice(error.message, true); } });
   elements.newTask.addEventListener('click', openNewTask); elements.boardView.addEventListener('click', () => { state.preferences.view = 'board'; savePreferences(); renderExplorer(); }); elements.listView.addEventListener('click', () => { state.preferences.view = 'list'; savePreferences(); renderExplorer(); });
   elements.search.addEventListener('input', () => { state.preferences.filters.query = elements.search.value; savePreferences(); renderExplorer(); elements.search.focus(); });
   elements.order.addEventListener('change', () => { state.preferences.order = elements.order.value; savePreferences(); renderExplorer(); });
@@ -607,7 +635,7 @@ function wireControls() {
   window.addEventListener('popstate', handlePopState);
 }
 async function handlePopState() {
-  if (!confirmNavigation()) { setHistory(state.routeTask ? buildTaskPath(state.workspace, state.routeTask) : buildExplorerPath(state.workspace), true); return; }
+  if (!(await prepareNavigation())) { setHistory(state.routeTask ? buildTaskPath(state.workspace, state.routeTask) : buildExplorerPath(state.workspace), true); return; }
   const rawRoute = parseLocation(window.location); const route = resolveRoute(rawRoute, state.workspaces.map((row) => row.name), state.workspace);
   if (!route.valid) { showNotice(route.reason === 'unknown-workspace' ? 'That workspace is not registered.' : 'This Docket route is not valid.', true); setHistory(state.routeTask ? buildTaskPath(state.workspace, state.routeTask) : buildExplorerPath(state.workspace), true); return; }
   closeDraftDialogs(); const workspaceChanged = route.workspace !== state.workspace; state.workspace = route.workspace; state.routeTask = route.task; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute();

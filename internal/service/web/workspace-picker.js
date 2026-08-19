@@ -6,6 +6,10 @@ export function workspaceOptionText(workspace) {
   };
 }
 
+export function workspaceIsAvailable(workspaces, name) {
+  return Array.isArray(workspaces) && workspaces.some((workspace) => workspace?.name === name);
+}
+
 export function nextWorkspaceIndex(length, current, key) {
   if (!length) return -1;
   const index = current >= 0 && current < length ? current : 0;
