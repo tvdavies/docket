@@ -42,9 +42,21 @@ function safeDestination(value) {
   return /^(?:javascript|vbscript|data):/i.test(destination) ? '' : destination;
 }
 function hasBlockChildren(node) { return children(node).some((child) => child.nodeType === ELEMENT_NODE && BLOCKS.has(tag(child))); }
+function coalesceTextNodes(nodes) {
+  return nodes.reduce((result, node) => {
+    const previous = result[result.length - 1];
+    if (node.nodeType !== TEXT_NODE || previous?.nodeType !== TEXT_NODE) {
+      result.push(node);
+      return result;
+    }
+    const value = `${textContent(previous)}${textContent(node)}`;
+    result[result.length - 1] = { nodeType: TEXT_NODE, nodeValue: value, textContent: value };
+    return result;
+  }, []);
+}
 function serializeChildren(node, context = {}) {
   const blockChildren = hasBlockChildren(node);
-  const nodes = children(node);
+  const nodes = coalesceTextNodes(children(node));
   return nodes.map((child, index) => {
     if (child.nodeType === TEXT_NODE && index > 0 && tag(nodes[index - 1]) === 'BR' && /^\r?\n/.test(textContent(child))) {
       const value = textContent(child).replace(/^\r?\n/, '');

@@ -50,6 +50,11 @@ describe('contenteditable Markdown serialization', () => {
     expect(markdownFromElement(rendered)).toBe('&lt;b&gt;literal&lt;/b&gt; &amp; R&amp;D  \n\\# heading  \n\\- item  \n&gt; quote  \n\\`\\`\\`fence  \n\\---  \n\\[ref\\]: /target  \n\\~\\~not deleted\\~\\~  \n\\| Name \\| State \\|  \n\\| --- \\| --- \\|  \n&#32;   not code');
   });
 
+  test('neutralizes indented code split across adjacent text nodes after a hard break', () => {
+    const rendered = root(text('before'), node('BR'), text('\n'), text('  '), text('  not code'));
+    expect(markdownFromElement(rendered)).toBe('before  \n&#32;   not code');
+  });
+
   test('still emits intentional deletion, table, and fenced-code structure', () => {
     const rendered = root(
       node('P', {}, text('This is '), node('DEL', {}, text('removed')), text('.')),
