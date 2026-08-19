@@ -18,7 +18,8 @@ function escapeText(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\\/g, '\\\\')
-    .replace(/([`*_[\]])/g, '\\$1');
+    .replace(/([`*_[\]~|])/g, '\\$1')
+    .replace(/^( {4,})/gm, (_, spaces) => `&#32;${spaces.slice(1)}`);
 }
 function escapeBlockStarts(value) {
   return String(value).split('\n').map((line) => {
@@ -95,10 +96,13 @@ function tableAlignment(cell) {
   if (alignment === 'center') return ':---:';
   return '---';
 }
+function escapeTablePipes(value) {
+  return String(value).replace(/(\\*)\|/g, (_, slashes) => `${slashes}${slashes.length % 2 ? '' : '\\'}|`);
+}
 function serializeTable(node) {
   const rowNodes = descendants(node, 'TR');
   const cellNodes = rowNodes.map((row) => children(row).filter((cell) => ['TH', 'TD'].includes(tag(cell))));
-  const rows = cellNodes.map((cells) => cells.map((cell) => serializeChildren(cell).trim().replace(/\|/g, '\\|').replace(/\n+/g, ' ')));
+  const rows = cellNodes.map((cells) => cells.map((cell) => escapeTablePipes(serializeChildren(cell).trim()).replace(/\n+/g, ' ')));
   if (!rows.length) return '';
   const width = Math.max(...rows.map((row) => row.length));
   const normalized = rows.map((row) => [...row, ...Array(Math.max(0, width - row.length)).fill('')]);

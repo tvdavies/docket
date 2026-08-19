@@ -40,12 +40,26 @@ describe('contenteditable Markdown serialization', () => {
     expect(markdownFromElement(rendered)).toBe('- [x]  Done\n- [ ]  Next\n\n3. Third\n4. Fourth\n\n| Name | State | Age |\n| :--- | :---: | ---: |\n| Docket | Ready | 2 |');
   });
 
-  test('keeps pasted literal HTML and block markers visibly literal', () => {
+  test('keeps pasted literal HTML and GFM-looking text visibly literal', () => {
     const rendered = root(
       text('<b>literal</b> & R&D'), node('BR'), text('# heading'), node('BR'), text('- item'), node('BR'),
-      text('> quote'), node('BR'), text('```fence'), node('BR'), text('---'), node('BR'), text('[ref]: /target'),
+      text('> quote'), node('BR'), text('```fence'), node('BR'), text('---'), node('BR'), text('[ref]: /target'), node('BR'),
+      text('~~not deleted~~'), node('BR'), text('| Name | State |'), node('BR'), text('| --- | --- |'), node('BR'),
+      text('    not code'),
     );
-    expect(markdownFromElement(rendered)).toBe('&lt;b&gt;literal&lt;/b&gt; &amp; R&amp;D  \n\\# heading  \n\\- item  \n&gt; quote  \n\\`\\`\\`fence  \n\\---  \n\\[ref\\]: /target');
+    expect(markdownFromElement(rendered)).toBe('&lt;b&gt;literal&lt;/b&gt; &amp; R&amp;D  \n\\# heading  \n\\- item  \n&gt; quote  \n\\`\\`\\`fence  \n\\---  \n\\[ref\\]: /target  \n\\~\\~not deleted\\~\\~  \n\\| Name \\| State \\|  \n\\| --- \\| --- \\|  \n&#32;   not code');
+  });
+
+  test('still emits intentional deletion, table, and fenced-code structure', () => {
+    const rendered = root(
+      node('P', {}, text('This is '), node('DEL', {}, text('removed')), text('.')),
+      node('TABLE', {},
+        node('THEAD', {}, node('TR', {}, node('TH', {}, text('A | B')), node('TH', {}, text('State')))),
+        node('TBODY', {}, node('TR', {}, node('TD', {}, text('x')), node('TD', {}, text('ready')))),
+      ),
+      node('PRE', {}, node('CODE', { class: 'language-js' }, text('const pipe = "|";\n'))),
+    );
+    expect(markdownFromElement(rendered)).toBe('This is ~~removed~~.\n\n| A \\| B | State |\n| --- | --- |\n| x | ready |\n\n```js\nconst pipe = "|";\n```');
   });
 
   test('preserves Goldmark hard-break DOM including its newline text node', () => {
