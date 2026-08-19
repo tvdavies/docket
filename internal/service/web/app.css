@@ -22,7 +22,7 @@ body { overflow:hidden; font:450 14px/1.55 ui-sans-serif,system-ui,-apple-system
 button,input,select,textarea { font:inherit; color:inherit; }
 button,select { cursor:pointer; }
 a { color:var(--accent); }
-button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible,[tabindex]:focus-visible,[contenteditable="true"]:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
 [hidden] { display:none !important; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .icon { width:16px; height:16px; flex:0 0 auto; display:block; }
@@ -116,8 +116,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .task-document { min-width:0; }
 .task-document:focus { outline:none; }
 .task-kicker { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
-.task-title-editor { width:100%; margin:0; padding:2px 3px; border:1px solid transparent; border-radius:6px; color:var(--ink); font-size:28px; font-weight:650; line-height:1.2; letter-spacing:-.03em; overflow-wrap:anywhere; }
-.task-title-editor:hover,.task-title-editor:focus { border-color:var(--line); background:color-mix(in srgb,var(--surface) 55%,transparent); }
+.task-title-editor { width:100%; margin:0; padding:2px 3px; border:1px solid transparent; border-radius:6px; outline:none; color:var(--ink); font-size:28px; font-weight:650; line-height:1.2; letter-spacing:-.03em; overflow-wrap:anywhere; }
 .save-banner { min-height:24px; margin:8px 0; color:var(--faint); font-size:11px; }
 .save-banner.error { color:var(--danger); }
 .document-section { margin-top:28px; padding-top:22px; border-top:1px solid var(--line); }
@@ -125,8 +124,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .section-heading h2 { margin:0; font-size:14px; font-weight:650; }
 .section-actions { display:flex; gap:6px; }
 .markdown { color:var(--ink); font-size:15px; line-height:1.65; overflow-wrap:anywhere; }
-.content-editor { min-height:82px; margin:-7px; padding:7px; border:1px solid transparent; border-radius:7px; }
-.content-editor:hover,.content-editor:focus { border-color:var(--line); background:color-mix(in srgb,var(--surface) 45%,transparent); }
+.content-editor { min-height:82px; margin:-7px; padding:7px; border:1px solid transparent; border-radius:7px; outline:none; }
 .content-editor[data-placeholder]:empty::before { content:attr(data-placeholder); color:var(--faint); pointer-events:none; }
 .task-title-editor[contenteditable="false"],.content-editor[contenteditable="false"] { opacity:.72; }
 .task-title-editor.save-error,.content-editor.save-error { border-color:var(--danger); background:var(--danger-soft); }

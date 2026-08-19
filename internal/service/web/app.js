@@ -494,7 +494,7 @@ async function submitEditorValue(active, payloadValue) {
     try {
       const updated = await api(buildTaskAPIPath(context), { method: 'PATCH', body: submitted });
       if (!routeIsCurrent(context)) return;
-      const focusKey = taskFocusKey(); state.selectedTask = updated; state.activeEditor = null; state.pendingSave = false; renderTask(updated, { restoreFocusKey: focusKey || `field-${field}` }); setSaveMessage('Saved'); await loadBoard({ quiet: true });
+      const focusKey = taskFocusKey(); state.selectedTask = updated; state.activeEditor = null; state.pendingSave = false; renderTask(updated, { restoreFocusKey: focusKey || `field-${field}` }); await loadBoard({ quiet: true });
     } catch (error) {
       if (!routeIsCurrent(context)) return;
       state.pendingSave = false; if (active.content) active.editor.contentEditable = 'true'; else active.editor.disabled = false; markSaveFailure(active, error.message);
