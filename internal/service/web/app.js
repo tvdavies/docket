@@ -489,7 +489,7 @@ async function saveEditor() {
 async function submitEditorValue(active, payloadValue) {
   const context = currentRoute(); const field = active.field; const submitted = JSON.stringify({ [field]: payloadValue });
   const operation = (async () => {
-    state.pendingSave = true; setSaveMessage('Saving…');
+    state.pendingSave = true;
     if (active.content) active.editor.contentEditable = 'false'; else active.editor.disabled = true;
     try {
       const updated = await api(buildTaskAPIPath(context), { method: 'PATCH', body: submitted });
