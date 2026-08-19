@@ -18,6 +18,14 @@ export function allStatuses(board) {
   return [...configured, ...new Set(unknown)];
 }
 
+export function sameBoardContent(left, right) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  const { updated_at: leftUpdatedAt, ...leftContent } = left;
+  const { updated_at: rightUpdatedAt, ...rightContent } = right;
+  return JSON.stringify(leftContent) === JSON.stringify(rightContent);
+}
+
 export function normalisePreferences(input, board) {
   const source = input && input.version === 1 ? input : {};
   const filters = source.filters || {};

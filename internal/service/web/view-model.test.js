@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { allStatuses, filterAndSortTasks, groupTasks, normalisePreferences } from './view-model.js';
+import { allStatuses, filterAndSortTasks, groupTasks, normalisePreferences, sameBoardContent } from './view-model.js';
 
 const board = {
   statuses: ['ready', 'doing', 'done'], terminal: ['done'],
@@ -12,6 +12,14 @@ const board = {
 };
 
 describe('view model', () => {
+  test('ignores response timestamps when detecting board content changes', () => {
+    const first = { ...board, updated_at: '2026-01-01T00:00:00Z' };
+    const refreshed = { ...board, updated_at: '2026-01-01T00:00:03Z' };
+    expect(sameBoardContent(first, refreshed)).toBe(true);
+    expect(sameBoardContent(first, { ...refreshed, tasks: refreshed.tasks.slice(1) })).toBe(false);
+    expect(sameBoardContent(null, refreshed)).toBe(false);
+  });
+
   test('keeps unknown statuses and normalises stale preferences', () => {
     expect(allStatuses(board)).toEqual(['ready', 'doing', 'done', 'cancelled']);
     const preferences = normalisePreferences({ version: 1, view: 'x', order: 'bad', hiddenStatuses: ['cancelled', 'gone'], filters: { labels: ['bug', 'gone'] } }, board);

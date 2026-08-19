@@ -3,7 +3,7 @@ import {
   buildExplorerPath, buildTaskAPIPath, buildTaskPath, parseLocation,
   resolveRoute, routeContext, sameRouteContext, shouldNavigateInApp,
 } from './router.js';
-import { activeFilterCount, allStatuses, filterAndSortTasks, filterOptions, groupTasks, normalisePreferences } from './view-model.js';
+import { activeFilterCount, allStatuses, filterAndSortTasks, filterOptions, groupTasks, normalisePreferences, sameBoardContent } from './view-model.js';
 import { markdownFromElement, normalizedTitle, plainPasteText } from './markdown-edit.js';
 import { nextWorkspaceIndex, workspaceIsAvailable, workspaceOptionText } from './workspace-picker.js';
 
@@ -79,6 +79,9 @@ function relativeDate(value) {
   const seconds = Math.round((time - Date.now()) / 1000); const absolute = Math.abs(seconds);
   const [amount, unit] = absolute < 60 ? [seconds, 'second'] : absolute < 3600 ? [Math.round(seconds / 60), 'minute'] : absolute < 86400 ? [Math.round(seconds / 3600), 'hour'] : [Math.round(seconds / 86400), 'day'];
   return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(amount, unit);
+}
+function refreshRelativeTaskTimes() {
+  elements.explorer.querySelectorAll('time.card-time[datetime]').forEach((node) => { node.textContent = relativeDate(node.dateTime); });
 }
 function labelTone(label) { let hash = 0; for (const character of label) hash = ((hash * 31) + character.codePointAt(0)) >>> 0; return `label-tone-${hash % 6}`; }
 function statusTone(status, terminal = false) {
@@ -178,10 +181,14 @@ async function loadBoard({ quiet = false } = {}) {
   try {
     const board = await api(`/api/workspaces/${encodeURIComponent(workspace)}/board`);
     if (request !== state.boardRequest || workspace !== state.workspace) return;
+    const contentChanged = !sameBoardContent(state.board, board);
     state.board = board;
     if (!state.preferences) loadPreferences(); else state.preferences = normalisePreferences(state.preferences, board);
     savePreferences();
-    if (!state.routeTask) renderExplorer();
+    if (!state.routeTask) {
+      if (!quiet || contentChanged) renderExplorer();
+      else refreshRelativeTaskTimes();
+    }
     showNotice('');
   } catch (error) {
     if (request !== state.boardRequest || workspace !== state.workspace) return;
