@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tvdavies/docket/internal/store"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -18,12 +19,34 @@ import (
 
 const DefaultListen = "127.0.0.1:7463"
 
+// DefaultPruneAfter is how long a registered workspace directory must be
+// continuously missing before the service unregisters it.
+const DefaultPruneAfter = time.Hour
+
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // Config is machine-local service configuration.
 type Config struct {
 	Listen     string           `yaml:"listen,omitempty"`
+	PruneAfter string           `yaml:"prune_after,omitempty"`
 	Workspaces []WorkspaceEntry `yaml:"workspaces,omitempty"`
+}
+
+// PruneGrace resolves prune_after: empty uses DefaultPruneAfter and "never"
+// disables pruning by returning zero.
+func (c *Config) PruneGrace() (time.Duration, error) {
+	value := strings.ToLower(strings.TrimSpace(c.PruneAfter))
+	if value == "" {
+		return DefaultPruneAfter, nil
+	}
+	if value == "never" {
+		return 0, nil
+	}
+	grace, err := time.ParseDuration(value)
+	if err != nil || grace <= 0 {
+		return 0, fmt.Errorf("prune_after must be \"never\" or a positive duration such as 1h, not %q", c.PruneAfter)
+	}
+	return grace, nil
 }
 
 // WorkspaceEntry identifies one file-backed workspace. Path is the absolute
@@ -122,6 +145,16 @@ func Add(path, name string) (WorkspaceEntry, error) {
 
 // Remove unregisters a workspace by name and returns whether it existed.
 func Remove(name string) (bool, error) {
+	return remove(name, nil)
+}
+
+// RemoveMatching unregisters name only while it still points at path, so a
+// concurrent re-registration under the same name is never removed by mistake.
+func RemoveMatching(name, path string) (bool, error) {
+	return remove(name, &path)
+}
+
+func remove(name string, path *string) (bool, error) {
 	configPath, err := ConfigPath()
 	if err != nil {
 		return false, err
@@ -134,7 +167,7 @@ func Remove(name string) (bool, error) {
 		}
 		kept := config.Workspaces[:0]
 		for _, entry := range config.Workspaces {
-			if entry.Name == name {
+			if entry.Name == name && (path == nil || samePath(entry.Path, *path)) {
 				removed = true
 				continue
 			}
@@ -149,8 +182,66 @@ func Remove(name string) (bool, error) {
 	return removed, err
 }
 
+// PruneMissing unregisters workspaces whose project directories have been
+// continuously missing for the configured grace period and returns the
+// surviving entries. The caller owns the missing-since tracking map; only a
+// confirmed not-exist counts as missing, so transient stat failures never
+// unregister anything.
+func PruneMissing(config *Config, missing map[string]time.Time, now time.Time, logf func(string, ...any)) []WorkspaceEntry {
+	grace, err := config.PruneGrace()
+	if err != nil || grace <= 0 {
+		clear(missing)
+		return config.Workspaces
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+
+	active := make(map[string]bool, len(config.Workspaces))
+	kept := make([]WorkspaceEntry, 0, len(config.Workspaces))
+	for _, entry := range config.Workspaces {
+		key := entry.Name + "\x00" + filepath.Clean(entry.Path)
+		active[key] = true
+		if _, err := os.Stat(entry.Path); err == nil || !os.IsNotExist(err) {
+			delete(missing, key)
+			kept = append(kept, entry)
+			continue
+		}
+		since, tracked := missing[key]
+		if !tracked {
+			missing[key] = now
+			kept = append(kept, entry)
+			continue
+		}
+		if now.Sub(since) < grace {
+			kept = append(kept, entry)
+			continue
+		}
+		removed, err := RemoveMatching(entry.Name, entry.Path)
+		if err != nil {
+			logf("docket: prune workspace %q: %v", entry.Name, err)
+			kept = append(kept, entry)
+			continue
+		}
+		delete(missing, key)
+		if removed {
+			logf("docket: unregistered workspace %q; %s has been missing since %s (task files untouched)",
+				entry.Name, entry.Path, since.UTC().Format(time.RFC3339))
+		}
+	}
+	for key := range missing {
+		if !active[key] {
+			delete(missing, key)
+		}
+	}
+	return kept
+}
+
 // Validate checks uniqueness and route-safe workspace names.
 func (c *Config) Validate() error {
+	if _, err := c.PruneGrace(); err != nil {
+		return err
+	}
 	names := map[string]bool{}
 	paths := map[string]string{}
 	for _, entry := range c.Workspaces {

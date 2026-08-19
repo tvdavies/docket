@@ -93,11 +93,13 @@ docket service logs                        # journalctl follow
 ```
 
 The machine-local registry is `~/.config/docket/config.yaml` (or
-`$DOCKET_CONFIG`). It contains only names, paths, and the listen address; task
-data stays in each workspace. The service notices registry changes within two
-seconds, isolates each workspace runtime, drains handler backlogs, and marks
-missing workspaces unavailable rather than crashing. Without `--all`,
-`docket serve` watches only the current workspace.
+`$DOCKET_CONFIG`). It contains only names, paths, the listen address, and the
+prune grace; task data stays in each workspace. The service notices registry
+changes within two seconds, isolates each workspace runtime, drains handler
+backlogs, and marks missing workspaces unavailable rather than crashing. A
+registration whose directory stays missing beyond `prune_after` (default one
+hour; `never` disables) is unregistered automatically with its task files
+untouched. Without `--all`, `docket serve` watches only the current workspace.
 
 The systemd unit runs once per user/machine — never once per workspace — and
 serves one writable Kanban UI with all registered workspaces. Board mutations

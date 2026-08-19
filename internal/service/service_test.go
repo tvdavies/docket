@@ -312,3 +312,31 @@ func waitFor(t *testing.T, condition func() bool) {
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
+
+func TestFollowRegistryPrunesLongMissingWorkspaces(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("DOCKET_CONFIG", configPath)
+	root, _, _ := createHandledWorkspace(t)
+	ghost := filepath.Join(t.TempDir(), "gone")
+	registryYAML := "listen: 127.0.0.1:7463\nprune_after: 40ms\nworkspaces:\n" +
+		"    - name: alive\n      path: " + root + "\n" +
+		"    - name: ghost\n      path: " + ghost + "\n"
+	if err := os.WriteFile(configPath, []byte(registryYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := service.NewManager(ctx, io.Discard)
+	defer manager.Stop()
+	go manager.FollowRegistry(ctx, 10*time.Millisecond)
+
+	waitFor(t, func() bool {
+		config, err := registry.Load()
+		if err != nil || len(config.Workspaces) != 1 || config.Workspaces[0].Name != "alive" {
+			return false
+		}
+		statuses := manager.Statuses()
+		return len(statuses) == 1 && statuses[0].Name == "alive"
+	})
+}

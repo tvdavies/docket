@@ -107,18 +107,24 @@ func (m *Manager) SetWorkspaces(entries []registry.WorkspaceEntry) {
 
 // FollowRegistry reloads the machine-local registry periodically. The interval
 // is deliberately small and cheap: only config metadata is read, while each
-// workspace remains event-driven.
+// workspace remains event-driven. Registrations whose project directories stay
+// missing beyond the configured prune_after grace are unregistered so dead
+// paths do not accumulate retrying watchers.
 func (m *Manager) FollowRegistry(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
+	missing := map[string]time.Time{}
 	load := func() {
 		config, err := registry.Load()
 		if err != nil {
 			fmt.Fprintf(m.output, "docket: service registry: %v\n", err)
 			return
 		}
-		m.SetWorkspaces(config.Workspaces)
+		entries := registry.PruneMissing(config, missing, time.Now(), func(format string, args ...any) {
+			fmt.Fprintf(m.output, format+"\n", args...)
+		})
+		m.SetWorkspaces(entries)
 	}
 	load()
 	ticker := time.NewTicker(interval)

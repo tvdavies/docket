@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -107,5 +108,107 @@ func TestAddAcceptsDocketDirectoryAndDescendant(t *testing.T) {
 	}
 	if entry.Path != project {
 		t.Fatalf("resolved path = %s, want %s", entry.Path, project)
+	}
+}
+
+func TestPruneGraceConfig(t *testing.T) {
+	if grace, err := (&registry.Config{}).PruneGrace(); err != nil || grace != registry.DefaultPruneAfter {
+		t.Fatalf("default grace = %v, %v", grace, err)
+	}
+	if grace, err := (&registry.Config{PruneAfter: "never"}).PruneGrace(); err != nil || grace != 0 {
+		t.Fatalf("never grace = %v, %v", grace, err)
+	}
+	if grace, err := (&registry.Config{PruneAfter: "30m"}).PruneGrace(); err != nil || grace != 30*time.Minute {
+		t.Fatalf("30m grace = %v, %v", grace, err)
+	}
+	for _, invalid := range []string{"bogus", "-5m", "0s"} {
+		if err := (&registry.Config{PruneAfter: invalid}).Validate(); err == nil {
+			t.Fatalf("prune_after %q validated", invalid)
+		}
+	}
+}
+
+func TestRemoveMatchingRequiresTheRegisteredPath(t *testing.T) {
+	_, project := setup(t)
+	if _, err := registry.Add(project, "guarded"); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := registry.RemoveMatching("guarded", filepath.Join(t.TempDir(), "other"))
+	if err != nil || removed {
+		t.Fatalf("mismatched path removed = %v, %v", removed, err)
+	}
+	config, err := registry.Load()
+	if err != nil || len(config.Workspaces) != 1 {
+		t.Fatalf("registration lost: %#v, %v", config, err)
+	}
+	removed, err = registry.RemoveMatching("guarded", project)
+	if err != nil || !removed {
+		t.Fatalf("matching path not removed = %v, %v", removed, err)
+	}
+}
+
+func TestPruneMissingUnregistersOnlyAfterContinuousGrace(t *testing.T) {
+	_, survivor := setup(t)
+	if _, err := registry.Add(survivor, "survivor"); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(t.TempDir(), "gone-project")
+	if err := os.MkdirAll(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Init(gone); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Add(gone, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.PruneAfter = "1h"
+	missing := map[string]time.Time{}
+	start := time.Now()
+
+	if kept := registry.PruneMissing(config, missing, start, nil); len(kept) != 2 {
+		t.Fatalf("first observation pruned: %#v", kept)
+	}
+	if kept := registry.PruneMissing(config, missing, start.Add(30*time.Minute), nil); len(kept) != 2 {
+		t.Fatalf("pruned before grace expired: %#v", kept)
+	}
+
+	// A reappearing directory clears tracking, so absence must be continuous.
+	if err := os.MkdirAll(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if kept := registry.PruneMissing(config, missing, start.Add(2*time.Hour), nil); len(kept) != 2 {
+		t.Fatalf("present directory pruned: %#v", kept)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	if kept := registry.PruneMissing(config, missing, start.Add(3*time.Hour), nil); len(kept) != 2 {
+		t.Fatalf("tracking did not restart after reappearance: %#v", kept)
+	}
+
+	kept := registry.PruneMissing(config, missing, start.Add(5*time.Hour), nil)
+	if len(kept) != 1 || kept[0].Name != "survivor" {
+		t.Fatalf("prune kept %#v", kept)
+	}
+	config, err = registry.Load()
+	if err != nil || len(config.Workspaces) != 1 || config.Workspaces[0].Name != "survivor" {
+		t.Fatalf("registry after prune: %#v, %v", config, err)
+	}
+
+	config.PruneAfter = "never"
+	if kept := registry.PruneMissing(config, missing, start.Add(6*time.Hour), nil); len(kept) != 1 {
+		t.Fatalf("disabled pruning changed entries: %#v", kept)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("disabled pruning kept tracking state: %#v", missing)
 	}
 }
