@@ -10,25 +10,26 @@
 <body>
   <div class="app-shell">
     <header class="topbar">
-      <nav class="breadcrumbs" aria-label="Breadcrumb">
-        <button id="home-button" class="brand-button" type="button"><span class="brand-mark" aria-hidden="true">D</span><strong>Docket</strong></button>
-        <span class="crumb-separator" aria-hidden="true">/</span>
-        <label class="workspace-crumb">
-          <span class="sr-only">Workspace</span>
-          <select id="workspace-select" aria-label="Workspace"></select>
-        </label>
-        <span class="crumb-separator" aria-hidden="true">/</span>
-        <button id="tasks-crumb" class="crumb-button" type="button">Tasks</button>
-        <span id="task-crumb-wrap" hidden><span class="crumb-separator" aria-hidden="true">/</span><span id="task-crumb" class="task-id"></span></span>
-      </nav>
+      <button id="home-button" class="brand-button" type="button"><span class="brand-mark" aria-hidden="true">D</span><strong>Docket</strong></button>
       <div class="topbar-actions">
         <span id="workspace-path" class="workspace-path"></span>
         <label class="actor-control"><span>Acting as</span><input id="actor-input" maxlength="100" value="web" aria-label="Actor identity"></label>
         <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh tasks"></button>
-        <span class="connection"><span id="connection-dot" class="connection-dot"></span><span id="connection-label">Connecting</span></span>
         <button id="new-task-button" class="button primary" type="button">New task</button>
       </div>
     </header>
+
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <div class="workspace-picker">
+        <button id="workspace-picker-button" class="workspace-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="workspace-picker-menu">
+          <span id="workspace-picker-name">Workspace</span><span class="picker-chevron" aria-hidden="true"></span>
+        </button>
+        <div id="workspace-picker-menu" class="workspace-picker-menu" role="listbox" aria-label="Workspace" hidden></div>
+      </div>
+      <span class="crumb-separator" aria-hidden="true">/</span>
+      <button id="tasks-crumb" class="crumb-button" type="button">Tasks</button>
+      <span id="task-crumb-wrap" class="task-crumb-wrap" hidden><span class="crumb-separator" aria-hidden="true">/</span><span id="task-crumb" class="crumb-current"></span></span>
+    </nav>
 
     <section id="explorer-toolbar" class="explorer-toolbar" aria-label="Task view controls">
       <div class="segmented" role="group" aria-label="View">

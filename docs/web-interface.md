@@ -61,9 +61,11 @@ The **Acting as** field is stored in browser local storage and sent as `X-Docket
 ## Editing and refresh behaviour
 
 Task descriptions and comments are stored as Markdown and rendered with raw HTML
-disabled. Clicking an editable document element or property opens only that
-field's source editor. Blur sends a partial task PATCH. Failed saves retain the
-draft and expose a retry action.
+disabled. Task titles and rendered descriptions are directly contenteditable,
+without swapping to a separate input or source editor; property controls remain
+compact field editors. Blur converts edited rendered content back to Markdown
+and sends a partial task PATCH. Untouched Markdown is never rewritten. Failed
+saves retain the editable draft and expose a retry action.
 
 The explorer refreshes every three seconds and when **Refresh** is pressed. Lane,
 list, and horizontal board scroll positions survive quiet refreshes. A focused or

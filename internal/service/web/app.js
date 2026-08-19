@@ -4,13 +4,15 @@ import {
   resolveRoute, routeContext, sameRouteContext, shouldNavigateInApp,
 } from './router.js';
 import { activeFilterCount, allStatuses, filterAndSortTasks, filterOptions, groupTasks, normalisePreferences } from './view-model.js';
+import { markdownFromElement, normalizedTitle, plainPasteText } from './markdown-edit.js';
+import { nextWorkspaceIndex, workspaceOptionText } from './workspace-picker.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const elements = {
-  appShell: $('.app-shell'), workspace: $('#workspace-select'), workspacePath: $('#workspace-path'), actor: $('#actor-input'), refresh: $('#refresh-button'),
+  appShell: $('.app-shell'), workspaceButton: $('#workspace-picker-button'), workspaceName: $('#workspace-picker-name'), workspaceMenu: $('#workspace-picker-menu'), workspacePath: $('#workspace-path'), actor: $('#actor-input'), refresh: $('#refresh-button'),
   newTask: $('#new-task-button'), home: $('#home-button'), tasksCrumb: $('#tasks-crumb'), taskCrumbWrap: $('#task-crumb-wrap'), taskCrumb: $('#task-crumb'),
   explorerToolbar: $('#explorer-toolbar'), explorer: $('#explorer-root'), task: $('#task-root'), summary: $('#board-summary'), notice: $('#notice'),
-  connectionDot: $('#connection-dot'), connectionLabel: $('#connection-label'), boardView: $('#board-view-button'), listView: $('#list-view-button'),
+  boardView: $('#board-view-button'), listView: $('#list-view-button'),
   search: $('#search-input'), filterButton: $('#filter-button'), filterCount: $('#filter-count'), filterPanel: $('#filter-panel'),
   order: $('#order-select'), viewSettingsButton: $('#view-settings-button'), viewSettingsPanel: $('#view-settings-panel'), activeFilters: $('#active-filters'),
   newDialog: $('#new-task-dialog'), newForm: $('#new-task-form'), newTitle: $('#new-title'), newStatus: $('#new-status'),
@@ -22,7 +24,7 @@ const elements = {
 const state = {
   workspaces: [], workspace: '', board: null, preferences: null, selectedTask: null, routeTask: '',
   dragging: false, detailRequest: 0, boardRequest: 0, routeGeneration: 0, refreshes: 0,
-  activeEditor: null, pendingSave: false, panelTrigger: null, scroll: new Map(),
+  activeEditor: null, pendingSave: false, panelTrigger: null, workspacePickerOpen: false, scroll: new Map(),
 };
 
 function el(tag, className = '', text) {
@@ -64,7 +66,6 @@ function currentRoute() { return routeContext(state.workspace, state.routeTask, 
 function routeIsCurrent(context) { return sameRouteContext(context, currentRoute()); }
 function advanceRoute() { state.routeGeneration += 1; state.detailRequest += 1; return currentRoute(); }
 function taskAPI(suffix = '') { return buildTaskAPIPath(currentRoute(), suffix); }
-function setConnection(kind, label) { elements.connectionDot.className = `connection-dot ${kind}`; elements.connectionLabel.textContent = label; }
 function showNotice(message, isError = false) { elements.notice.hidden = !message; elements.notice.textContent = message || ''; elements.notice.className = `notice${isError ? ' error' : ''}`; }
 function toast(message, isError = false) { const item = el('div', `toast${isError ? ' error' : ''}`, message); elements.toasts.append(item); setTimeout(() => item.remove(), 3800); }
 function humanize(value) { return String(value || '').replace(/[._-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase()); }
@@ -98,7 +99,7 @@ function closePanels({ restoreFocus = false } = {}) {
   if (restoreFocus && trigger) trigger.focus();
 }
 function openPanel(panel, trigger) {
-  closePanels(); panel.hidden = false; trigger.setAttribute('aria-expanded', 'true'); state.panelTrigger = trigger;
+  closeWorkspacePicker(); closePanels(); panel.hidden = false; trigger.setAttribute('aria-expanded', 'true'); state.panelTrigger = trigger;
   requestAnimationFrame(() => panel.querySelector('input,select,button')?.focus());
 }
 function capturePanelFocus() {
@@ -122,35 +123,62 @@ function restorePanelFocus(snapshot) {
 }
 
 async function loadWorkspaces() {
-  const rows = await api('/api/workspaces');
-  state.workspaces = rows;
-  elements.workspace.replaceChildren();
-  for (const workspace of rows) {
-    const option = el('option', '', `${workspace.name}${workspace.state === 'watching' ? '' : ` · ${workspace.state}`}`);
-    option.value = workspace.name; elements.workspace.append(option);
-  }
+  state.workspaces = await api('/api/workspaces');
+  if (!state.workspacePickerOpen) renderWorkspacePicker();
 }
+function renderWorkspacePicker() {
+  elements.workspaceMenu.replaceChildren();
+  for (const [index, workspace] of state.workspaces.entries()) {
+    const copy = workspaceOptionText(workspace); const option = button('workspace-option', '');
+    option.id = `workspace-option-${index}`; option.setAttribute('role', 'option'); option.dataset.workspace = workspace.name;
+    option.setAttribute('aria-selected', String(workspace.name === state.workspace));
+    option.append(el('span', 'workspace-option-name', copy.name), el('span', 'workspace-option-detail', copy.detail));
+    option.addEventListener('click', () => chooseWorkspace(workspace.name));
+    option.addEventListener('keydown', workspaceOptionKeydown); elements.workspaceMenu.append(option);
+  }
+  elements.workspaceButton.disabled = !state.workspaces.length;
+}
+function workspaceOptions() { return [...elements.workspaceMenu.querySelectorAll('[role="option"]')]; }
+function focusWorkspaceOption(index) { const options = workspaceOptions(); options[index]?.focus(); }
+function openWorkspacePicker(key = '') {
+  if (!state.workspaces.length) return; closePanels(); state.workspacePickerOpen = true; elements.workspaceMenu.hidden = false; elements.workspaceButton.setAttribute('aria-expanded', 'true');
+  const selected = Math.max(0, state.workspaces.findIndex((row) => row.name === state.workspace));
+  const index = key === 'Home' || key === 'End' || key === 'ArrowUp' || key === 'ArrowDown' ? nextWorkspaceIndex(state.workspaces.length, selected, key) : selected;
+  requestAnimationFrame(() => focusWorkspaceOption(index));
+}
+function closeWorkspacePicker({ restoreFocus = false } = {}) {
+  state.workspacePickerOpen = false; elements.workspaceMenu.hidden = true; elements.workspaceButton.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) elements.workspaceButton.focus();
+}
+function workspaceOptionKeydown(event) {
+  const options = workspaceOptions(); const current = options.indexOf(event.currentTarget);
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); focusWorkspaceOption(nextWorkspaceIndex(options.length, current, event.key)); }
+  else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); chooseWorkspace(event.currentTarget.dataset.workspace); }
+  else if (event.key === 'Escape') { event.preventDefault(); closeWorkspacePicker({ restoreFocus: true }); }
+  else if (event.key === 'Tab') closeWorkspacePicker();
+}
+async function chooseWorkspace(workspace) { closeWorkspacePicker({ restoreFocus: true }); if (workspace !== state.workspace) await switchWorkspace(workspace); }
 function updateWorkspaceChrome() {
-  const workspace = state.workspaces.find((row) => row.name === state.workspace);
-  elements.workspace.value = state.workspace; elements.workspacePath.textContent = workspace?.path || '';
+  const workspace = state.workspaces.find((row) => row.name === state.workspace); const copy = workspaceOptionText(workspace);
+  elements.workspaceName.textContent = copy.name; elements.workspaceButton.title = copy.detail; elements.workspacePath.textContent = workspace?.path || '';
   elements.workspacePath.title = workspace?.path || ''; writeStorage('docket.workspace', state.workspace);
+  workspaceOptions().forEach((option) => option.setAttribute('aria-selected', String(option.dataset.workspace === state.workspace)));
   if (workspace?.state && workspace.state !== 'watching') showNotice(workspace.last_error || `Workspace is ${workspace.state}.`, true);
 }
 async function loadBoard({ quiet = false } = {}) {
   if (!state.workspace || state.dragging) return;
   const workspace = state.workspace; const request = ++state.boardRequest;
   try {
-    if (!quiet) setConnection('', 'Refreshing');
     const board = await api(`/api/workspaces/${encodeURIComponent(workspace)}/board`);
     if (request !== state.boardRequest || workspace !== state.workspace) return;
     state.board = board;
     if (!state.preferences) loadPreferences(); else state.preferences = normalisePreferences(state.preferences, board);
     savePreferences();
     if (!state.routeTask) renderExplorer();
-    showNotice(''); setConnection('live', 'Live');
+    showNotice('');
   } catch (error) {
     if (request !== state.boardRequest || workspace !== state.workspace) return;
-    setConnection('error', 'Unavailable'); showNotice(`Could not load board: ${error.message}`, true);
+    showNotice(`Could not load board: ${error.message}`, true);
     if (!state.board && !state.routeTask) renderEmptyExplorer('This workspace board could not be loaded.');
   }
 }
@@ -305,9 +333,10 @@ function renderList(tasks) {
 }
 
 function hasDraft() {
-  if (state.activeEditor || state.pendingSave) return true;
+  if (state.pendingSave || state.activeEditor?.dirty || state.activeEditor?.failed) return true;
   return Boolean($('#comment-text', elements.task)?.value || $('#wait-result', elements.task)?.value || $('#wait-comment', elements.task)?.value || elements.linkDialog.open || elements.uploadDialog.open || elements.newDialog.open);
 }
+function hasActiveTaskEdit() { return Boolean(state.activeEditor || state.pendingSave || hasDraft()); }
 function closeTaskDialogs() { if (elements.linkDialog.open) elements.linkDialog.close(); if (elements.uploadDialog.open) elements.uploadDialog.close(); }
 function closeDraftDialogs() { closeTaskDialogs(); if (elements.newDialog.open) elements.newDialog.close(); }
 function confirmNavigation() { return !hasDraft() || window.confirm('Discard unsaved task input?'); }
@@ -321,7 +350,7 @@ async function navigateExplorer({ replace = false } = {}) {
   setHistory(buildExplorerPath(state.workspace), replace); updateSurface(); renderExplorer(); elements.tasksCrumb.focus();
 }
 async function switchWorkspace(workspace, routeTask = '', { replace = false } = {}) {
-  if (!confirmNavigation()) { elements.workspace.value = state.workspace; return; }
+  if (!confirmNavigation()) { updateWorkspaceChrome(); return; }
   closeDraftDialogs(); state.workspace = workspace; state.board = null; state.preferences = null; state.routeTask = routeTask; state.selectedTask = null; state.activeEditor = null; state.pendingSave = false; advanceRoute(); updateWorkspaceChrome();
   setHistory(routeTask ? buildTaskPath(workspace, routeTask) : buildExplorerPath(workspace), replace); await loadBoard();
   if (routeTask) await loadTask(routeTask, { focusContent: true }); else renderExplorer();
@@ -331,7 +360,7 @@ async function loadTask(id, { background = false, focusContent = false } = {}) {
   try {
     const detail = await api(buildTaskAPIPath(context));
     if (request !== state.detailRequest || !routeIsCurrent(context)) return;
-    if (background && hasDraft()) return; state.selectedTask = detail; renderTask(detail, { focusContent });
+    if (background && hasActiveTaskEdit()) return; state.selectedTask = detail; renderTask(detail, { focusContent });
   } catch (error) {
     if (request !== state.detailRequest || !routeIsCurrent(context)) return; elements.task.replaceChildren(); const back = button('button', 'Back to tasks', 'back'); back.addEventListener('click', () => navigateExplorer());
     const empty = el('div', 'empty-board'); const inner = el('div'); inner.append(el('p', '', `Could not load ${id}: ${error.message}`), back); empty.append(inner); elements.task.append(empty);
@@ -352,58 +381,104 @@ function renderTask(task, { focusContent = false, restoreFocusKey = '' } = {}) {
   updateSurface(); const scrollTop = elements.task.scrollTop; elements.task.replaceChildren();
   const layout = el('div', 'task-layout'); const documentColumn = el('article', 'task-document'); documentColumn.setAttribute('aria-labelledby', 'task-heading'); const aside = el('aside', 'properties');
   const kicker = el('div', 'task-kicker'); const back = button('button quiet', 'Back to tasks', 'back'); back.dataset.focusKey = 'back'; back.addEventListener('click', () => navigateExplorer()); kicker.append(el('span', 'task-id', task.id), back);
-  const titleWrap = el('h1'); titleWrap.id = 'task-heading'; const title = button('task-title-button', task.title); title.dataset.focusKey = 'field-title'; title.setAttribute('aria-label', `Edit title: ${task.title}`); title.addEventListener('click', () => startEditor(titleWrap, 'title', 'title')); titleWrap.append(title);
+  const title = el('h1', 'task-title-editor', task.title); title.id = 'task-heading'; configureContentEditor(title, 'title', { singleLine: true });
   const saveBanner = el('div', 'save-banner'); saveBanner.id = 'save-banner'; saveBanner.setAttribute('role', 'status'); saveBanner.setAttribute('aria-live', 'polite'); saveBanner.setAttribute('aria-atomic', 'true');
   const descriptionSection = el('section', 'document-description'); const descriptionHeading = el('div', 'section-heading'); descriptionHeading.append(el('h2', '', 'Description'));
-  const editDescription = button('document-edit', 'Edit'); editDescription.dataset.focusKey = 'field-description'; editDescription.setAttribute('aria-label', 'Edit description'); editDescription.addEventListener('click', () => startEditor(descriptionBody, 'description', 'description')); descriptionHeading.append(editDescription);
-  const descriptionBody = el('div', 'markdown'); setMarkdown(descriptionBody, task.description_html); descriptionSection.append(descriptionHeading, descriptionBody);
-  documentColumn.append(kicker, titleWrap, saveBanner, descriptionSection);
+  const descriptionBody = el('div', 'markdown content-editor'); if (task.description_html) setMarkdown(descriptionBody, task.description_html); else descriptionBody.dataset.placeholder = 'Add a description…';
+  configureContentEditor(descriptionBody, 'description'); descriptionSection.append(descriptionHeading, descriptionBody);
+  documentColumn.append(kicker, title, saveBanner, descriptionSection);
   if (task.wait) documentColumn.append(renderWait(task.wait));
   documentColumn.append(renderResources(task), renderRelationships(task.relationships || {}), renderActivity(task.activity || []));
   aside.append(el('h2', '', 'Properties')); const properties = el('div', 'property-list');
   properties.append(propertyRow('Status', 'status', humanize(task.status), 'select'), propertyRow('Assignee', 'assignee', task.assignee || 'Unassigned', 'input'), propertyRow('Labels', 'labels', (task.labels || []).join(', ') || 'None', 'input'));
   properties.append(staticProperty('Project', task.project?.name || task.project?.id || 'None'), staticProperty('Created', formatDate(task.created_at)), staticProperty('Updated', formatDate(task.updated_at)));
   aside.append(properties); layout.append(documentColumn, aside); elements.task.append(layout); elements.task.scrollTop = scrollTop;
-  if (focusContent) { titleWrap.tabIndex = -1; requestAnimationFrame(() => titleWrap.focus()); }
+  if (focusContent) { documentColumn.tabIndex = -1; requestAnimationFrame(() => documentColumn.focus()); }
   else restoreTaskFocus(restoreFocusKey);
 }
 function staticProperty(label, value) { const row = el('div', 'property-row'); row.append(el('span', 'property-label', label), el('span', 'property-value', value)); return row; }
 function propertyRow(label, field, value, kind) {
   const row = el('div', 'property-row'); const holder = el('div'); const edit = button('property-value', value); edit.dataset.focusKey = `field-${field}`; edit.setAttribute('aria-label', `Edit ${label}: ${value}`); edit.addEventListener('click', () => startEditor(holder, field, kind)); holder.append(edit); row.append(el('span', 'property-label', label), holder); return row;
 }
+function insertPlainText(editor, value, singleLine) {
+  const selection = window.getSelection(); if (!selection?.rangeCount) return;
+  const range = selection.getRangeAt(0); if (!editor.contains(range.commonAncestorContainer)) return;
+  const text = plainPasteText(value, singleLine); range.deleteContents(); const fragment = document.createDocumentFragment();
+  text.split('\n').forEach((line, index) => { if (index) fragment.append(document.createElement('br')); fragment.append(document.createTextNode(line)); });
+  const last = fragment.lastChild; range.insertNode(fragment); if (last) { range.setStartAfter(last); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); }
+  editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+}
+function configureContentEditor(editor, field, { singleLine = false } = {}) {
+  editor.contentEditable = 'true'; editor.spellcheck = true; editor.dataset.focusKey = `field-${field}`;
+  editor.setAttribute('aria-label', `Edit ${humanize(field)}`); editor.setAttribute('aria-describedby', 'save-banner');
+  editor.addEventListener('focus', () => {
+    if (state.pendingSave || (state.activeEditor && state.activeEditor.editor !== editor)) { editor.blur(); return; }
+    if (!state.activeEditor) state.activeEditor = { editor, field, original: String(state.selectedTask?.[field] || ''), originalHTML: editor.innerHTML, dirty: false, failed: false, content: true, singleLine };
+  });
+  editor.addEventListener('input', () => {
+    const active = state.activeEditor; if (!active || active.editor !== editor) return;
+    active.dirty = true; active.failed = false; editor.classList.remove('save-error'); editor.removeAttribute('aria-invalid'); setSaveMessage('');
+  });
+  editor.addEventListener('paste', (event) => { event.preventDefault(); insertPlainText(editor, event.clipboardData?.getData('text/plain') || '', singleLine); });
+  editor.addEventListener('drop', (event) => { event.preventDefault(); insertPlainText(editor, event.dataTransfer?.getData('text/plain') || '', singleLine); });
+  editor.addEventListener('beforeinput', (event) => { if (singleLine && (event.inputType === 'insertParagraph' || event.inputType === 'insertLineBreak')) { event.preventDefault(); editor.blur(); } });
+  editor.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); restoreContentEditor(); }
+    else if (singleLine && event.key === 'Enter') { event.preventDefault(); editor.blur(); }
+  });
+  editor.addEventListener('blur', () => { setTimeout(() => { if (state.activeEditor?.editor === editor && !state.activeEditor.failed) saveContentEditor(); }, 0); });
+}
+function restoreContentEditor() {
+  const active = state.activeEditor; if (!active?.content) return;
+  if (active.field === 'title') active.editor.textContent = active.original; else active.editor.innerHTML = active.originalHTML;
+  active.editor.classList.remove('save-error'); active.editor.removeAttribute('aria-invalid'); state.activeEditor = null; setSaveMessage(''); active.editor.blur();
+}
+async function saveContentEditor() {
+  const active = state.activeEditor; if (!active?.content || state.pendingSave) return;
+  if (!active.dirty) { state.activeEditor = null; return; }
+  const value = active.field === 'title' ? normalizedTitle(active.editor.textContent) : markdownFromElement(active.editor);
+  if (active.field === 'title' && !value) { markSaveFailure(active, 'Title cannot be empty'); return; }
+  if (value === active.original) { state.activeEditor = null; return; }
+  await submitEditorValue(active, value);
+}
 function startEditor(container, field, kind) {
   if (state.pendingSave || state.activeEditor) return;
   const task = state.selectedTask; const original = field === 'labels' ? (task.labels || []).join(', ') : String(task[field] || ''); let editor;
-  if (kind === 'description') { editor = el('textarea', 'inline-editor'); editor.value = original; editor.rows = 14; }
-  else if (kind === 'select') { editor = el('select', 'inline-editor'); const statuses = [...(state.board?.statuses || [])]; if (original && !statuses.includes(original)) statuses.push(original); for (const status of statuses) { const option = el('option', '', humanize(status)); option.value = status; option.selected = status === original; editor.append(option); } }
-  else { editor = el('input', `inline-editor${kind === 'title' ? ' title-editor' : ''}`); editor.value = original; }
+  if (kind === 'select') { editor = el('select', 'inline-editor'); const statuses = [...(state.board?.statuses || [])]; if (original && !statuses.includes(original)) statuses.push(original); for (const status of statuses) { const option = el('option', '', humanize(status)); option.value = status; option.selected = status === original; editor.append(option); } }
+  else { editor = el('input', 'inline-editor'); editor.value = original; }
   editor.setAttribute('aria-label', `Edit ${humanize(field)}`); editor.setAttribute('aria-describedby', 'save-banner'); editor.dataset.focusKey = `editor-${field}`;
-  container.replaceChildren(editor); state.activeEditor = { container, editor, field, original, failed: false };
-  editor.addEventListener('input', () => { if (!state.activeEditor) return; state.activeEditor.failed = false; editor.classList.remove('save-error'); editor.removeAttribute('aria-invalid'); setSaveMessage(''); });
-  editor.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); cancelEditor(field); } if (kind === 'description' && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) editor.blur(); });
+  container.replaceChildren(editor); state.activeEditor = { container, editor, field, original, failed: false, dirty: false, content: false };
+  editor.addEventListener('input', () => { if (!state.activeEditor) return; state.activeEditor.dirty = true; state.activeEditor.failed = false; editor.classList.remove('save-error'); editor.removeAttribute('aria-invalid'); setSaveMessage(''); });
+  editor.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); cancelEditor(field); } });
   editor.addEventListener('blur', () => { setTimeout(() => { if (state.activeEditor?.editor === editor && !state.activeEditor.failed) saveEditor(); }, 0); });
-  if (kind === 'select') editor.addEventListener('change', () => editor.blur()); editor.focus(); if (editor.select) editor.select();
+  if (kind === 'select') editor.addEventListener('change', () => { if (state.activeEditor) state.activeEditor.dirty = true; editor.blur(); }); editor.focus(); if (editor.select) editor.select();
 }
 function cancelEditor(field = state.activeEditor?.field) { state.activeEditor = null; if (state.selectedTask) renderTask(state.selectedTask, { restoreFocusKey: `field-${field}` }); }
 async function saveEditor() {
-  const active = state.activeEditor; if (!active || state.pendingSave) return; let value = active.editor.value;
-  if (active.field === 'title' || active.field === 'assignee') value = value.trim();
-  if (active.field === 'title' && !value) { markSaveFailure(active, 'Title cannot be empty'); return; }
+  const active = state.activeEditor; if (!active || active.content || state.pendingSave) return; let value = active.editor.value;
+  if (active.field === 'assignee') value = value.trim();
   const payloadValue = active.field === 'labels' ? labelsFromInput(value) : value;
   const originalValue = active.field === 'labels' ? labelsFromInput(active.original) : active.original;
   if (JSON.stringify(payloadValue) === JSON.stringify(originalValue)) { cancelEditor(active.field); return; }
+  await submitEditorValue(active, payloadValue);
+}
+async function submitEditorValue(active, payloadValue) {
   const context = currentRoute(); const field = active.field; const submitted = JSON.stringify({ [field]: payloadValue });
-  state.pendingSave = true; setSaveMessage('Saving…'); active.editor.disabled = true;
+  state.pendingSave = true; setSaveMessage('Saving…');
+  if (active.content) active.editor.contentEditable = 'false'; else active.editor.disabled = true;
   try {
     const updated = await api(buildTaskAPIPath(context), { method: 'PATCH', body: submitted });
     if (!routeIsCurrent(context)) return;
     const focusKey = taskFocusKey(); state.selectedTask = updated; state.activeEditor = null; state.pendingSave = false; renderTask(updated, { restoreFocusKey: focusKey || `field-${field}` }); setSaveMessage('Saved'); await loadBoard({ quiet: true });
   } catch (error) {
     if (!routeIsCurrent(context)) return;
-    state.pendingSave = false; active.editor.disabled = false; markSaveFailure(active, error.message);
+    state.pendingSave = false; if (active.content) active.editor.contentEditable = 'true'; else active.editor.disabled = false; markSaveFailure(active, error.message);
   }
 }
-function markSaveFailure(active, message) { active.failed = true; active.editor.classList.add('save-error'); active.editor.setAttribute('aria-invalid', 'true'); setSaveMessage(`Not saved · ${message}`, true, () => { active.failed = false; active.editor.removeAttribute('aria-invalid'); saveEditor(); }); }
+function markSaveFailure(active, message) {
+  active.failed = true; active.editor.classList.add('save-error'); active.editor.setAttribute('aria-invalid', 'true');
+  setSaveMessage(`Not saved · ${message}`, true, () => { active.failed = false; active.editor.removeAttribute('aria-invalid'); if (active.content) saveContentEditor(); else saveEditor(); });
+}
 function setSaveMessage(message, error = false, retry) {
   const banner = $('#save-banner', elements.task); if (!banner) return; banner.className = `save-banner${error ? ' error' : ''}`; banner.replaceChildren(document.createTextNode(message));
   if (retry) { const action = button('button quiet', 'Retry'); action.addEventListener('click', retry); banner.append(document.createTextNode(' '), action); }
@@ -510,16 +585,23 @@ function wireControls() {
   elements.refresh.replaceChildren(icon('refresh')); elements.viewSettingsButton.replaceChildren(icon('settings'));
   document.querySelectorAll('.dialog-close.icon-button').forEach((node) => node.replaceChildren(icon('close')));
   elements.home.addEventListener('click', () => navigateExplorer()); elements.tasksCrumb.addEventListener('click', () => navigateExplorer());
-  elements.workspace.addEventListener('change', () => switchWorkspace(elements.workspace.value));
+  elements.workspaceButton.addEventListener('click', (event) => { event.stopPropagation(); if (state.workspacePickerOpen) closeWorkspacePicker({ restoreFocus: true }); else openWorkspacePicker(); });
+  elements.workspaceButton.addEventListener('keydown', (event) => { if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); openWorkspacePicker(event.key); } else if (event.key === 'Escape' && state.workspacePickerOpen) { event.preventDefault(); closeWorkspacePicker({ restoreFocus: true }); } });
   elements.actor.value = readStorage('docket.actor', 'web'); elements.actor.addEventListener('change', () => writeStorage('docket.actor', currentActor()));
-  elements.refresh.addEventListener('click', async () => { try { await loadWorkspaces(); updateWorkspaceChrome(); await loadBoard(); if (state.routeTask && !hasDraft()) await loadTask(state.routeTask); } catch (error) { showNotice(error.message, true); } });
+  elements.refresh.addEventListener('click', async () => { try { await loadWorkspaces(); updateWorkspaceChrome(); await loadBoard(); if (state.routeTask && !hasActiveTaskEdit()) await loadTask(state.routeTask); } catch (error) { showNotice(error.message, true); } });
   elements.newTask.addEventListener('click', openNewTask); elements.boardView.addEventListener('click', () => { state.preferences.view = 'board'; savePreferences(); renderExplorer(); }); elements.listView.addEventListener('click', () => { state.preferences.view = 'list'; savePreferences(); renderExplorer(); });
   elements.search.addEventListener('input', () => { state.preferences.filters.query = elements.search.value; savePreferences(); renderExplorer(); elements.search.focus(); });
   elements.order.addEventListener('change', () => { state.preferences.order = elements.order.value; savePreferences(); renderExplorer(); });
   elements.filterButton.addEventListener('click', (event) => { event.stopPropagation(); if (elements.filterPanel.hidden) openPanel(elements.filterPanel, elements.filterButton); else closePanels({ restoreFocus: true }); });
   elements.viewSettingsButton.addEventListener('click', (event) => { event.stopPropagation(); if (elements.viewSettingsPanel.hidden) openPanel(elements.viewSettingsPanel, elements.viewSettingsButton); else closePanels({ restoreFocus: true }); });
-  document.addEventListener('click', (event) => { if (!event.target.closest('.control-panel') && !event.target.closest('#filter-button') && !event.target.closest('#view-settings-button')) closePanels(); });
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && state.panelTrigger) { event.preventDefault(); closePanels({ restoreFocus: true }); } });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.control-panel') && !event.target.closest('#filter-button') && !event.target.closest('#view-settings-button')) closePanels();
+    if (!event.target.closest('.workspace-picker')) closeWorkspacePicker();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.panelTrigger) { event.preventDefault(); closePanels({ restoreFocus: true }); }
+    else if (event.key === 'Escape' && state.workspacePickerOpen) { event.preventDefault(); closeWorkspacePicker({ restoreFocus: true }); }
+  });
   elements.newForm.addEventListener('submit', submitNewTask); elements.linkForm.addEventListener('submit', submitLink); elements.uploadForm.addEventListener('submit', submitUpload);
   document.querySelectorAll('.dialog-close').forEach((node) => node.addEventListener('click', () => node.closest('dialog').close()));
   window.addEventListener('popstate', handlePopState);
@@ -543,8 +625,8 @@ async function start() {
     setHistory(state.routeTask ? buildTaskPath(state.workspace, state.routeTask) : buildExplorerPath(state.workspace), true);
     if (!route.valid) showNotice(route.reason === 'unknown-workspace' ? 'The requested workspace is not registered; showing your default workspace.' : 'The requested route was invalid; showing your default workspace.', true);
     if (state.routeTask) await loadTask(state.routeTask, { focusContent: true }); else renderExplorer();
-    setInterval(async () => { if (document.hidden || state.dragging || elements.newDialog.open) return; state.refreshes += 1; if (state.refreshes % 5 === 0) { await loadWorkspaces(); updateWorkspaceChrome(); } await loadBoard({ quiet: true }); if (state.routeTask && !hasDraft()) await loadTask(state.routeTask, { background: true }); }, 3000);
-  } catch (error) { setConnection('error', 'Disconnected'); showNotice(`Could not start Docket: ${error.message}`, true); }
+    setInterval(async () => { if (document.hidden || state.dragging || elements.newDialog.open) return; state.refreshes += 1; if (state.refreshes % 5 === 0) { await loadWorkspaces(); updateWorkspaceChrome(); } await loadBoard({ quiet: true }); if (state.routeTask && !hasActiveTaskEdit()) await loadTask(state.routeTask, { background: true }); }, 3000);
+  } catch (error) { showNotice(`Could not start Docket: ${error.message}`, true); }
 }
 
 start();
