@@ -352,6 +352,18 @@ func (operations Tasks) AddReference(id, kind, referenceURL, title string) (*tas
 	return value, &reference, nil
 }
 
+// Attach stores a browser/SDK-provided file and emits task.file_attached in
+// the same per-task-lock transaction as the file and manifest write.
+func (operations Tasks) Attach(id, name string, data []byte, caption string) (*task.Attachment, error) {
+	return task.AttachDataWithCommit(operations.Workspace, id, name, data, caption, operations.Actor, func(value *task.Task, attachment *task.Attachment) error {
+		return operations.append(events.Event{
+			Type: events.FileAttached, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{"file": attachment.File, "mime": attachment.Mime},
+		})
+	})
+}
+
 // RemoveReference removes one reference by its stable ID.
 func (operations Tasks) RemoveReference(id, referenceID string) (*task.Task, *task.Reference, error) {
 	referenceID = strings.TrimSpace(referenceID)

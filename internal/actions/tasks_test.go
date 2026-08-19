@@ -2,6 +2,8 @@ package actions_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tvdavies/docket/internal/actions"
@@ -258,6 +260,52 @@ func TestWaitMutationRollsBackWhenEventFails(t *testing.T) {
 	}
 	if reloaded.Wait != nil {
 		t.Fatalf("failed wait mutation persisted: %#v", reloaded.Wait)
+	}
+}
+
+func TestAttachmentActionEmitsEventAndRollsBackOnFailure(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Attachment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := actions.Tasks{Workspace: ws, Actor: "browser"}
+	attachment, err := operations.Attach(created.ID, "report.txt", []byte("hello"), "result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attachment.AddedBy != "browser" || attachment.Caption != "result" {
+		t.Fatalf("attachment = %#v", attachment)
+	}
+	log, err := events.All(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log) != 1 || log[0].Type != events.FileAttached {
+		t.Fatalf("events = %#v", log)
+	}
+
+	failure := errors.New("event disk unavailable")
+	failing := actions.Tasks{Workspace: ws, Actor: "browser", Append: func(events.Event) error { return failure }}
+	if _, err := failing.Attach(created.ID, "rollback.txt", []byte("remove me"), ""); !errors.Is(err, failure) {
+		t.Fatalf("attach error = %v", err)
+	}
+	reloaded, err := task.Load(ws, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments, err := reloaded.Attachments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attachments) != 1 || attachments[0].File != "report.txt" {
+		t.Fatalf("failed attachment was not rolled back: %#v", attachments)
+	}
+	if _, err := os.Stat(filepath.Join(reloaded.AttachmentsDir(), "rollback.txt")); !os.IsNotExist(err) {
+		t.Fatalf("failed attachment file remains on disk: %v", err)
 	}
 }
 

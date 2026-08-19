@@ -10,15 +10,17 @@ Start it in the foreground with `docket serve --all`, or manage the background u
 
 ## Capabilities
 
-- switch between registered workspaces;
-- view tasks grouped by configured status;
-- drag cards between status columns;
-- create tasks;
-- inspect and edit title, status, assignee, labels, and description;
-- see active waits directly on cards and resolve them with optional feedback;
-- follow typed plan, pull-request, ticket, run, and session references in a new tab;
-- read relationships and attachment metadata;
-- read a chronological activity timeline and add comments; and
+- switch workspaces from a breadcrumb and use clean, shareable task URLs;
+- switch between fixed-lane board and compact list views;
+- filter by text, status, assignee, label, project, or task state;
+- order by updated time, created time, ID, or title;
+- hide statuses per workspace in browser-local view preferences;
+- drag cards between independently scrolling status lanes and create tasks;
+- read each task as a rendered Markdown document;
+- edit title, description, status, assignee, and labels in place with blur autosave;
+- see and resolve active waits with optional feedback;
+- manage typed link resources and securely upload or download file resources;
+- read relationships and a chronological activity timeline with comments as cards; and
 - choose the actor recorded on browser mutations.
 
 The board reads authoritative task files on every refresh and does not maintain
@@ -32,17 +34,19 @@ Browser mutations therefore trigger normal handlers. The HTTP response does not
 wait for handler completion; the service watcher drains the resulting event
 asynchronously.
 
-## Deep links
+## Views, preferences, and deep links
 
-Use `?workspace=NAME&task=TASK-ID` to link directly to a task drawer:
+The canonical explorer and task URLs are:
 
 ```text
-http://127.0.0.1:7463/?workspace=dispatch&task=JOB-0001
+http://127.0.0.1:7463/workspaces/dispatch
+http://127.0.0.1:7463/workspaces/dispatch/tasks/JOB-0001
 ```
 
-The workspace and task query parameters are generic navigation state. External
-execution systems can use them for reciprocal links without Docket knowing the
-external protocol or session schema.
+Existing `?workspace=NAME&task=TASK-ID` links remain supported and are
+canonicalized to the clean task URL on load. View mode, filters, ordering, empty
+status visibility, and hidden statuses are stored per workspace in browser local
+storage; they do not modify `.docket/config.yaml` or task files.
 
 ## Drag and drop
 
@@ -54,15 +58,19 @@ Unknown statuses found in older task files are displayed in an additional column
 
 The **Acting as** field is stored in browser local storage and sent as `X-Docket-Actor` on writes. It becomes the actor on task events and comment author metadata. The default is `web`.
 
-## Refresh behaviour
+## Editing and refresh behaviour
 
-The board refreshes every three seconds and when **Refresh** is pressed. Polling pauses while:
+Task descriptions and comments are stored as Markdown and rendered with raw HTML
+disabled. Task titles and rendered descriptions are directly contenteditable,
+without swapping to a separate input or source editor; property controls remain
+compact field editors. Blur converts edited rendered content back to Markdown
+and sends a partial task PATCH. Untouched Markdown is never rewritten. Failed
+saves retain the editable draft and expose a retry action.
 
-- a card is being dragged;
-- a task form has unsaved changes; or
-- the new-task dialog is open.
-
-This prevents background refreshes from replacing active edits.
+The explorer refreshes every three seconds and when **Refresh** is pressed. Lane,
+list, and horizontal board scroll positions survive quiet refreshes. A focused or
+failed task editor, comment draft, wait-resolution draft, or resource dialog is
+never replaced by background task-detail polling.
 
 ## Security model
 
@@ -70,10 +78,14 @@ The interface has no authentication and Docket binds to loopback by default. A n
 
 Mutation endpoints:
 
-- require `Content-Type: application/json`;
+- require `Content-Type: application/json`, except the bounded multipart attachment upload;
 - reject non-loopback Host headers on the default loopback service, preventing DNS-rebinding reads and writes;
 - reject cross-origin browser writes; and
-- limit request bodies to 1 MiB.
+- limit JSON request bodies to 1 MiB and uploaded files to 25 MiB.
+
+Downloads are restricted to exact attachment-manifest entries and are always
+served with `Content-Disposition: attachment`, `nosniff`, and a sandbox CSP so
+uploaded HTML cannot execute on the Docket origin.
 
 Do not expose the board to an untrusted network merely by passing `--allow-remote`; put authenticated access in front of it first.
 
@@ -94,6 +106,8 @@ The UI uses a small local JSON API:
 | `POST` | `/api/workspaces/{name}/tasks/{id}/references` | Add a typed external reference |
 | `DELETE` | `/api/workspaces/{name}/tasks/{id}/references/{reference}` | Remove a reference; send `{}` JSON |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/comments` | Append a comment |
+| `POST` | `/api/workspaces/{name}/tasks/{id}/attachments` | Upload a file and optional caption (multipart, 25 MiB max) |
+| `GET` | `/api/workspaces/{name}/tasks/{id}/attachments/{file}` | Download an exact manifest-backed file |
 
 ### Create
 
@@ -164,4 +178,11 @@ make build
 ./bin/docket serve --all --listen 127.0.0.1:7464
 ```
 
-The embedded HTML, CSS, and JavaScript live under `internal/service/web/`. Rebuilding the Go binary embeds changed assets; no frontend package manager or build step is required.
+The embedded HTML, CSS, and JavaScript modules live under `internal/service/web/`.
+Rebuilding the Go binary embeds changed assets; no frontend package manager or
+runtime build step is required. Pure route and view-model tests use Bun without
+installing packages:
+
+```sh
+bun test internal/service/web/*.test.js
+```

@@ -65,7 +65,7 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		assetHandler.ServeHTTP(writer, request)
 	})))
 	mux.HandleFunc("GET /", func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/" {
+		if request.URL.Path != "/" && !strings.HasPrefix(request.URL.Path, "/workspaces/") {
 			http.NotFound(writer, request)
 			return
 		}

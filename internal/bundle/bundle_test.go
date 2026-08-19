@@ -47,6 +47,9 @@ func TestBundleIncludesWaitReferencesSessionsAndUnifiedActivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.CreatedAt == "" || result.UpdatedAt == "" {
+		t.Fatalf("bundle timestamps = created %q updated %q", result.CreatedAt, result.UpdatedAt)
+	}
 	if result.Wait == nil || result.Wait.Kind != "plan_feedback" {
 		t.Fatalf("wait = %#v", result.Wait)
 	}

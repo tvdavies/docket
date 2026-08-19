@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -251,6 +252,21 @@ func TestBoardAPIValidatesBeforeMutationAndProtectsWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://"+strings.TrimPrefix(server.URL, "http://"))
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("same-host different-scheme response = %d", response.StatusCode)
+	}
+	response.Body.Close()
+
+	request, err = http.NewRequest(http.MethodPatch, server.URL+"/api/workspaces/demo/tasks/"+created.ID, strings.NewReader(`{"status":"done"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.Host = "attacker.example"
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "http://attacker.example")
@@ -301,6 +317,150 @@ func TestBoardAPIValidatesBeforeMutationAndProtectsWrites(t *testing.T) {
 		t.Fatal("encoded task traversal unexpectedly succeeded")
 	}
 	response.Body.Close()
+}
+
+func TestTaskDetailRendersSafeMarkdownAndBoardMetadata(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Markdown", Description: "# Context\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := task.AddComment(ws, created.ID, "reviewer", "", "**Approved** <img src=x onerror=alert(1)>"); err != nil {
+		t.Fatal(err)
+	}
+	manager, server := newBoardServer(t, "demo", root)
+	defer manager.Stop()
+	defer server.Close()
+
+	response := getJSON(t, server.URL+"/api/workspaces/demo/tasks/"+created.ID)
+	var detail struct {
+		CreatedAt       string `json:"created_at"`
+		UpdatedAt       string `json:"updated_at"`
+		DescriptionHTML string `json:"description_html"`
+		Activity        []struct {
+			BodyHTML string `json:"body_html"`
+		} `json:"activity"`
+	}
+	decodeResponse(t, response, &detail)
+	if detail.CreatedAt == "" || detail.UpdatedAt == "" || !strings.Contains(detail.DescriptionHTML, "<h1>Context</h1>") {
+		t.Fatalf("detail metadata/markdown = %#v", detail)
+	}
+	combined := strings.ToLower(detail.DescriptionHTML)
+	for _, entry := range detail.Activity {
+		combined += strings.ToLower(entry.BodyHTML)
+	}
+	for _, unsafe := range []string{"<script", "javascript:", "onerror="} {
+		if strings.Contains(combined, unsafe) {
+			t.Fatalf("rendered detail contains unsafe %q: %s", unsafe, combined)
+		}
+	}
+
+	response = getJSON(t, server.URL+"/api/workspaces/demo/board")
+	var board struct {
+		Tasks []struct {
+			CreatedAt     string `json:"created_at"`
+			UpdatedAt     string `json:"updated_at"`
+			ResourceCount int    `json:"resource_count"`
+		} `json:"tasks"`
+	}
+	decodeResponse(t, response, &board)
+	if len(board.Tasks) != 1 || board.Tasks[0].CreatedAt == "" || board.Tasks[0].UpdatedAt == "" || board.Tasks[0].ResourceCount != 0 {
+		t.Fatalf("board metadata = %#v", board.Tasks)
+	}
+}
+
+func TestAttachmentUploadDownloadAndSecurity(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Resources"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, server := newBoardServer(t, "demo", root)
+	defer manager.Stop()
+	defer server.Close()
+	target := server.URL + "/api/workspaces/demo/tasks/" + created.ID + "/attachments"
+
+	response := sendMultipart(t, target, "report.html", []byte("<script>alert(1)</script>"), "diagnostic", map[string]string{"X-Docket-Actor": "uploader"})
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("upload status = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	var uploaded bundle.Bundle
+	decodeResponse(t, response, &uploaded)
+	if len(uploaded.Attachments) != 1 || uploaded.Attachments[0].File != "report.html" || uploaded.Attachments[0].AddedBy != "uploader" {
+		t.Fatalf("uploaded attachment = %#v", uploaded.Attachments)
+	}
+
+	response = sendMultipart(t, target, "report.html", []byte("second"), "", nil)
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("duplicate upload status = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	decodeResponse(t, response, &uploaded)
+	if len(uploaded.Attachments) != 2 || uploaded.Attachments[1].File != "report-1.html" {
+		t.Fatalf("duplicate attachments = %#v", uploaded.Attachments)
+	}
+
+	response = getJSON(t, target+"/report.html")
+	body := readBody(t, response)
+	if response.StatusCode != http.StatusOK || body != "<script>alert(1)</script>" {
+		t.Fatalf("download = %d %q", response.StatusCode, body)
+	}
+	if !strings.HasPrefix(response.Header.Get("Content-Disposition"), "attachment") || response.Header.Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(response.Header.Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("unsafe download headers: %#v", response.Header)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, target, strings.NewReader("not multipart"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("wrong upload content type = %d", response.StatusCode)
+	}
+	response.Body.Close()
+
+	response = sendMultipart(t, target, "cross.txt", []byte("x"), "", map[string]string{"Origin": "https://malicious.example"})
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin upload = %d", response.StatusCode)
+	}
+	response.Body.Close()
+
+	response = sendMultipart(t, target, "wrong-scheme.txt", []byte("x"), "", map[string]string{"Origin": "https://" + strings.TrimPrefix(server.URL, "http://")})
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("same-host different-scheme upload = %d", response.StatusCode)
+	}
+	response.Body.Close()
+
+	response = sendMultipart(t, target, "too-large.bin", bytes.Repeat([]byte{'x'}, (25<<20)+1), "", nil)
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload = %d: %s", response.StatusCode, readBody(t, response))
+	}
+	response.Body.Close()
+
+	response = getJSON(t, target+"/%2e%2e")
+	if response.StatusCode == http.StatusOK {
+		t.Fatal("attachment traversal unexpectedly succeeded")
+	}
+	response.Body.Close()
+
+	log, err := events.All(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log) != 2 || log[0].Type != events.FileAttached || log[0].Actor != "uploader" {
+		t.Fatalf("attachment events = %#v", log)
+	}
 }
 
 func TestSlowRequestBodyDoesNotHoldWorkspaceLease(t *testing.T) {
@@ -363,7 +523,7 @@ func TestBoardAssetsAreEmbeddedWithStrictCSP(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := readBody(t, response)
-	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Kanban board") || !strings.Contains(body, "/assets/app.js") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Kanban board") || !strings.Contains(body, "type=\"module\"") || !strings.Contains(body, "/assets/app.js") {
 		t.Fatalf("index response = %d %q", response.StatusCode, body)
 	}
 	csp := response.Header.Get("Content-Security-Policy")
@@ -376,12 +536,26 @@ func TestBoardAssetsAreEmbeddedWithStrictCSP(t *testing.T) {
 		t.Fatal(err)
 	}
 	asset := readBody(t, response)
-	if response.StatusCode != http.StatusOK || !strings.Contains(asset, "async function loadBoard") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(asset, "async function loadBoard") || !strings.Contains(asset, "buildTaskPath") {
 		t.Fatalf("JS asset response = %d", response.StatusCode)
 	}
-	if !strings.Contains(asset, "chip.target = '_blank'") || !strings.Contains(asset, "event.stopPropagation()") {
-		t.Fatal("task-card reference links do not open independently in a new tab")
+
+	response, err = http.Get(server.URL + "/workspaces/demo/tasks/TASK-0001")
+	if err != nil {
+		t.Fatal(err)
 	}
+	deepLink := readBody(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(deepLink, "Docket tasks") || response.Header.Get("Content-Security-Policy") != csp {
+		t.Fatalf("deep-link shell = %d %q", response.StatusCode, deepLink)
+	}
+	response, err = http.Get(server.URL + "/not-an-app-route")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown UI route = %d", response.StatusCode)
+	}
+	response.Body.Close()
 }
 
 func newBoardServer(t *testing.T, name, root string) (*service.Manager, *httptest.Server) {
@@ -410,6 +584,40 @@ func sendJSON(t *testing.T, method, target string, value any, headers map[string
 	request.Header.Set("Content-Type", "application/json")
 	for key, header := range headers {
 		request.Header.Set(key, header)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func sendMultipart(t *testing.T, target, name string, data []byte, caption string, headers map[string]string) *http.Response {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if caption != "" {
+		if err := writer.WriteField("caption", caption); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, target, &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	for key, value := range headers {
+		request.Header.Set(key, value)
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {

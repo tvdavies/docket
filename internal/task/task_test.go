@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -160,6 +161,67 @@ func TestAttachFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(reloaded.AttachmentsDir(), "repro.log")); err != nil {
 		t.Fatal("attached file missing on disk")
+	}
+	duplicate, err := task.AttachData(ws, created.ID, "repro.log", []byte("new"), "", "tom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.File != "repro-1.log" {
+		t.Fatalf("duplicate filename = %q", duplicate.File)
+	}
+	if _, err := task.AttachData(ws, created.ID, "../outside.txt", []byte("bad"), "", "tom"); err == nil {
+		t.Fatal("attachment traversal unexpectedly accepted")
+	}
+	if _, _, err := reloaded.AttachmentPath("../repro.log"); err == nil {
+		t.Fatal("attachment download traversal unexpectedly accepted")
+	}
+}
+
+func TestAttachDataWithCommitHoldsTaskLockThroughCommit(t *testing.T) {
+	ws := newWorkspace(t)
+	created, err := task.Create(ws, task.CreateOptions{Title: "locked attachment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := task.AttachDataWithCommit(ws, created.ID, "first.txt", []byte("one"), "", "actor", func(value *task.Task, attachment *task.Attachment) error {
+			if value.Title != created.Title || attachment.File != "first.txt" {
+				return os.ErrInvalid
+			}
+			close(commitStarted)
+			<-releaseCommit
+			return nil
+		})
+		firstDone <- err
+	}()
+	<-commitStarted
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := task.AttachData(ws, created.ID, "second.txt", []byte("two"), "", "actor")
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second attachment completed before commit released the task lock: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	close(releaseCommit)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := task.Load(ws, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments, err := reloaded.Attachments()
+	if err != nil || len(attachments) != 2 {
+		t.Fatalf("attachments after serialized commits = %#v, %v", attachments, err)
 	}
 }
 
