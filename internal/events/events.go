@@ -62,8 +62,15 @@ func Append(ws *workspace.Workspace, event Event) error {
 // values remain advisory under concurrent writers, while physical log order is
 // authoritative for durable cursors.
 func AppendAll(ws *workspace.Workspace, input []Event) error {
+	_, err := AppendAllWithCursor(ws, input)
+	return err
+}
+
+// AppendAllWithCursor is AppendAll plus the exact physical boundary committed
+// by this event group. The boundary is captured under the event-log append lock.
+func AppendAllWithCursor(ws *workspace.Workspace, input []Event) (LogCursor, error) {
 	if len(input) == 0 {
-		return nil
+		return CurrentLogCursor(ws)
 	}
 	baseSequence := nextSeq(ws)
 	lines := make([][]byte, 0, len(input))
@@ -76,11 +83,12 @@ func AppendAll(ws *workspace.Workspace, input []Event) error {
 		}
 		line, err := json.Marshal(event)
 		if err != nil {
-			return err
+			return LogCursor{}, err
 		}
 		lines = append(lines, line)
 	}
-	return store.AppendLines(ws.EventsFile(), lines)
+	offset, prefixHash, err := store.AppendLinesCheckpoint(ws.EventsFile(), lines)
+	return LogCursor{Offset: offset, PrefixHash: prefixHash}, err
 }
 
 // nextSeq derives a sequence number from the current line count. It is

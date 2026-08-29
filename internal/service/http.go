@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	webassets "github.com/tvdavies/docket/web"
 )
 
 //go:embed web/*
-var embeddedWeb embed.FS
+var embeddedClassicWeb embed.FS
 
 // ValidateListen refuses a non-loopback HTTP bind unless remote access was
 // explicitly allowed. The board has no authentication.
@@ -55,21 +57,31 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 	mux := http.NewServeMux()
 	registerAPI(mux, manager, allowRemoteHost)
 
-	assets, err := fs.Sub(embeddedWeb, "web")
+	nextAssets, err := fs.Sub(webassets.Dist, "dist")
 	if err != nil {
 		panic(err)
 	}
-	assetHandler := http.FileServer(http.FS(assets))
-	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Cache-Control", "no-cache")
-		assetHandler.ServeHTTP(writer, request)
-	})))
+	classicAssets, err := fs.Sub(embeddedClassicWeb, "web")
+	if err != nil {
+		panic(err)
+	}
+	mux.Handle("GET /assets/", cacheAssets(http.FileServer(http.FS(nextAssets)), true))
+	mux.Handle("GET /classic-assets/", http.StripPrefix("/classic-assets/", cacheAssets(http.FileServer(http.FS(classicAssets)), false)))
 	mux.HandleFunc("GET /", func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/" && !strings.HasPrefix(request.URL.Path, "/workspaces/") {
+		path := request.URL.Path
+		classic := path == "/classic" || path == "/classic/" || strings.HasPrefix(path, "/classic/workspaces/")
+		next := path == "/" || path == "/next" || path == "/next/" || strings.HasPrefix(path, "/next/workspaces/") || strings.HasPrefix(path, "/workspaces/")
+		if !classic && !next {
 			http.NotFound(writer, request)
 			return
 		}
-		index, readErr := embeddedWeb.ReadFile("web/index.html")
+		var index []byte
+		var readErr error
+		if classic {
+			index, readErr = embeddedClassicWeb.ReadFile("web/index.html")
+		} else {
+			index, readErr = webassets.Dist.ReadFile("dist/index.html")
+		}
 		if readErr != nil {
 			http.Error(writer, "Docket board unavailable", http.StatusInternalServerError)
 			return
@@ -89,6 +101,17 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 			return
 		}
 		mux.ServeHTTP(writer, request)
+	})
+}
+
+func cacheAssets(next http.Handler, immutable bool) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if immutable {
+			writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			writer.Header().Set("Cache-Control", "no-cache")
+		}
+		next.ServeHTTP(writer, request)
 	})
 }
 

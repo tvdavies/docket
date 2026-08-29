@@ -1,6 +1,7 @@
 package events_test
 
 import (
+	"os"
 	"sync"
 	"testing"
 
@@ -15,6 +16,73 @@ func newWorkspace(t *testing.T) *workspace.Workspace {
 		t.Fatal(err)
 	}
 	return ws
+}
+
+func TestAppendCursorAndPhysicalResume(t *testing.T) {
+	ws := newWorkspace(t)
+	cursor, err := events.AppendAllWithCursor(ws, []events.Event{
+		{Type: events.TaskCreated, Task: "TASK-0001"},
+		{Type: events.TaskMoved, Task: "TASK-0001"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(ws.EventsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.Offset != int64(len(data)) || len(cursor.PrefixHash) != 64 {
+		t.Fatalf("cursor = %#v, file size = %d", cursor, len(data))
+	}
+	if _, err := events.AppendAllWithCursor(ws, []events.Event{{Type: events.TaskCommented, Task: "TASK-0001"}}); err != nil {
+		t.Fatal(err)
+	}
+	records, end, err := events.ReadFromOffset(ws, cursor.Offset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Event.Type != events.TaskCommented || records[0].Offset != end {
+		t.Fatalf("records = %#v end=%d", records, end)
+	}
+	if _, _, err := events.ReadFromOffset(ws, cursor.Offset-1); err == nil {
+		t.Fatal("expected non-boundary cursor to fail")
+	}
+	if err := events.ValidateLogCursor(ws, cursor); err != nil {
+		t.Fatalf("fresh cursor rejected: %v", err)
+	}
+	data[0] ^= 1
+	if err := os.WriteFile(ws.EventsFile(), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.ValidateLogCursor(ws, cursor); err == nil {
+		t.Fatal("rewritten history kept a valid cursor")
+	}
+}
+
+func TestCurrentLogCursorStopsBeforePartialTrailingLine(t *testing.T) {
+	ws := newWorkspace(t)
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	complete, err := events.CurrentLogCursor(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(ws.EventsFile(), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(`{"partial":`); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	current, err := events.CurrentLogCursor(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != complete {
+		t.Fatalf("partial line advanced cursor: complete=%#v current=%#v", complete, current)
+	}
 }
 
 func TestAppendAndReadAll(t *testing.T) {

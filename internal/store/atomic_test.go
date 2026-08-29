@@ -11,6 +11,21 @@ import (
 	"github.com/tvdavies/docket/internal/store"
 )
 
+func TestAppendLinesAtReturnsCommittedGroupBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	first, err := store.AppendLinesAt(path, [][]byte{[]byte("one"), []byte("two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.AppendLinesAt(path, [][]byte{[]byte("three")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != int64(len("one\ntwo\n")) || second != int64(len("one\ntwo\nthree\n")) {
+		t.Fatalf("offsets = %d, %d", first, second)
+	}
+}
+
 func TestAppendLinesKeepsConcurrentGroupsContiguous(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	const writers = 24

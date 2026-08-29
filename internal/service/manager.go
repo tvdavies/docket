@@ -39,6 +39,7 @@ type WorkspaceStatus struct {
 type runtime struct {
 	entry  registry.WorkspaceEntry
 	cancel context.CancelFunc
+	stream *workspaceStream
 
 	mu     sync.RWMutex
 	status WorkspaceStatus
@@ -81,6 +82,7 @@ func (m *Manager) SetWorkspaces(entries []registry.WorkspaceEntry) {
 			delete(wanted, name)
 			continue
 		}
+		running.stream.close()
 		running.cancel()
 		delete(m.runtimes, name)
 	}
@@ -89,6 +91,7 @@ func (m *Manager) SetWorkspaces(entries []registry.WorkspaceEntry) {
 		running := &runtime{
 			entry:  entry,
 			cancel: cancel,
+			stream: newWorkspaceStream(),
 			status: WorkspaceStatus{
 				Name: entry.Name, Path: entry.Path, State: "starting", UpdatedAt: now(),
 			},
@@ -177,6 +180,7 @@ func (m *Manager) Stop() {
 	}
 	m.stopped = true
 	for name, running := range m.runtimes {
+		running.stream.close()
 		running.cancel()
 		delete(m.runtimes, name)
 	}
@@ -212,6 +216,7 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 		}
 
 		started := false
+		running.stream.restart()
 		drain := func() error {
 			fresh, err := workspace.OpenRoot(running.entry.Path)
 			if err != nil {
@@ -233,7 +238,13 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 			return errors.Join(errs...)
 		}
 
-		err = events.WatchWithSetup(ws, false, done, func() error {
+		err = events.WatchWithSetupCursor(ws, false, done, func(cursor events.LogCursor, reset bool) error {
+			fresh, err := workspace.OpenRoot(running.entry.Path)
+			if err != nil {
+				return err
+			}
+			running.stream.observe(cursor, reset)
+			running.stream.setConfig(configForStream(fresh))
 			if err := drain(); err != nil {
 				return err
 			}
@@ -245,9 +256,12 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 				status.UpdatedAt = now()
 			})
 			return nil
-		}, func(event events.Event) error {
+		}, func(record events.LogRecord) error {
+			if err := m.publishTaskEvent(running, record); err != nil {
+				return err
+			}
 			running.update(func(status *WorkspaceStatus) {
-				status.LastEvent = event.Time
+				status.LastEvent = record.Event.Time
 				status.UpdatedAt = now()
 			})
 			return drain()

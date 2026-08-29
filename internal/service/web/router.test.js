@@ -6,7 +6,7 @@ import {
 
 describe('router', () => {
   test('round trips clean workspace and task routes', () => {
-    expect(buildExplorerPath('client a')).toBe('/workspaces/client%20a');
+    expect(buildExplorerPath('client a')).toBe('/classic/workspaces/client%20a');
     const path = buildTaskPath('client a', 'TASK-0001');
     expect(parseLocation({ pathname: path, search: '' })).toEqual({ workspace: 'client a', task: 'TASK-0001', legacy: false, valid: true });
   });
@@ -19,8 +19,8 @@ describe('router', () => {
 
   test('rejects unrelated, malformed, and unknown-workspace routes without retaining task ids', () => {
     expect(parseLocation({ pathname: '/other/path', search: '' }).valid).toBe(false);
-    expect(parseLocation({ pathname: '/workspaces/demo/not-tasks/x', search: '' }).valid).toBe(false);
-    const unknown = resolveRoute(parseLocation({ pathname: '/workspaces/missing/tasks/TASK-9999', search: '' }), ['demo'], 'demo');
+    expect(parseLocation({ pathname: '/classic/workspaces/demo/not-tasks/x', search: '' }).valid).toBe(false);
+    const unknown = resolveRoute(parseLocation({ pathname: '/classic/workspaces/missing/tasks/TASK-9999', search: '' }), ['demo'], 'demo');
     expect(unknown).toEqual({ valid: false, workspace: 'demo', task: '', legacy: false, reason: 'unknown-workspace' });
     const unknownLegacy = resolveRoute(parseLocation({ pathname: '/', search: '?workspace=missing&task=TASK-9999' }), ['demo'], 'demo');
     expect(unknownLegacy.task).toBe('');

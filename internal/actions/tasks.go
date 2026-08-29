@@ -25,10 +25,11 @@ type AppendEvent func(events.Event) error
 
 // Tasks performs task operations for one actor and session.
 type Tasks struct {
-	Workspace *workspace.Workspace
-	Actor     string
-	Session   string
-	Append    AppendEvent
+	Workspace    *workspace.Workspace
+	Actor        string
+	Session      string
+	Append       AppendEvent
+	RecordCursor func(events.LogCursor)
 }
 
 func (operations Tasks) append(event events.Event) error {
@@ -37,7 +38,11 @@ func (operations Tasks) append(event events.Event) error {
 
 func (operations Tasks) appendAll(group []events.Event) error {
 	if operations.Append == nil {
-		return events.AppendAll(operations.Workspace, group)
+		cursor, err := events.AppendAllWithCursor(operations.Workspace, group)
+		if err == nil && operations.RecordCursor != nil {
+			operations.RecordCursor(cursor)
+		}
+		return err
 	}
 	for _, event := range group {
 		if err := operations.Append(event); err != nil {

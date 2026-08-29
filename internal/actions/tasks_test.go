@@ -117,6 +117,40 @@ func TestTaskPatchIsAtomicAndRollsBackWhenEventsFail(t *testing.T) {
 	}
 }
 
+func TestTaskPatchRecordsExactGroupCursor(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Original", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cursor events.LogCursor
+	operations := actions.Tasks{
+		Workspace: ws, Actor: "web",
+		RecordCursor: func(value events.LogCursor) { cursor = value },
+	}
+	assignee, status, labels := "reviewer", "done", []string{"new"}
+	if _, err := operations.Patch(created.ID, actions.PatchOptions{Assignee: &assignee, Status: &status, Labels: &labels}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(ws.EventsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.Offset == 0 || cursor.Offset != info.Size() {
+		t.Fatalf("cursor = %#v file size=%d", cursor, info.Size())
+	}
+	log, err := events.All(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log) != 3 {
+		t.Fatalf("event group = %#v", log)
+	}
+}
+
 func TestTaskPatchWritesOneDossierAndOrderedEventGroup(t *testing.T) {
 	ws, err := workspace.Init(t.TempDir())
 	if err != nil {
