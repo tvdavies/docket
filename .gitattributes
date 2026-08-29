@@ -1,0 +1,2 @@
+# Generated bundles may contain whitespace inside JavaScript template literals.
+web/dist/** -whitespace

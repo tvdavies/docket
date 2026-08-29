@@ -1,5 +1,5 @@
 export function buildExplorerPath(workspace) {
-  return `/workspaces/${encodeURIComponent(workspace)}`;
+  return `/classic/workspaces/${encodeURIComponent(workspace)}`;
 }
 
 export function buildTaskPath(workspace, task) {
@@ -40,6 +40,7 @@ export function parseLocation(location) {
     return { workspace: legacyWorkspace, task: legacyTask, legacy: true, valid: true };
   }
   const parts = String(location.pathname || '/').split('/').filter(Boolean);
+  if (parts[0] === 'classic') parts.shift();
   if (!parts.length) return { workspace: '', task: '', legacy: false, valid: true };
   if (parts[0] !== 'workspaces' || (parts.length !== 2 && parts.length !== 4)) {
     return { workspace: '', task: '', legacy: false, valid: false };

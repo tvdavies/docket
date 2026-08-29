@@ -29,6 +29,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Install web dependencies
+        run: cd web && bun install --frozen-lockfile
+
+      - name: Verify committed web build
+        run: make web-check
+
       - name: Run tests
         run: make test
 

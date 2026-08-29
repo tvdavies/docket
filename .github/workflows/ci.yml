@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: oven-sh/setup-bun@v2
+      - name: Install web dependencies
+        run: cd web && bun install --frozen-lockfile
+      - name: Verify committed web build and bundle budget
+        run: make web-check
+      - name: Test
+        run: make test
+      - name: Vet
+        run: make vet
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
