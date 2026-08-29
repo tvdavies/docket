@@ -57,6 +57,8 @@ docket show "$ID"       # dossier + waits + references + sessions + activity
 - [Web interface](docs/web-interface.md) — board features, security, and HTTP API
 - [Waits, references, and activity](docs/waits-and-references.md) — durable external dependencies and temporal context
 - [Lua hooks and SDK](docs/lua-hooks.md) — runtime, event schema, APIs, and debugging
+- [Plugins](docs/plugins.md) — manifests, installation, extension points, proxying, and config
+- [Plugin UI contract](docs/plugin-ui.md) — card, resolver, and generated-settings interfaces
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
 
 Run `docket COMMAND --help` for exact local usage and examples, or `docket skill`
@@ -93,13 +95,14 @@ docket service logs                        # journalctl follow
 ```
 
 The machine-local registry is `~/.config/docket/config.yaml` (or
-`$DOCKET_CONFIG`). It contains only names, paths, the listen address, and the
-prune grace; task data stays in each workspace. The service notices registry
-changes within two seconds, isolates each workspace runtime, drains handler
-backlogs, and marks missing workspaces unavailable rather than crashing. A
-registration whose directory stays missing beyond `prune_after` (default one
-hour; `never` disables) is unregistered automatically with its task files
-untouched. Without `--all`, `docket serve` watches only the current workspace.
+`$DOCKET_CONFIG`). It contains workspace and installed-plugin registrations,
+instance plugin config, the listen address, and the prune grace; task data stays
+in each workspace. The service notices registry changes within two seconds,
+isolates each workspace runtime, drains handler backlogs, and marks missing
+workspaces unavailable rather than crashing. A registration whose directory
+stays missing beyond `prune_after` (default one hour; `never` disables) is
+unregistered automatically with its task files untouched. Without `--all`,
+`docket serve` watches only the current workspace.
 
 The systemd unit runs once per user/machine — never once per workspace — and
 serves one writable Kanban UI with all registered workspaces. Board mutations
@@ -172,7 +175,7 @@ Each workspace is text-first and git-trackable:
 
 ```
 .docket/
-  config.yaml            # statuses, labels, relationships, event handlers
+  config.yaml            # statuses, labels, relationships, handlers, plugins
   events.jsonl           # append-only event log
   tasks/TASK-0001-fix-login-cache/
     task.md              # YAML frontmatter + markdown description

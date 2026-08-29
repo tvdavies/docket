@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net"
@@ -15,7 +16,9 @@ import (
 	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/bundle"
 	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/plugin"
 	"github.com/tvdavies/docket/internal/project"
+	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -27,13 +30,41 @@ const (
 )
 
 type boardResponse struct {
-	Workspace string      `json:"workspace"`
-	Path      string      `json:"path"`
-	Statuses  []string    `json:"statuses"`
-	Terminal  []string    `json:"terminal"`
-	Labels    []string    `json:"labels"`
-	Tasks     []boardTask `json:"tasks"`
-	UpdatedAt string      `json:"updated_at"`
+	Workspace string        `json:"workspace"`
+	Path      string        `json:"path"`
+	Statuses  []string      `json:"statuses"`
+	Terminal  []string      `json:"terminal"`
+	Labels    []string      `json:"labels"`
+	Plugins   []boardPlugin `json:"plugins"`
+	Tasks     []boardTask   `json:"tasks"`
+	UpdatedAt string        `json:"updated_at"`
+}
+
+type boardPlugin struct {
+	Name               string                     `json:"name"`
+	Version            string                     `json:"version"`
+	Cards              []plugin.Card              `json:"cards"`
+	ReferenceResolvers []plugin.ReferenceResolver `json:"reference_resolvers"`
+	ServiceBase        string                     `json:"service_base,omitempty"`
+}
+
+type pluginAPIEntry struct {
+	Name        string                           `json:"name"`
+	Version     string                           `json:"version"`
+	Description string                           `json:"description,omitempty"`
+	Source      registry.PluginSource            `json:"source"`
+	Schemas     plugin.ConfigSchemas             `json:"schemas"`
+	Values      map[string]any                   `json:"instance_values"`
+	Workspaces  map[string]pluginWorkspaceValues `json:"workspace_values"`
+}
+
+type pluginWorkspaceValues struct {
+	Config   map[string]any            `json:"config"`
+	Statuses map[string]map[string]any `json:"statuses"`
+}
+
+type configPatchRequest struct {
+	Values map[string]any `json:"values"`
 }
 
 type boardTask struct {
@@ -111,6 +142,74 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 	mux.HandleFunc("GET /api/workspaces", func(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusOK, manager.Statuses())
 	})
+	mux.HandleFunc("GET /api/plugins", func(writer http.ResponseWriter, request *http.Request) {
+		config, err := registry.Load()
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		result := make([]pluginAPIEntry, 0, len(config.Plugins))
+		for _, entry := range config.Plugins {
+			manifest, err := plugin.Load(entry.Path, plugin.EngineVersion)
+			if err != nil {
+				writeAPIError(writer, err)
+				return
+			}
+			resolvedValues, err := manifest.ResolveInstanceConfig(entry.Config)
+			if err != nil {
+				writeAPIError(writer, err)
+				return
+			}
+			values := map[string]any{}
+			for key, value := range resolvedValues {
+				if field, secret := manifest.Config.Instance[key]; secret && field.Secret {
+					continue
+				}
+				values[key] = value
+			}
+			workspaceValues := map[string]pluginWorkspaceValues{}
+			for _, workspaceEntry := range config.Workspaces {
+				declared, err := workspace.LoadDeclaredRoot(workspaceEntry.Path)
+				if err != nil {
+					continue
+				}
+				use, enabled := declared.Plugins.Values[entry.Name]
+				if !enabled {
+					continue
+				}
+				configValues := use.Config
+				if configValues == nil {
+					configValues = map[string]any{}
+				}
+				statusValues := use.Statuses
+				if statusValues == nil {
+					statusValues = map[string]map[string]any{}
+				}
+				workspaceValues[workspaceEntry.Name] = pluginWorkspaceValues{
+					Config: configValues, Statuses: statusValues,
+				}
+			}
+			result = append(result, pluginAPIEntry{
+				Name: manifest.Name, Version: manifest.Version, Description: manifest.Description,
+				Source: entry.Source, Schemas: manifest.Config, Values: values, Workspaces: workspaceValues,
+			})
+		}
+		writeJSON(writer, http.StatusOK, result)
+	})
+	mux.HandleFunc("PATCH /api/plugins/{plugin}/config", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowJSONMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		var input configPatchRequest
+		if !decodeJSONBody(writer, request, &input) {
+			return
+		}
+		if err := patchInstancePluginConfig(request.PathValue("plugin"), input.Values); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"plugin": request.PathValue("plugin"), "values": input.Values})
+	})
 	mux.HandleFunc("GET /api/workspaces/{workspace}/board", func(writer http.ResponseWriter, request *http.Request) {
 		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
 		if !ok {
@@ -128,9 +227,11 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 			Statuses:  nonNilStrings(ws.Config.Statuses),
 			Terminal:  nonNilStrings(ws.Config.Terminal),
 			Labels:    nonNilStrings(ws.Config.Labels),
+			Plugins:   make([]boardPlugin, 0, len(ws.Plugins)),
 			Tasks:     make([]boardTask, 0, len(tasks)),
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
+		result.Plugins = pluginsForBoard(ws)
 		for _, value := range tasks {
 			summary, err := summariseTask(value)
 			if err != nil {
@@ -140,6 +241,44 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 			result.Tasks = append(result.Tasks, summary)
 		}
 		writeJSON(writer, http.StatusOK, result)
+	})
+	mux.HandleFunc("PATCH /api/workspaces/{workspace}/plugins/{plugin}/config", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowJSONMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		var input configPatchRequest
+		if !decodeJSONBody(writer, request, &input) {
+			return
+		}
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		if err := patchWorkspacePluginConfig(ws, request.PathValue("plugin"), "", input.Values); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"plugin": request.PathValue("plugin"), "values": input.Values})
+	})
+	mux.HandleFunc("PATCH /api/workspaces/{workspace}/plugins/{plugin}/statuses/{status}", func(writer http.ResponseWriter, request *http.Request) {
+		if !allowJSONMutation(writer, request, allowRemoteHost) {
+			return
+		}
+		var input configPatchRequest
+		if !decodeJSONBody(writer, request, &input) {
+			return
+		}
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
+			return
+		}
+		defer release()
+		if err := patchWorkspacePluginConfig(ws, request.PathValue("plugin"), request.PathValue("status"), input.Values); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"plugin": request.PathValue("plugin"), "status": request.PathValue("status"), "values": input.Values})
 	})
 	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowJSONMutation(writer, request, allowRemoteHost) {
@@ -397,6 +536,131 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 	})
 }
 
+func pluginsForBoard(ws *workspace.Workspace) []boardPlugin {
+	result := make([]boardPlugin, 0, len(ws.Plugins))
+	for _, loaded := range ws.Plugins {
+		metadata := boardPlugin{
+			Name: loaded.Manifest.Name, Version: loaded.Manifest.Version,
+			Cards:              append([]plugin.Card{}, loaded.Manifest.UI.Cards...),
+			ReferenceResolvers: append([]plugin.ReferenceResolver{}, loaded.Manifest.UI.ReferenceResolvers...),
+		}
+		if loaded.Manifest.Service != nil {
+			metadata.ServiceBase = "/plugins/" + loaded.Manifest.Name
+		}
+		result = append(result, metadata)
+	}
+	return result
+}
+
+func patchInstancePluginConfig(name string, values map[string]any) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		snapshot, err := registry.Load()
+		if err != nil {
+			return err
+		}
+		paths := make([]string, 0, len(snapshot.Workspaces))
+		for _, entry := range snapshot.Workspaces {
+			paths = append(paths, entry.Path)
+		}
+		err = workspace.WithDeclaredConfigLocks(paths, func() error {
+			return registry.Update(func(latest *registry.Config) error {
+				if !sameWorkspaceRegistry(snapshot.Workspaces, latest.Workspaces) {
+					return errPluginRegistryChanged
+				}
+				for index := range latest.Plugins {
+					entry := &latest.Plugins[index]
+					if entry.Name != name {
+						continue
+					}
+					manifest, err := plugin.Load(entry.Path, plugin.EngineVersion)
+					if err != nil {
+						return err
+					}
+					candidate := map[string]any{}
+					for key, value := range entry.Config {
+						candidate[key] = value
+					}
+					for key, value := range values {
+						candidate[key] = value
+					}
+					if _, err := manifest.ResolveInstanceConfig(candidate); err != nil {
+						return err
+					}
+					for _, workspaceEntry := range latest.Workspaces {
+						enabled, err := workspace.DeclaresPluginRoot(workspaceEntry.Path, name)
+						if err != nil {
+							return fmt.Errorf("inspect workspace %q: %w", workspaceEntry.Name, err)
+						}
+						if !enabled {
+							continue
+						}
+						declared, err := workspace.LoadDeclaredRoot(workspaceEntry.Path)
+						if err != nil {
+							return fmt.Errorf("validate workspace %q: %w", workspaceEntry.Name, err)
+						}
+						if err := workspace.ValidatePluginCandidate(declared, manifest, candidate); err != nil {
+							return fmt.Errorf("workspace %q: %w", workspaceEntry.Name, err)
+						}
+					}
+					entry.Config = candidate
+					return nil
+				}
+				return fmt.Errorf("plugin %q is not installed", name)
+			})
+		})
+		if errors.Is(err, errPluginRegistryChanged) {
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("plugin registry kept changing during config update")
+}
+
+var errPluginRegistryChanged = errors.New("plugin registry changed during config update")
+
+func sameWorkspaceRegistry(left, right []registry.WorkspaceEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func patchWorkspacePluginConfig(ws *workspace.Workspace, name, status string, values map[string]any) error {
+	return workspace.MutateDeclaredConfig(ws.Root, func(declared *workspace.Config) error {
+		use, enabled := declared.Plugins.Values[name]
+		if !enabled {
+			return fmt.Errorf("plugin %q is not enabled", name)
+		}
+		if status == "" {
+			if use.Config == nil {
+				use.Config = map[string]any{}
+			}
+			for key, value := range values {
+				use.Config[key] = value
+			}
+		} else {
+			if use.Statuses == nil {
+				use.Statuses = map[string]map[string]any{}
+			}
+			current := use.Statuses[status]
+			if current == nil {
+				current = map[string]any{}
+			}
+			for key, value := range values {
+				current[key] = value
+			}
+			use.Statuses[status] = current
+		}
+		declared.Plugins.Values[name] = use
+		return nil
+	})
+}
+
 func updateTaskFromAPI(ws *workspace.Workspace, operations actions.Tasks, id string, input updateTaskRequest) error {
 	_, err := operations.Patch(id, actions.PatchOptions{
 		Title:       input.Title,
@@ -591,6 +855,8 @@ func writeAPIError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrWorkspaceNotManaged), strings.Contains(message, "not found"):
 		status = http.StatusNotFound
+	case strings.Contains(message, "plugin ") && strings.Contains(message, "not installed"):
+		status = http.StatusNotFound
 	case strings.Contains(message, "already waiting"),
 		strings.Contains(message, "does not match active wait"),
 		strings.Contains(message, "already has"):
@@ -603,6 +869,9 @@ func writeAPIError(writer http.ResponseWriter, err error) {
 		strings.Contains(message, "invalid attachment filename"),
 		strings.Contains(message, "not waiting"),
 		strings.Contains(message, "cannot be empty"),
+		strings.Contains(message, "must be "),
+		strings.Contains(message, "is not declared by the plugin"),
+		strings.Contains(message, "unknown composed status"),
 		strings.Contains(message, "unknown status"),
 		strings.Contains(message, "no task changes"):
 		status = http.StatusBadRequest

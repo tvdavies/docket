@@ -55,5 +55,5 @@ func Init(root string) (*Workspace, error) {
 		return nil, err
 	}
 
-	return &Workspace{Root: docketDir, Config: cfg}, nil
+	return &Workspace{Root: docketDir, Config: cfg, DeclaredConfig: cfg}, nil
 }

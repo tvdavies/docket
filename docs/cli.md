@@ -9,6 +9,7 @@ docket --help
 docket move --help
 docket project --help
 docket workspace --help
+docket plugin --help
 ```
 
 When arguments or flags are invalid, Docket prints the error, exact usage line, and relevant help command. Operational failures such as a missing task report only the underlying error:
@@ -63,6 +64,10 @@ docket show TASK-0001
 | `docket unlink TASK-ID --RELATIONSHIP TARGET` | Remove a relationship |
 
 Run any command with `--help` for exact flags and examples.
+
+Installed plugins may contribute git-style commands: `docket NAME ARGS...`
+executes the plugin's declared CLI, otherwise Docket searches `docket-NAME` on
+`PATH`. Builtin command names always win. See [Plugins](plugins.md).
 
 ### Descriptions and comments
 

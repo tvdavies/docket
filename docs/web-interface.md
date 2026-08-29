@@ -164,9 +164,13 @@ does not require a transport redesign.
 |---|---|---|
 | `GET` | `/healthz` | Service health |
 | `GET` | `/api/workspaces` | Runtime status for registered workspaces |
-| `GET` | `/api/workspaces/{name}/board` | Compatibility board snapshot |
-| `GET` | `/api/workspaces/{name}/stream` | SSE snapshot + resumable live tail |
+| `GET` | `/api/plugins` | Installed plugin schemas and current scoped values |
+| `PATCH` | `/api/plugins/{plugin}/config` | Validate and update instance plugin config |
+| `GET` | `/api/workspaces/{name}/board` | Compatibility board snapshot with plugin metadata |
+| `GET` | `/api/workspaces/{name}/stream` | SSE snapshot + resumable live tail, including plugin metadata |
 | `POST` | `/api/workspaces/{name}/live` | Publish in-memory TTL data |
+| `PATCH` | `/api/workspaces/{name}/plugins/{plugin}/config` | Update workspace plugin config |
+| `PATCH` | `/api/workspaces/{name}/plugins/{plugin}/statuses/{status}` | Update status-scoped plugin config |
 | `POST` | `/api/workspaces/{name}/tasks` | Create a task |
 | `GET` | `/api/workspaces/{name}/tasks/{id}` | Read a complete task bundle |
 | `PATCH` | `/api/workspaces/{name}/tasks/{id}` | Edit task fields or move status |
@@ -175,8 +179,11 @@ does not require a transport redesign.
 | `POST` | `/api/workspaces/{name}/tasks/{id}/references` | Add a typed reference |
 | `DELETE` | `/api/workspaces/{name}/tasks/{id}/references/{reference}` | Remove a reference; send `{}` JSON |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/comments` | Append a comment |
-| `POST` | `/api/workspaces/{name}/tasks/{id}/attachments` | Upload a file and caption |
-| `GET` | `/api/workspaces/{name}/tasks/{id}/attachments/{file}` | Download a manifest-backed file |
+| `POST` | `/api/workspaces/{name}/tasks/{id}/attachments` | Upload a file and optional caption (multipart, 25 MiB max) |
+| `GET` | `/api/workspaces/{name}/tasks/{id}/attachments/{file}` | Download an exact manifest-backed file |
+| any | `/plugins/{plugin}/*` | Same-origin proxy to an enabled plugin's loopback service |
+
+See [Plugin UI registry contract](plugin-ui.md) for the board-facing metadata and settings schemas.
 
 Errors use `{"error":"..."}`. Existing endpoint fields remain compatible;
 mutation bundles only add the optional `cursor` field.

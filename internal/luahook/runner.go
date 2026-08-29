@@ -60,7 +60,7 @@ func Run(options Options) error {
 	defer state.Close()
 	state.SetContext(options.Context)
 
-	sdk := newSDK(state, sdkOptions{
+	sdk, err := newSDK(state, sdkOptions{
 		workspace:   options.Workspace,
 		projectRoot: projectRoot,
 		scriptPath:  scriptPath,
@@ -68,6 +68,9 @@ func Run(options Options) error {
 		errorOutput: options.Error,
 		context:     options.Context,
 	})
+	if err != nil {
+		return err
+	}
 	if err := state.DoFile(scriptPath); err != nil {
 		return fmt.Errorf("load %s: %w", options.Script, err)
 	}
@@ -106,7 +109,7 @@ type sdkOptions struct {
 	context     context.Context
 }
 
-func newSDK(state *lua.LState, options sdkOptions) *lua.LTable {
+func newSDK(state *lua.LState, options sdkOptions) (*lua.LTable, error) {
 	sdk := state.NewTable()
 
 	state.SetField(sdk, "path", state.NewFunction(func(state *lua.LState) int {
@@ -124,6 +127,29 @@ func newSDK(state *lua.LState, options sdkOptions) *lua.LTable {
 	state.SetField(paths, "script", lua.LString(options.scriptPath))
 	state.SetField(paths, "script_dir", lua.LString(filepath.Dir(options.scriptPath)))
 	state.SetField(sdk, "paths", paths)
+
+	if pluginName := os.Getenv("DOCKET_PLUGIN"); pluginName != "" {
+		pluginRoot := os.Getenv("DOCKET_PLUGIN_ROOT")
+		var payload struct {
+			Config       map[string]any            `json:"config"`
+			StatusConfig map[string]map[string]any `json:"status_config"`
+		}
+		if raw := os.Getenv("DOCKET_PLUGIN_CONFIG"); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+				return nil, fmt.Errorf("decode DOCKET_PLUGIN_CONFIG: %w", err)
+			}
+		}
+		pluginSDK := state.NewTable()
+		state.SetField(pluginSDK, "name", lua.LString(pluginName))
+		state.SetField(pluginSDK, "root", lua.LString(pluginRoot))
+		state.SetField(pluginSDK, "config", toLua(state, normaliseValue(payload.Config)))
+		state.SetField(pluginSDK, "status_config", toLua(state, normaliseValue(payload.StatusConfig)))
+		state.SetField(pluginSDK, "path", state.NewFunction(func(state *lua.LState) int {
+			state.Push(lua.LString(joinLuaPath(state, pluginRoot)))
+			return 1
+		}))
+		state.SetField(sdk, "plugin", pluginSDK)
+	}
 
 	log := state.NewTable()
 	state.SetField(log, "info", logFunction(state, options.output, "info"))
@@ -275,7 +301,7 @@ func newSDK(state *lua.LState, options sdkOptions) *lua.LTable {
 	}))
 	state.SetField(sdk, "task", tasks)
 
-	return sdk
+	return sdk, nil
 }
 
 func logFunction(state *lua.LState, output io.Writer, level string) *lua.LFunction {

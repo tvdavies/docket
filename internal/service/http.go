@@ -56,6 +56,7 @@ func Handler(manager *Manager) http.Handler {
 func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 	mux := http.NewServeMux()
 	registerAPI(mux, manager, allowRemoteHost)
+	mux.Handle("/plugins/{plugin}/{path...}", pluginProxy(manager, allowRemoteHost))
 
 	nextAssets, err := fs.Sub(webassets.Dist, "dist")
 	if err != nil {
@@ -67,7 +68,11 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 	}
 	mux.Handle("GET /assets/", cacheAssets(http.FileServer(http.FS(nextAssets)), true))
 	mux.Handle("GET /classic-assets/", http.StripPrefix("/classic-assets/", cacheAssets(http.FileServer(http.FS(classicAssets)), false)))
-	mux.HandleFunc("GET /", func(writer http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		path := request.URL.Path
 		classic := path == "/classic" || path == "/classic/" || strings.HasPrefix(path, "/classic/workspaces/")
 		next := path == "/" || path == "/next" || path == "/next/" || strings.HasPrefix(path, "/next/workspaces/") || strings.HasPrefix(path, "/workspaces/")
@@ -128,8 +133,9 @@ func Serve(ctx context.Context, address string, manager *Manager, output io.Writ
 		Handler:           handler(manager, !isLoopbackAddress(address)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// A zero write timeout permits long-lived proxied WebSocket sessions.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 	shutdownDone := make(chan struct{})
 	go func() {
