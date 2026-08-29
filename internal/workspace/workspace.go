@@ -71,16 +71,9 @@ func OpenRoot(path string) (*Workspace, error) {
 // plugins. Plugin update validation uses this so an unrelated unavailable
 // plugin does not prevent checking the candidate's enabling workspaces.
 func LoadDeclaredRoot(path string) (*Config, error) {
-	absolute, err := filepath.Abs(path)
+	root, err := declaredRoot(path)
 	if err != nil {
 		return nil, err
-	}
-	root := absolute
-	if filepath.Base(root) != DirName {
-		root = filepath.Join(root, DirName)
-	}
-	if !isDir(root) {
-		return nil, fmt.Errorf("%w (path=%s)", ErrNotFound, path)
 	}
 	return loadConfig(filepath.Join(root, "config.yaml"))
 }
@@ -89,28 +82,39 @@ func LoadDeclaredRoot(path string) (*Config, error) {
 // project directory, its .docket directory, or any descendant. It does not
 // consult DOCKET_HOME and is used when registering a workspace from inside it.
 func OpenAt(path string) (*Workspace, error) {
-	abs, err := filepath.Abs(path)
+	root, err := FindRootAt(path)
 	if err != nil {
 		return nil, err
 	}
+	return openRoot(root)
+}
+
+// FindRootAt locates the workspace containing path without loading or composing
+// its configuration. Recovery commands use this when the active plugin config
+// is itself what made the workspace unavailable.
+func FindRootAt(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return nil, fmt.Errorf("open workspace at %s: %w", path, err)
+		return "", fmt.Errorf("open workspace at %s: %w", path, err)
 	}
 	if !info.IsDir() {
 		abs = filepath.Dir(abs)
 	}
 	for {
 		if filepath.Base(abs) == DirName && isDir(abs) {
-			return openRoot(abs)
+			return abs, nil
 		}
 		candidate := filepath.Join(abs, DirName)
 		if isDir(candidate) {
-			return openRoot(candidate)
+			return candidate, nil
 		}
 		parent := filepath.Dir(abs)
 		if parent == abs {
-			return nil, fmt.Errorf("%w (path=%s)", ErrNotFound, path)
+			return "", fmt.Errorf("%w (path=%s)", ErrNotFound, path)
 		}
 		abs = parent
 	}
@@ -169,6 +173,21 @@ func discover() (string, error) {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func declaredRoot(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	root := absolute
+	if filepath.Base(root) != DirName {
+		root = filepath.Join(root, DirName)
+	}
+	if !isDir(root) {
+		return "", fmt.Errorf("%w (path=%s)", ErrNotFound, path)
+	}
+	return root, nil
 }
 
 // Path joins parts onto the workspace root.

@@ -15,8 +15,11 @@ import (
 	"github.com/tvdavies/docket/internal/handlers"
 	"github.com/tvdavies/docket/internal/plugin"
 	"github.com/tvdavies/docket/internal/registry"
+	"github.com/tvdavies/docket/internal/store"
 	"github.com/tvdavies/docket/internal/workspace"
 )
+
+var errRegistryChanged = errors.New("plugin registry changed during mutation")
 
 func Add(spec, overrideName, engineVersion string) (registry.PluginEntry, error) {
 	if info, err := os.Stat(spec); err == nil && info.IsDir() {
@@ -188,11 +191,40 @@ func Update(name, engineVersion string) ([]registry.PluginEntry, error) {
 	return updated, nil
 }
 
-func updateOne(config *registry.Config, current registry.PluginEntry, engineVersion string) (registry.PluginEntry, error) {
+func updateOne(_ *registry.Config, current registry.PluginEntry, engineVersion string) (registry.PluginEntry, error) {
 	managed, err := managedRoot()
 	if err != nil {
 		return registry.PluginEntry{}, err
 	}
+	var updated registry.PluginEntry
+	err = store.WithLock(filepath.Join(managed, "."+current.Name+".update.lock"), func() error {
+		latest, err := registry.Load()
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, entry := range latest.Plugins {
+			if entry.Name == current.Name {
+				current = entry
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("plugin %q was removed during update", current.Name)
+		}
+		if current.Source.Type == "local" {
+			updated = current
+			return nil
+		}
+		var updateErr error
+		updated, updateErr = updateOneLocked(managed, current, engineVersion)
+		return updateErr
+	})
+	return updated, err
+}
+
+func updateOneLocked(managed string, current registry.PluginEntry, engineVersion string) (registry.PluginEntry, error) {
 	if !pathInside(managed, current.Path) {
 		return registry.PluginEntry{}, fmt.Errorf("refusing to update managed plugin outside %s: %s", managed, current.Path)
 	}
@@ -217,20 +249,17 @@ func updateOne(config *registry.Config, current registry.PluginEntry, engineVers
 	if manifest.Name != current.Name {
 		return registry.PluginEntry{}, fmt.Errorf("updated manifest changed plugin name from %q to %q", current.Name, manifest.Name)
 	}
-	for _, workspaceEntry := range config.Workspaces {
-		declared, err := workspace.LoadDeclaredRoot(workspaceEntry.Path)
-		if err != nil {
-			return registry.PluginEntry{}, fmt.Errorf("validate workspace %q: %w", workspaceEntry.Name, err)
-		}
-		if _, enabled := declared.Plugins.Values[current.Name]; !enabled {
-			continue
-		}
-		if err := workspace.ValidatePluginCandidate(declared, manifest, current.Config); err != nil {
-			return registry.PluginEntry{}, fmt.Errorf("candidate invalid for workspace %q: %w", workspaceEntry.Name, err)
-		}
-	}
 	if current.Source.Commit == commit {
-		return current, nil
+		latest, err := registry.Load()
+		if err != nil {
+			return registry.PluginEntry{}, err
+		}
+		for _, entry := range latest.Plugins {
+			if entry.Name == current.Name {
+				return entry, nil
+			}
+		}
+		return registry.PluginEntry{}, fmt.Errorf("plugin %q was removed during update", current.Name)
 	}
 	shortCommit := commit
 	if len(shortCommit) > 12 {
@@ -248,30 +277,62 @@ func updateOne(config *registry.Config, current registry.PluginEntry, engineVers
 	if err := os.Rename(staging, candidatePath); err != nil {
 		return registry.PluginEntry{}, err
 	}
-	candidate := current
-	candidate.Path = candidatePath
-	candidate.Version = manifest.Version
-	candidate.Source.Ref = resolvedRef
-	candidate.Source.Commit = commit
-	if err := registry.Update(func(latest *registry.Config) error {
-		for index := range latest.Plugins {
-			if latest.Plugins[index].Name == current.Name {
-				if latest.Plugins[index].Path != current.Path || latest.Plugins[index].Source.Commit != current.Source.Commit {
-					return fmt.Errorf("plugin %q changed during update", current.Name)
-				}
-				latest.Plugins[index] = candidate
-				return nil
-			}
-		}
-		return fmt.Errorf("plugin %q was removed during update", current.Name)
-	}); err != nil {
+	candidateManifest, err := plugin.Load(candidatePath, engineVersion)
+	if err != nil {
 		_ = os.RemoveAll(candidatePath)
 		return registry.PluginEntry{}, err
 	}
-	// The registry flip is atomic and points at a fully validated candidate;
-	// only after it succeeds is the inactive prior clone removed.
-	_ = os.RemoveAll(current.Path)
-	return candidate, nil
+
+	var updated registry.PluginEntry
+	for attempt := 0; attempt < 3; attempt++ {
+		snapshot, err := registry.Load()
+		if err != nil {
+			_ = os.RemoveAll(candidatePath)
+			return registry.PluginEntry{}, err
+		}
+		paths := workspacePaths(snapshot.Workspaces)
+		err = workspace.WithDeclaredConfigLocks(paths, func() error {
+			return registry.Update(func(latest *registry.Config) error {
+				if !sameWorkspaces(snapshot.Workspaces, latest.Workspaces) {
+					return errRegistryChanged
+				}
+				for index := range latest.Plugins {
+					entry := latest.Plugins[index]
+					if entry.Name != current.Name {
+						continue
+					}
+					if entry.Path != current.Path || entry.Source.Commit != current.Source.Commit {
+						return fmt.Errorf("plugin %q changed during update", current.Name)
+					}
+					if err := validateEnablingWorkspaces(latest.Workspaces, current.Name, candidateManifest, entry.Config); err != nil {
+						return err
+					}
+					updated = entry
+					updated.Path = candidatePath
+					updated.Version = candidateManifest.Version
+					updated.Source.Ref = resolvedRef
+					updated.Source.Commit = commit
+					latest.Plugins[index] = updated
+					return nil
+				}
+				return fmt.Errorf("plugin %q was removed during update", current.Name)
+			})
+		})
+		if errors.Is(err, errRegistryChanged) {
+			continue
+		}
+		if err != nil {
+			_ = os.RemoveAll(candidatePath)
+			return registry.PluginEntry{}, err
+		}
+		// The registry flip is atomic and points at a candidate validated against
+		// locked workspace snapshots and the latest instance config. Only after it
+		// succeeds is the inactive prior clone removed.
+		_ = os.RemoveAll(current.Path)
+		return updated, nil
+	}
+	_ = os.RemoveAll(candidatePath)
+	return registry.PluginEntry{}, fmt.Errorf("plugin registry kept changing during update")
 }
 
 // Enable composes a plugin into one workspace and prepares its cursors before
@@ -302,59 +363,109 @@ func Enable(workspacePath, name string, values map[string]any, adopt, fromStart 
 	if err != nil {
 		return err
 	}
-	return workspace.MutateDeclaredConfig(ws.Root, func(declared *workspace.Config) error {
-		use := declared.Plugins.Values[name]
-		if use.Config == nil {
-			use.Config = map[string]any{}
-		}
-		for key, value := range values {
-			use.Config[key] = value
-		}
-		// The reference dispatch plugin's required server_root naturally defaults
-		// to its linked checkout, while generic plugins still require explicit keys.
-		if field, ok := manifest.Config.Workspace["server_root"]; ok && field.Required {
-			if _, exists := use.Config["server_root"]; !exists {
-				use.Config["server_root"] = manifest.Root
+	mutate := func() error {
+		return workspace.MutateDeclaredConfig(ws.Root, func(declared *workspace.Config) error {
+			use := declared.Plugins.Values[name]
+			if use.Config == nil {
+				use.Config = map[string]any{}
 			}
-		}
-		if err := workspace.EnablePlugin(declared, manifest, use, adopt); err != nil {
-			return err
-		}
-		if err := workspace.ValidatePluginCandidate(declared, manifest, entry.Config); err != nil {
-			return err
-		}
-		for handlerName := range manifest.Handlers {
-			identity := name + "/" + handlerName
-			switch {
-			case adopt:
-				if err := handlers.AdoptCursor(ws, handlerName, identity); err != nil {
-					return err
-				}
-			case fromStart:
-				if err := handlers.ResetCursor(ws, identity); err != nil {
-					return err
-				}
-			default:
-				if err := handlers.SeedCursorAtEnd(ws, identity); err != nil {
-					return err
+			for key, value := range values {
+				use.Config[key] = value
+			}
+			// The reference dispatch plugin's required server_root naturally defaults
+			// to its linked checkout, while generic plugins still require explicit keys.
+			if field, ok := manifest.Config.Workspace["server_root"]; ok && field.Required {
+				if _, exists := use.Config["server_root"]; !exists {
+					use.Config["server_root"] = manifest.Root
 				}
 			}
-		}
-		return nil
-	})
+			if err := workspace.EnablePlugin(declared, manifest, use, adopt); err != nil {
+				return err
+			}
+			if err := workspace.ValidatePluginCandidate(declared, manifest, entry.Config); err != nil {
+				return err
+			}
+			for handlerName := range manifest.Handlers {
+				identity := name + "/" + handlerName
+				switch {
+				case adopt:
+					if err := handlers.AdoptCursor(ws, handlerName, identity); err != nil {
+						return err
+					}
+				case fromStart:
+					if err := handlers.ResetCursor(ws, identity); err != nil {
+						return err
+					}
+				default:
+					if err := handlers.SeedCursorAtEnd(ws, identity); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+	}
+	if !adopt {
+		return mutate()
+	}
+	legacyNames := make([]string, 0, len(manifest.Handlers))
+	for handlerName := range manifest.Handlers {
+		legacyNames = append(legacyNames, handlerName)
+	}
+	return handlers.WithHandlerLocks(nil, ws, legacyNames, mutate)
 }
 
 func Disable(workspacePath, name string) error {
-	ws, err := workspace.OpenAt(workspacePath)
+	root, err := workspace.FindRootAt(workspacePath)
 	if err != nil {
 		return err
 	}
-	return workspace.MutateDeclaredConfig(ws.Root, func(declared *workspace.Config) error {
+	return workspace.MutateDeclaredConfig(root, func(declared *workspace.Config) error {
 		if !workspace.DisablePlugin(declared, name) {
 			return fmt.Errorf("plugin %q is not enabled", name)
 		}
 		return nil
 	})
+}
+
+func workspacePaths(entries []registry.WorkspaceEntry) []string {
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		paths = append(paths, entry.Path)
+	}
+	return paths
+}
+
+func sameWorkspaces(left, right []registry.WorkspaceEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func validateEnablingWorkspaces(entries []registry.WorkspaceEntry, name string, manifest *plugin.Manifest, instanceConfig map[string]any) error {
+	for _, entry := range entries {
+		enabled, err := workspace.DeclaresPluginRoot(entry.Path, name)
+		if err != nil {
+			return fmt.Errorf("inspect workspace %q: %w", entry.Name, err)
+		}
+		if !enabled {
+			continue
+		}
+		declared, err := workspace.LoadDeclaredRoot(entry.Path)
+		if err != nil {
+			return fmt.Errorf("validate workspace %q: %w", entry.Name, err)
+		}
+		if err := workspace.ValidatePluginCandidate(declared, manifest, instanceConfig); err != nil {
+			return fmt.Errorf("candidate invalid for workspace %q: %w", entry.Name, err)
+		}
+	}
+	return nil
 }
 
 func managedRoot() (string, error) {

@@ -2,8 +2,10 @@ package workspace
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 
 	"github.com/tvdavies/docket/internal/plugin"
 	"github.com/tvdavies/docket/internal/store"
@@ -66,6 +68,56 @@ func MutateDeclaredConfig(root string, mutate func(*Config) error) error {
 		}
 		return writeDeclaredConfig(path, config)
 	})
+}
+
+// WithDeclaredConfigLocks holds every named workspace config lock in stable
+// path order while fn runs. Registry-wide plugin mutations use this to keep the
+// workspace snapshots they validate unchanged through the registry flip.
+func WithDeclaredConfigLocks(paths []string, fn func() error) error {
+	locks := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, path := range paths {
+		root, err := declaredRoot(path)
+		if err != nil {
+			return err
+		}
+		lock := filepath.Join(root, "config.yaml.lock")
+		if !seen[lock] {
+			seen[lock] = true
+			locks = append(locks, lock)
+		}
+	}
+	sort.Strings(locks)
+	var acquire func(int) error
+	acquire = func(index int) error {
+		if index == len(locks) {
+			return fn()
+		}
+		return store.WithLock(locks[index], func() error { return acquire(index + 1) })
+	}
+	return acquire(0)
+}
+
+// DeclaresPluginRoot reads only the plugins mapping. It deliberately skips the
+// rest of workspace validation so an unrelated semantically invalid workspace
+// does not block administration of a plugin it does not enable.
+func DeclaresPluginRoot(path, name string) (bool, error) {
+	root, err := declaredRoot(path)
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(filepath.Join(root, "config.yaml"))
+	if err != nil {
+		return false, err
+	}
+	var probe struct {
+		Plugins PluginUses `yaml:"plugins,omitempty"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return false, fmt.Errorf("parse config: %w", err)
+	}
+	_, enabled := probe.Plugins.Values[name]
+	return enabled, nil
 }
 
 // WriteDeclaredConfig validates composition and atomically replaces config.yaml.

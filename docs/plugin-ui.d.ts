@@ -24,7 +24,7 @@ export interface TaskWait {
   reason: string;
   reference?: string;
   since: string;
-  actor: string;
+  actor?: string;
 }
 
 export interface TaskReference {
@@ -33,7 +33,7 @@ export interface TaskReference {
   url: string;
   title?: string;
   added_at: string;
-  added_by: string;
+  added_by?: string;
 }
 
 export interface TaskCardModule {

@@ -23,6 +23,11 @@ func tryPluginPassthrough(args []string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	ws, _ := workspace.Open()
+	baseEnvironment := os.Environ()
+	if ws != nil {
+		baseEnvironment = withEnvironment(baseEnvironment, map[string]string{"DOCKET_HOME": ws.Root})
+	}
 	for _, entry := range entries {
 		if entry.Name != name {
 			continue
@@ -45,24 +50,23 @@ func tryPluginPassthrough(args []string) (bool, error) {
 		environment := map[string]string{
 			"DOCKET_PLUGIN": name, "DOCKET_PLUGIN_ROOT": manifest.Root, "DOCKET_PLUGIN_CONFIG": "",
 		}
-		if ws, openErr := workspace.Open(); openErr == nil {
+		if ws != nil {
 			for _, loaded := range ws.Plugins {
 				if loaded.Manifest.Name != name {
 					continue
 				}
 				payload, _ := json.Marshal(map[string]any{"config": loaded.Effective.Values, "status_config": loaded.Effective.Statuses})
-				environment["DOCKET_HOME"] = ws.Root
 				environment["DOCKET_PLUGIN_CONFIG"] = string(payload)
 				break
 			}
 		}
-		return true, execPassthrough(program, append([]string{program}, args[1:]...), withEnvironment(os.Environ(), environment))
+		return true, execPassthrough(program, append([]string{program}, args[1:]...), withEnvironment(baseEnvironment, environment))
 	}
 	program, err := exec.LookPath("docket-" + name)
 	if err != nil {
 		return false, nil
 	}
-	return true, execPassthrough(program, append([]string{program}, args[1:]...), os.Environ())
+	return true, execPassthrough(program, append([]string{program}, args[1:]...), baseEnvironment)
 }
 
 func withEnvironment(existing []string, values map[string]string) []string {

@@ -93,6 +93,40 @@ config:
 	}
 }
 
+func TestStatusConfigAppliesRequiredFieldsAndDefaultsToEveryStatus(t *testing.T) {
+	manifest, err := plugin.Load(writeManifest(t, `
+name: example
+version: 1.0.0
+config:
+  status:
+    agent: {type: string, required: true}
+`), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.ResolveConfig(nil, nil, nil, []string{"todo"}); err == nil || !strings.Contains(err.Error(), "config.status.todo.agent is required") {
+		t.Fatalf("missing required status config error = %v", err)
+	}
+
+	manifest, err = plugin.Load(writeManifest(t, `
+name: example
+version: 1.0.0
+config:
+  status:
+    retries: {type: number, default: 2}
+`), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := manifest.ResolveConfig(nil, nil, nil, []string{"todo", "review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Statuses["todo"]["retries"] != 2 || resolved.Statuses["review"]["retries"] != 2 {
+		t.Fatalf("status defaults = %#v", resolved.Statuses)
+	}
+}
+
 func TestScopedConfigRejectsUnknownTypesAndStatuses(t *testing.T) {
 	manifest, err := plugin.Load(writeManifest(t, `
 name: example

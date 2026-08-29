@@ -12,8 +12,11 @@ import (
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
-func pluginProxy(manager *Manager) http.Handler {
+func pluginProxy(manager *Manager, allowRemoteHost bool) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !allowMutationOrigin(writer, request, allowRemoteHost) {
+			return
+		}
 		name := request.PathValue("plugin")
 		config, err := registry.Load()
 		if err != nil {
@@ -61,13 +64,13 @@ func pluginProxy(manager *Manager) http.Handler {
 		originalDirector := proxy.Director
 		prefix := "/plugins/" + name
 		proxy.Director = func(outbound *http.Request) {
-			originalDirector(outbound)
-			outbound.Host = target.Host
-			outbound.URL.Path = strings.TrimPrefix(request.URL.Path, prefix)
+			outbound.URL.Path = strings.TrimPrefix(outbound.URL.Path, prefix)
 			outbound.URL.RawPath = ""
 			if outbound.URL.Path == "" {
 				outbound.URL.Path = "/"
 			}
+			originalDirector(outbound)
+			outbound.Host = target.Host
 			outbound.Header.Set("X-Forwarded-Prefix", prefix)
 			for key := range outbound.Header {
 				if strings.HasPrefix(strings.ToLower(key), "x-docket-") {

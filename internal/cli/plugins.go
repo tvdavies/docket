@@ -192,7 +192,7 @@ func builtinCommand(name string) bool {
 		"__lua-hook": {}, "attach": {}, "attach-file": {}, "comment": {}, "completion": {}, "context": {},
 		"detach": {}, "edit": {}, "events": {}, "files": {}, "help": {}, "inbox": {}, "init": {}, "label": {},
 		"link": {}, "list": {}, "move": {}, "new": {}, "plugin": {}, "project": {}, "reference": {}, "reindex": {},
-		"serve": {}, "service": {}, "session": {}, "show": {}, "skill": {}, "unlink": {}, "wait": {}, "watch": {}, "workspace": {},
+		"guide": {}, "ref": {}, "serve": {}, "service": {}, "session": {}, "show": {}, "skill": {}, "unlink": {}, "wait": {}, "watch": {}, "workspace": {},
 	}[name]
 	return exists
 }

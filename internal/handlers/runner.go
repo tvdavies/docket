@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -57,6 +58,10 @@ type Options struct {
 	// Production uses the current Docket executable plus __lua-hook; tests may
 	// supply an isolated helper process.
 	LuaCommand []string
+	// RefreshConfig reopens the workspace after acquiring each handler lock. It
+	// prevents a drain queued before a config swap from executing a handler that
+	// has since been disabled or replaced.
+	RefreshConfig bool
 }
 
 // Failure records one handler that could not drain. The task mutation and its
@@ -126,8 +131,21 @@ func drainOne(ws *workspace.Workspace, name string, cfg workspace.HandlerConfig,
 	lockPath := filepath.Join(ws.HandlerStateDir(), name+".lock")
 	advanced := false
 	drain := func() error {
-		cursor := Cursor(ws, name)
-		batch, end, checkpoint, err := events.ReadBatchCheckpoint(ws, cursor)
+		active := ws
+		if opts.RefreshConfig {
+			fresh, err := workspace.OpenRoot(ws.Root)
+			if err != nil {
+				return err
+			}
+			current, enabled := fresh.Config.Handlers[name]
+			if !enabled {
+				return nil
+			}
+			active = fresh
+			cfg = current
+		}
+		cursor := Cursor(active, name)
+		batch, end, checkpoint, err := events.ReadBatchCheckpoint(active, cursor)
 		if err != nil {
 			return err
 		}
@@ -142,11 +160,11 @@ func drainOne(ws *workspace.Workspace, name string, cfg workspace.HandlerConfig,
 			}
 		}
 		if len(matched) > 0 {
-			if err := execute(ws, name, cfg, matched, opts); err != nil {
+			if err := execute(active, name, cfg, matched, opts); err != nil {
 				return err
 			}
 		}
-		if err := advanceCursor(ws, name, end, checkpoint); err != nil {
+		if err := advanceCursor(active, name, end, checkpoint); err != nil {
 			return err
 		}
 		advanced = true
@@ -325,6 +343,26 @@ func SeedCursorAtEnd(ws *workspace.Workspace, name string) error {
 // opt-in from an accidentally missing new-handler cursor.
 func ResetCursor(ws *workspace.Workspace, name string) error {
 	return writeCursor(handlerCursorFile(ws, name), 0, "")
+}
+
+// WithHandlerLocks quiesces the named handlers in stable order while fn runs.
+// Cursor adoption uses it to capture final legacy checkpoints and publish the
+// replacement config without a legacy delivery crossing that boundary.
+func WithHandlerLocks(ctx context.Context, ws *workspace.Workspace, names []string, fn func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	names = append([]string(nil), names...)
+	sort.Strings(names)
+	var acquire func(int) error
+	acquire = func(index int) error {
+		if index == len(names) {
+			return fn()
+		}
+		lockPath := filepath.Join(ws.HandlerStateDir(), names[index]+".lock")
+		return store.WithLockContext(ctx, lockPath, func() error { return acquire(index + 1) })
+	}
+	return acquire(0)
 }
 
 // AdoptCursor copies a legacy handler checkpoint to a namespaced identity. The

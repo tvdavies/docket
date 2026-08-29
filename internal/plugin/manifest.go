@@ -363,16 +363,20 @@ func (m *Manifest) ResolveConfig(instance, workspaceValues map[string]any, statu
 	for _, status := range statuses {
 		allowedStatuses[status] = true
 	}
-	resolvedStatuses := map[string]map[string]any{}
-	for status, input := range statusValues {
+	for status := range statusValues {
 		if !allowedStatuses[status] {
 			return EffectiveConfig{}, fmt.Errorf("config.status.%s: unknown composed status", status)
 		}
-		resolved, err := resolveScope("status."+status, m.Config.Status, input)
+	}
+	resolvedStatuses := map[string]map[string]any{}
+	for _, status := range statuses {
+		resolved, err := resolveScope("status."+status, m.Config.Status, statusValues[status])
 		if err != nil {
 			return EffectiveConfig{}, err
 		}
-		resolvedStatuses[status] = resolved
+		if len(resolved) > 0 {
+			resolvedStatuses[status] = resolved
+		}
 	}
 	return EffectiveConfig{Values: values, Statuses: resolvedStatuses}, nil
 }

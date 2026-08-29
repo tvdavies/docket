@@ -553,55 +553,81 @@ func pluginsForBoard(ws *workspace.Workspace) []boardPlugin {
 }
 
 func patchInstancePluginConfig(name string, values map[string]any) error {
-	config, err := registry.Load()
-	if err != nil {
-		return err
-	}
-	var entry *registry.PluginEntry
-	for index := range config.Plugins {
-		if config.Plugins[index].Name == name {
-			entry = &config.Plugins[index]
-			break
+	for attempt := 0; attempt < 3; attempt++ {
+		snapshot, err := registry.Load()
+		if err != nil {
+			return err
 		}
-	}
-	if entry == nil {
-		return fmt.Errorf("plugin %q is not installed", name)
-	}
-	manifest, err := plugin.Load(entry.Path, plugin.EngineVersion)
-	if err != nil {
-		return err
-	}
-	candidate := map[string]any{}
-	for key, value := range entry.Config {
-		candidate[key] = value
-	}
-	for key, value := range values {
-		candidate[key] = value
-	}
-	if _, err := manifest.ResolveInstanceConfig(candidate); err != nil {
-		return err
-	}
-	for _, workspaceEntry := range config.Workspaces {
-		declared, openErr := workspace.LoadDeclaredRoot(workspaceEntry.Path)
-		if openErr != nil {
-			return fmt.Errorf("validate workspace %q: %w", workspaceEntry.Name, openErr)
+		paths := make([]string, 0, len(snapshot.Workspaces))
+		for _, entry := range snapshot.Workspaces {
+			paths = append(paths, entry.Path)
 		}
-		if _, enabled := declared.Plugins.Values[name]; !enabled {
+		err = workspace.WithDeclaredConfigLocks(paths, func() error {
+			return registry.Update(func(latest *registry.Config) error {
+				if !sameWorkspaceRegistry(snapshot.Workspaces, latest.Workspaces) {
+					return errPluginRegistryChanged
+				}
+				for index := range latest.Plugins {
+					entry := &latest.Plugins[index]
+					if entry.Name != name {
+						continue
+					}
+					manifest, err := plugin.Load(entry.Path, plugin.EngineVersion)
+					if err != nil {
+						return err
+					}
+					candidate := map[string]any{}
+					for key, value := range entry.Config {
+						candidate[key] = value
+					}
+					for key, value := range values {
+						candidate[key] = value
+					}
+					if _, err := manifest.ResolveInstanceConfig(candidate); err != nil {
+						return err
+					}
+					for _, workspaceEntry := range latest.Workspaces {
+						enabled, err := workspace.DeclaresPluginRoot(workspaceEntry.Path, name)
+						if err != nil {
+							return fmt.Errorf("inspect workspace %q: %w", workspaceEntry.Name, err)
+						}
+						if !enabled {
+							continue
+						}
+						declared, err := workspace.LoadDeclaredRoot(workspaceEntry.Path)
+						if err != nil {
+							return fmt.Errorf("validate workspace %q: %w", workspaceEntry.Name, err)
+						}
+						if err := workspace.ValidatePluginCandidate(declared, manifest, candidate); err != nil {
+							return fmt.Errorf("workspace %q: %w", workspaceEntry.Name, err)
+						}
+					}
+					entry.Config = candidate
+					return nil
+				}
+				return fmt.Errorf("plugin %q is not installed", name)
+			})
+		})
+		if errors.Is(err, errPluginRegistryChanged) {
 			continue
 		}
-		if err := workspace.ValidatePluginCandidate(declared, manifest, candidate); err != nil {
-			return fmt.Errorf("workspace %q: %w", workspaceEntry.Name, err)
+		return err
+	}
+	return fmt.Errorf("plugin registry kept changing during config update")
+}
+
+var errPluginRegistryChanged = errors.New("plugin registry changed during config update")
+
+func sameWorkspaceRegistry(left, right []registry.WorkspaceEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
 		}
 	}
-	return registry.Update(func(latest *registry.Config) error {
-		for index := range latest.Plugins {
-			if latest.Plugins[index].Name == name {
-				latest.Plugins[index].Config = candidate
-				return nil
-			}
-		}
-		return fmt.Errorf("plugin %q is not installed", name)
-	})
+	return true
 }
 
 func patchWorkspacePluginConfig(ws *workspace.Workspace, name, status string, values map[string]any) error {

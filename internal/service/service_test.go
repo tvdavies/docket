@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -306,6 +307,70 @@ func TestPluginProxyRewritesHostPrefixAndStripsReservedHeaders(t *testing.T) {
 	_ = configPath
 }
 
+func TestPluginProxyRejectsCrossOriginRequests(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	project, _, _ := pluginServiceFixture(t, target.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := service.NewManager(ctx, io.Discard)
+	defer manager.Stop()
+	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
+	server := httptest.NewServer(service.Handler(manager))
+	defer server.Close()
+
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/plugins/example/action", strings.NewReader("value=1"))
+	request.Header.Set("Origin", "http://evil.example")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin proxy status = %d", response.StatusCode)
+	}
+
+	request, _ = http.NewRequest(http.MethodGet, server.URL+"/plugins/example/socket", nil)
+	request.Header.Set("Origin", "http://evil.example")
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin websocket status = %d", response.StatusCode)
+	}
+}
+
+func TestPluginProxyPreservesServiceBasePath(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Write([]byte(request.URL.Path))
+	}))
+	defer target.Close()
+	project, _, _ := pluginServiceFixture(t, target.URL+"/api")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := service.NewManager(ctx, io.Discard)
+	defer manager.Stop()
+	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
+	server := httptest.NewServer(service.Handler(manager))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/plugins/example/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || string(body) != "/api/healthz" {
+		t.Fatalf("base-path proxy = %d %q", response.StatusCode, body)
+	}
+}
+
 func TestPluginProxyPassesWebSocketUpgrades(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if !strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
@@ -391,6 +456,27 @@ config:
 	t.Setenv("DOCKET_CONFIG", configPath)
 	writeRegistryFixture(t, configPath, project, pluginRoot)
 	appendPluginUse(t, ws)
+	invalidProject := t.TempDir()
+	invalidWS, err := workspace.Init(invalidProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidFile, err := os.OpenFile(filepath.Join(invalidWS.Root, "config.yaml"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invalidFile.WriteString("handlers:\n  broken: {on: [task.created]}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := invalidFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Update(func(config *registry.Config) error {
+		config.Workspaces = append(config.Workspaces, registry.WorkspaceEntry{Name: "invalid-unrelated", Path: invalidProject})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	manager := service.NewManager(ctx, io.Discard)
@@ -442,6 +528,77 @@ config:
 	use := opened.DeclaredConfig.Plugins.Values["example"]
 	if use.Config["enabled"] != true || use.Statuses["backlog"]["agent"] != "worker" {
 		t.Fatalf("workspace values = %#v", use)
+	}
+}
+
+func TestPluginConfigAPIConcurrentInstancePatchesPreserveDisjointKeys(t *testing.T) {
+	project := t.TempDir()
+	ws, err := workspace.Init(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot := t.TempDir()
+	var manifest strings.Builder
+	manifest.WriteString("name: example\nversion: 1.0.0\nconfig:\n  instance:\n")
+	const count = 16
+	for index := 0; index < count; index++ {
+		fmt.Fprintf(&manifest, "    key%d: {type: number}\n", index)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, plugin.ManifestFile), []byte(manifest.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "registry.yaml")
+	t.Setenv("DOCKET_CONFIG", configPath)
+	writeRegistryFixture(t, configPath, project, pluginRoot)
+	appendPluginUse(t, ws)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := service.NewManager(ctx, io.Discard)
+	defer manager.Stop()
+	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
+	server := httptest.NewServer(service.Handler(manager))
+	defer server.Close()
+
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	errors := make(chan error, count)
+	for index := 0; index < count; index++ {
+		index := index
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			body := fmt.Sprintf(`{"values":{"key%d":%d}}`, index, index)
+			request, _ := http.NewRequest(http.MethodPatch, server.URL+"/api/plugins/example/config", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				errors <- err
+				return
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				errors <- fmt.Errorf("key%d status = %d", index, response.StatusCode)
+			}
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		t.Error(err)
+	}
+	config, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Plugins) != 1 || len(config.Plugins[0].Config) != count {
+		t.Fatalf("concurrent instance values = %#v", config.Plugins)
+	}
+	for index := 0; index < count; index++ {
+		if config.Plugins[0].Config[fmt.Sprintf("key%d", index)] != index {
+			t.Fatalf("key%d missing from %#v", index, config.Plugins[0].Config)
+		}
 	}
 }
 

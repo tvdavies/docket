@@ -271,7 +271,7 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 					}
 				}
 			}
-			failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Scope: handlers.ScopeAll, Output: m.output})
+			failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Scope: handlers.ScopeAll, Output: m.output, RefreshConfig: true})
 			current := make(map[string]bool, len(fresh.Config.Handlers))
 			for name := range fresh.Config.Handlers {
 				current[name] = true

@@ -56,7 +56,7 @@ func Handler(manager *Manager) http.Handler {
 func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 	mux := http.NewServeMux()
 	registerAPI(mux, manager, allowRemoteHost)
-	mux.Handle("/plugins/{plugin}/{path...}", pluginProxy(manager))
+	mux.Handle("/plugins/{plugin}/{path...}", pluginProxy(manager, allowRemoteHost))
 
 	nextAssets, err := fs.Sub(webassets.Dist, "dist")
 	if err != nil {
