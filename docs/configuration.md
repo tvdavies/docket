@@ -211,6 +211,7 @@ Override for tests or dedicated installations with `DOCKET_CONFIG`.
 
 ```yaml
 listen: 127.0.0.1:7463
+prune_after: 1h
 workspaces:
   - name: dispatch
     path: /home/user/dev/dispatch
@@ -235,6 +236,26 @@ docket plugin add /home/user/dev/docket-plugin-dispatch
 ```
 
 The UI has no authentication. Non-loopback binding is rejected unless `docket serve --allow-remote` is passed explicitly.
+
+### Pruning missing workspaces
+
+`docket serve --all` periodically checks each registered workspace's project
+directory. A registration whose directory has been continuously missing for
+longer than `prune_after` is unregistered automatically, exactly as if
+`docket workspace remove` had been run: task files are never touched, and
+re-adding the workspace restores it. Deleted temporary or test workspaces
+therefore stop accumulating retrying watchers.
+
+| Value | Meaning |
+|---|---|
+| unset | prune after the default 1 hour of continuous absence |
+| Go duration such as `30m` or `24h` | prune after that continuous absence |
+| `never` | keep every registration regardless of its directory |
+
+Only a confirmed missing directory counts: transient stat failures such as
+permission errors never unregister anything, and a directory that reappears
+(for example a remounted volume) resets its timer. Pick a generous
+`prune_after` or `never` if workspaces live on removable storage.
 
 ## Service environment
 
