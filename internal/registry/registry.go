@@ -1,6 +1,5 @@
-// Package registry manages the machine-local list of Docket workspaces served
-// by the user service. It stores paths and display names only; each workspace's
-// files remain its source of truth.
+// Package registry manages machine-local Docket workspaces, installed plugins,
+// and service settings. Each workspace's task files remain its source of truth.
 package registry
 
 import (
@@ -24,6 +23,25 @@ var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 type Config struct {
 	Listen     string           `yaml:"listen,omitempty"`
 	Workspaces []WorkspaceEntry `yaml:"workspaces,omitempty"`
+	Plugins    []PluginEntry    `yaml:"plugins,omitempty"`
+}
+
+// PluginEntry identifies one trusted plugin installed for this Docket instance.
+type PluginEntry struct {
+	Name    string         `yaml:"name" json:"name"`
+	Path    string         `yaml:"path" json:"path"`
+	Source  PluginSource   `yaml:"source" json:"source"`
+	Version string         `yaml:"version" json:"version"`
+	Config  map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
+}
+
+// PluginSource records whether an entry is linked to a local checkout or owned
+// by Docket as a managed git clone.
+type PluginSource struct {
+	Type   string `yaml:"type" json:"type"`
+	URL    string `yaml:"url,omitempty" json:"url,omitempty"`
+	Ref    string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Commit string `yaml:"commit,omitempty" json:"commit,omitempty"`
 }
 
 // WorkspaceEntry identifies one file-backed workspace. Path is the absolute
@@ -149,7 +167,29 @@ func Remove(name string) (bool, error) {
 	return removed, err
 }
 
-// Validate checks uniqueness and route-safe workspace names.
+// Update applies one locked mutation to the machine registry and writes it
+// atomically after validation.
+func Update(mutate func(*Config) error) error {
+	configPath, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	return store.WithLock(configPath+".lock", func() error {
+		config, err := loadPath(configPath)
+		if err != nil {
+			return err
+		}
+		if err := mutate(config); err != nil {
+			return err
+		}
+		if err := config.Validate(); err != nil {
+			return err
+		}
+		return writePath(configPath, config)
+	})
+}
+
+// Validate checks uniqueness and route-safe workspace/plugin names.
 func (c *Config) Validate() error {
 	names := map[string]bool{}
 	paths := map[string]string{}
@@ -169,6 +209,28 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("workspace path %s is registered as both %q and %q", clean, other, entry.Name)
 		}
 		paths[clean] = entry.Name
+	}
+	pluginNames := map[string]bool{}
+	pluginPaths := map[string]string{}
+	for _, entry := range c.Plugins {
+		if !namePattern.MatchString(entry.Name) {
+			return fmt.Errorf("plugin %q: name must contain only lowercase letters, numbers, hyphens, and underscores", entry.Name)
+		}
+		if !filepath.IsAbs(entry.Path) {
+			return fmt.Errorf("plugin %q: path must be absolute", entry.Name)
+		}
+		if entry.Source.Type != "local" && entry.Source.Type != "git" {
+			return fmt.Errorf("plugin %q: source.type must be local or git", entry.Name)
+		}
+		if pluginNames[entry.Name] {
+			return fmt.Errorf("plugin name %q is duplicated", entry.Name)
+		}
+		pluginNames[entry.Name] = true
+		clean := filepath.Clean(entry.Path)
+		if other, exists := pluginPaths[clean]; exists {
+			return fmt.Errorf("plugin path %s is registered as both %q and %q", clean, other, entry.Name)
+		}
+		pluginPaths[clean] = entry.Name
 	}
 	return nil
 }

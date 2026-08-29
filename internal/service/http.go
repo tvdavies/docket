@@ -54,6 +54,7 @@ func Handler(manager *Manager) http.Handler {
 func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 	mux := http.NewServeMux()
 	registerAPI(mux, manager, allowRemoteHost)
+	mux.Handle("/plugins/{plugin}/{path...}", pluginProxy(manager))
 
 	assets, err := fs.Sub(embeddedWeb, "web")
 	if err != nil {
@@ -64,7 +65,11 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		writer.Header().Set("Cache-Control", "no-cache")
 		assetHandler.ServeHTTP(writer, request)
 	})))
-	mux.HandleFunc("GET /", func(writer http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if request.URL.Path != "/" && !strings.HasPrefix(request.URL.Path, "/workspaces/") {
 			http.NotFound(writer, request)
 			return
@@ -105,8 +110,9 @@ func Serve(ctx context.Context, address string, manager *Manager, output io.Writ
 		Handler:           handler(manager, !isLoopbackAddress(address)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// A zero write timeout permits long-lived proxied WebSocket sessions.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 	shutdownDone := make(chan struct{})
 	go func() {

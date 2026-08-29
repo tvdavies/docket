@@ -3,7 +3,9 @@
 Docket has two distinct configuration files:
 
 1. `.docket/config.yaml` defines one workspace's task model and handlers. It belongs with the workspace and may be committed.
-2. `~/.config/docket/config.yaml` is the machine-local service registry. It contains workspace paths and the HTTP listen address.
+2. `~/.config/docket/config.yaml` is the machine-local service registry. It contains workspace paths, installed plugins and instance plugin config, and the HTTP listen address.
+
+Plugin manifests, scoped config, and composition rules are documented in [Plugins](plugins.md).
 
 ## Validate a workspace
 
@@ -59,6 +61,11 @@ handlers:
       data.to: done
     lua: hooks/notify.lua
     delivery: service
+
+plugins:
+  example:
+    config:
+      checkout: /home/me/dev/example
 ```
 
 ### `statuses`
@@ -209,6 +216,12 @@ workspaces:
     path: /home/user/dev/dispatch
   - name: client-b
     path: /home/user/dev/client-b
+plugins:
+  - name: dispatch
+    path: /home/user/dev/docket-plugin-dispatch
+    source: {type: local}
+    version: 1.0.0
+    config: {}
 ```
 
 Use commands rather than editing registrations manually:
@@ -217,6 +230,8 @@ Use commands rather than editing registrations manually:
 docket workspace list
 docket workspace add /home/user/dev/client-b --name client-b
 docket workspace remove client-b
+docket plugin list
+docket plugin add /home/user/dev/docket-plugin-dispatch
 ```
 
 The UI has no authentication. Non-loopback binding is rejected unless `docket serve --allow-remote` is passed explicitly.

@@ -213,12 +213,29 @@ func execute(ws *workspace.Workspace, name string, config workspace.HandlerConfi
 	cmd.Stdin = &input
 	cmd.Stdout = opts.Output
 	cmd.Stderr = opts.Output
-	cmd.Env = withEnv(os.Environ(), map[string]string{
+	environment := map[string]string{
 		"DOCKET_HOME":          ws.Root,
 		"DOCKET_ACTOR":         "handler:" + name,
 		"DOCKET_HANDLER":       name,
 		"DOCKET_HANDLER_STACK": appendHandler(os.Getenv("DOCKET_HANDLER_STACK"), name),
-	})
+		// Clear plugin context inherited through nested docket commands before
+		// selectively setting the current handler's own plugin.
+		"DOCKET_PLUGIN":        "",
+		"DOCKET_PLUGIN_ROOT":   "",
+		"DOCKET_PLUGIN_CONFIG": "",
+	}
+	if config.PluginName != "" {
+		payload, err := json.Marshal(map[string]any{
+			"config": config.PluginConfig, "status_config": config.PluginStatusConfig,
+		})
+		if err != nil {
+			return fmt.Errorf("encode plugin config: %w", err)
+		}
+		environment["DOCKET_PLUGIN"] = config.PluginName
+		environment["DOCKET_PLUGIN_ROOT"] = config.PluginRoot
+		environment["DOCKET_PLUGIN_CONFIG"] = string(payload)
+	}
+	cmd.Env = withEnv(os.Environ(), environment)
 
 	err = cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -231,10 +248,14 @@ func execute(ws *workspace.Workspace, name string, config workspace.HandlerConfi
 }
 
 func handlerCommand(projectRoot string, config workspace.HandlerConfig, opts Options) (string, []string, string, error) {
+	base := projectRoot
+	if config.PluginRoot != "" {
+		base = config.PluginRoot
+	}
 	if config.Lua != "" {
 		script := config.Lua
 		if !filepath.IsAbs(script) {
-			script = filepath.Join(projectRoot, script)
+			script = filepath.Join(base, script)
 		}
 		command := append([]string(nil), opts.LuaCommand...)
 		if len(command) == 0 {
@@ -249,7 +270,7 @@ func handlerCommand(projectRoot string, config workspace.HandlerConfig, opts Opt
 
 	program := config.Run
 	if !filepath.IsAbs(program) {
-		program = filepath.Join(projectRoot, program)
+		program = filepath.Join(base, program)
 	}
 	return program, nil, config.Run, nil
 }
@@ -279,6 +300,54 @@ func Cursor(ws *workspace.Workspace, name string) int {
 	return state.Position
 }
 
+// SeedCursorAtEnd creates a missing handler cursor at the current log end.
+// Existing cursors are preserved so enablement and hot reload never replay.
+func SeedCursorAtEnd(ws *workspace.Workspace, name string) error {
+	path := handlerCursorFile(ws, name)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	position := events.Count(ws)
+	hash, found, err := events.PrefixHash(ws, position)
+	if err != nil {
+		return err
+	}
+	if found < position {
+		return fmt.Errorf("event log shortened while seeding handler %q cursor", name)
+	}
+	return writeCursor(path, position, hash)
+}
+
+// ResetCursor writes an explicit zero checkpoint so the next drain replays
+// from the beginning while service hot-reload seeding can distinguish this
+// opt-in from an accidentally missing new-handler cursor.
+func ResetCursor(ws *workspace.Workspace, name string) error {
+	return writeCursor(handlerCursorFile(ws, name), 0, "")
+}
+
+// AdoptCursor copies a legacy handler checkpoint to a namespaced identity. The
+// source is deliberately retained for atomic rollback to legacy wiring.
+func AdoptCursor(ws *workspace.Workspace, legacy, identity string) error {
+	source := handlerCursorFile(ws, legacy)
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read legacy handler %q cursor: %w", legacy, err)
+	}
+	var state cursorState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("legacy handler %q cursor is not checkpointed JSON", legacy)
+	}
+	if state.Position > 0 {
+		hash, found, err := events.PrefixHash(ws, state.Position)
+		if err != nil || found < state.Position || hash != state.PrefixHash {
+			return fmt.Errorf("legacy handler %q cursor does not match the current event log", legacy)
+		}
+	}
+	return store.WriteAtomic(handlerCursorFile(ws, identity), data, 0o644)
+}
+
 func advanceCursor(ws *workspace.Workspace, name string, position int, expectedHash string) error {
 	prefixHash, found, err := events.PrefixHash(ws, position)
 	if err != nil {
@@ -290,11 +359,15 @@ func advanceCursor(ws *workspace.Workspace, name string, position int, expectedH
 	if prefixHash != expectedHash {
 		return fmt.Errorf("event log changed while handler %q was running; batch will replay", name)
 	}
-	data, err := json.Marshal(cursorState{Position: position, PrefixHash: expectedHash})
+	return writeCursor(handlerCursorFile(ws, name), position, expectedHash)
+}
+
+func writeCursor(path string, position int, prefixHash string) error {
+	data, err := json.Marshal(cursorState{Position: position, PrefixHash: prefixHash})
 	if err != nil {
 		return err
 	}
-	return store.WriteAtomic(handlerCursorFile(ws, name), append(data, '\n'), 0o644)
+	return store.WriteAtomic(path, append(data, '\n'), 0o644)
 }
 
 // cursorState ties a line position to the exact log prefix it acknowledged.

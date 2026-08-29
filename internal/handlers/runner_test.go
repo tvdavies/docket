@@ -67,6 +67,67 @@ func nonEmptyLines(t *testing.T, path string) []string {
 	return lines
 }
 
+func TestPluginHandlerUsesNamespacedCursorRootAndEnvironment(t *testing.T) {
+	ws, projectRoot := newWorkspace(t)
+	pluginRoot := t.TempDir()
+	output := filepath.Join(projectRoot, "plugin-env.txt")
+	t.Setenv("HANDLER_OUTPUT", output)
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+set -eu
+printf '%s|%s|%s|%s|%s\n' "$DOCKET_PLUGIN" "$DOCKET_PLUGIN_ROOT" "$DOCKET_HANDLER" "$DOCKET_ACTOR" "$DOCKET_PLUGIN_CONFIG" >> "$HANDLER_OUTPUT"
+cat >/dev/null
+`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "hooks", "record"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{
+		"example/record": {
+			On: []string{"*"}, Run: "hooks/record", PluginName: "example", PluginRoot: pluginRoot,
+			PluginConfig: map[string]any{"endpoint": "local"}, PluginStatusConfig: map[string]map[string]any{"review": {"agent": "worker"}},
+		},
+	}
+	appendEvent(t, ws, events.TaskCreated)
+	if failures := handlers.DrainAll(ws, handlers.Options{}); len(failures) != 0 {
+		t.Fatalf("plugin drain failed: %v", failures)
+	}
+	lines := nonEmptyLines(t, output)
+	if len(lines) != 1 || !strings.Contains(lines[0], "example|"+pluginRoot+"|example/record|handler:example/record|") ||
+		!strings.Contains(lines[0], `"endpoint":"local"`) || !strings.Contains(lines[0], `"status_config"`) {
+		t.Fatalf("plugin environment = %q", lines)
+	}
+	if got := handlers.Cursor(ws, "example/record"); got != 1 {
+		t.Fatalf("plugin cursor = %d", got)
+	}
+	if got := handlers.Cursor(ws, "record"); got != 0 {
+		t.Fatalf("workspace cursor collided: %d", got)
+	}
+}
+
+func TestWorkspaceHandlerClearsInheritedPluginContext(t *testing.T) {
+	ws, root := newWorkspace(t)
+	output := filepath.Join(root, "plain-plugin-env.txt")
+	t.Setenv("HANDLER_OUTPUT", output)
+	t.Setenv("DOCKET_PLUGIN", "outer")
+	t.Setenv("DOCKET_PLUGIN_ROOT", "/outer")
+	t.Setenv("DOCKET_PLUGIN_CONFIG", `{"config":{"leaked":true}}`)
+	run := writeScript(t, root, "plain-env", `printf '%s|%s|%s' "$DOCKET_PLUGIN" "$DOCKET_PLUGIN_ROOT" "$DOCKET_PLUGIN_CONFIG" > "$HANDLER_OUTPUT"`+"\n")
+	ws.Config.Handlers = map[string]workspace.HandlerConfig{"plain": {On: []string{"*"}, Run: run}}
+	appendEvent(t, ws, events.TaskCreated)
+	if failures := handlers.DrainAll(ws, handlers.Options{}); len(failures) != 0 {
+		t.Fatalf("plain drain failed: %v", failures)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "||" {
+		t.Fatalf("workspace handler inherited plugin context: %q", data)
+	}
+}
+
 func TestDrainDeliversMatchingEventsAndAdvancesCursor(t *testing.T) {
 	ws, root := newWorkspace(t)
 	output := filepath.Join(root, "received.jsonl")

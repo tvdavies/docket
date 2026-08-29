@@ -97,7 +97,11 @@ The UI uses a small local JSON API:
 |---|---|---|
 | `GET` | `/healthz` | Service health |
 | `GET` | `/api/workspaces` | Runtime status for registered workspaces |
-| `GET` | `/api/workspaces/{name}/board` | Status config and task-card summaries |
+| `GET` | `/api/plugins` | Installed plugin schemas and instance values |
+| `PATCH` | `/api/plugins/{plugin}/config` | Validate and update instance plugin config |
+| `GET` | `/api/workspaces/{name}/board` | Status config, plugin metadata, and task-card summaries |
+| `PATCH` | `/api/workspaces/{name}/plugins/{plugin}/config` | Update workspace plugin config |
+| `PATCH` | `/api/workspaces/{name}/plugins/{plugin}/statuses/{status}` | Update status-scoped plugin config |
 | `POST` | `/api/workspaces/{name}/tasks` | Create a task |
 | `GET` | `/api/workspaces/{name}/tasks/{id}` | Read a complete task bundle |
 | `PATCH` | `/api/workspaces/{name}/tasks/{id}` | Edit task fields or move status |
@@ -108,6 +112,9 @@ The UI uses a small local JSON API:
 | `POST` | `/api/workspaces/{name}/tasks/{id}/comments` | Append a comment |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/attachments` | Upload a file and optional caption (multipart, 25 MiB max) |
 | `GET` | `/api/workspaces/{name}/tasks/{id}/attachments/{file}` | Download an exact manifest-backed file |
+| any | `/plugins/{plugin}/*` | Same-origin proxy to an enabled plugin's loopback service |
+
+See [Plugin UI registry contract](plugin-ui.md) for the board-facing metadata and settings schemas.
 
 ### Create
 
