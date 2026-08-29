@@ -5,6 +5,8 @@ package store
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -64,18 +66,47 @@ func AppendLine(path string, line []byte) error {
 // one atomic task mutation produces several ordered events that must not be
 // interleaved with another writer's event group.
 func AppendLines(path string, lines [][]byte) error {
+	_, err := AppendLinesAt(path, lines)
+	return err
+}
+
+// AppendLinesAt is AppendLines plus the exact byte offset after the committed
+// group. The offset is captured while the append lock is held, so concurrent
+// writers cannot make a mutation acknowledge events that were appended later.
+func AppendLinesAt(path string, lines [][]byte) (int64, error) {
+	end, _, err := AppendLinesCheckpoint(path, lines)
+	return end, err
+}
+
+// AppendLinesCheckpoint is AppendLinesAt plus a SHA-256 hash of the exact file
+// prefix through the committed boundary. Consumers use it to reject cursors
+// after an in-place truncation or history rewrite.
+func AppendLinesCheckpoint(path string, lines [][]byte) (int64, string, error) {
 	if len(lines) == 0 {
-		return nil
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			return 0, "", nil
+		}
+		if err != nil {
+			return 0, "", err
+		}
+		if len(data) == 0 {
+			return 0, "", nil
+		}
+		sum := sha256.Sum256(data)
+		return int64(len(data)), hex.EncodeToString(sum[:]), nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return 0, "", err
 	}
 	var payload bytes.Buffer
 	for _, line := range lines {
 		payload.Write(line)
 		payload.WriteByte('\n')
 	}
-	return WithLock(path+".lock", func() error {
+	var end int64
+	var checkpoint string
+	err := WithLock(path+".lock", func() error {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 		if err != nil {
 			return err
@@ -86,6 +117,13 @@ func AppendLines(path string, lines [][]byte) error {
 			return err
 		}
 		originalSize := info.Size()
+		hash := sha256.New()
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := io.Copy(hash, f); err != nil {
+			return err
+		}
 		rollback := func(cause error) error {
 			truncateErr := f.Truncate(originalSize)
 			syncErr := f.Sync()
@@ -107,8 +145,12 @@ func AppendLines(path string, lines [][]byte) error {
 		if err := f.Sync(); err != nil {
 			return rollback(err)
 		}
+		_, _ = hash.Write(payload.Bytes())
+		end = originalSize + int64(written)
+		checkpoint = hex.EncodeToString(hash.Sum(nil))
 		return nil
 	})
+	return end, checkpoint, err
 }
 
 // EnsureDir creates a directory (and parents) if absent.

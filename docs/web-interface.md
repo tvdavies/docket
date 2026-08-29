@@ -1,113 +1,182 @@
 # Web interface
 
-The Docket service includes a local multi-workspace Kanban board at:
+Docket serves a lightweight React task board at:
 
 ```text
 http://127.0.0.1:7463
 ```
 
-Start it in the foreground with `docket serve --all`, or manage the background user service with `docket service`.
+Start it with `docket serve --all`, or manage the background user service with
+`docket service`. The previous board remains available for one release at
+`/classic`; `/next` is an alias of the current board for old preview links.
+
+## Live event-stream architecture
+
+The browser keeps one active workspace in memory and folds a same-origin SSE
+stream rather than polling whole boards. `GET /api/workspaces/{name}/stream`
+sends:
+
+- `init` — a full task-card snapshot, workspace status/terminal/label config,
+  and an opaque cursor;
+- `patch` — one durable ledger event enriched with the complete current task
+  summary; applying it is an idempotent keyed upsert;
+- `config` — updated statuses, terminal lanes, and labels after config reload;
+- `live` — bounded ephemeral data with a TTL, held only in service memory; and
+- heartbeat comments roughly every 25 seconds.
+
+SSE `id` values are opaque physical event-log cursors. EventSource reconnects
+with `Last-Event-ID`; the server replays patches after a valid cursor. A stale,
+truncated, replaced, or previous-process cursor receives a new `init` snapshot.
+Slow clients are disconnected rather than buffered without bound and recover by
+reconnecting.
+
+Task mutations stay on the REST API. Successful mutation bundles add a `cursor`
+field identifying the exact event group committed under the ledger append lock.
+The browser renders an optimistic overlay immediately and retires it when that
+cursor arrives on the stream. Failed mutations roll back visibly with Retry and
+Dismiss actions.
 
 ## Capabilities
 
-- switch workspaces from a breadcrumb and use clean, shareable task URLs;
-- switch between fixed-lane board and compact list views;
+- switch among all registered workspaces while keeping already-open boards in
+  memory;
+- use clean, shareable explorer and task URLs;
+- switch between virtualised fixed-lane board and compact list views;
 - filter by text, status, assignee, label, project, or task state;
 - order by updated time, created time, ID, or title;
-- hide statuses per workspace in browser-local view preferences;
-- drag cards between independently scrolling status lanes and create tasks;
-- read each task as a rendered Markdown document;
-- edit title, description, status, assignee, and labels in place with blur autosave;
-- see and resolve active waits with optional feedback;
-- manage typed link resources and securely upload or download file resources;
-- read relationships and a chronological activity timeline with comments as cards; and
+- hide statuses and configure visible card fields per workspace;
+- save browser-local named views and choose system, light, or dark themes;
+- drag cards between lanes or use the accessible card Move menu;
+- create tasks and optimistically edit title, description, status, assignee,
+  and labels;
+- read and resolve waits, preserving feedback when resolution fails;
+- add/remove typed links and upload/download file resources;
+- read relationships and a chronological, Markdown-rendered activity timeline;
+- add durable comments; and
 - choose the actor recorded on browser mutations.
 
-The board reads authoritative task files on every refresh and does not maintain
-a separate browser or server database. It does not infer external process or
-agent liveness. Execution systems publish durable typed references whose links
-open their own status or session interfaces. Writes use the same action layer,
-per-task locks, atomic writes, validation, and event production as the CLI and
-Lua SDK.
+Lanes, terminal states, and available labels are read from workspace config and
+update live without code changes. Unknown statuses found in older task files
+remain visible so tasks never disappear.
 
-Browser mutations therefore trigger normal handlers. The HTTP response does not
-wait for handler completion; the service watcher drains the resulting event
-asynchronously.
+## Keyboard model
+
+The board is usable without a mouse:
+
+| Binding | Action |
+|---|---|
+| `Cmd/Ctrl+K` | Open command palette |
+| `J` / `K`, arrows | Move card selection |
+| `Enter` | Open selected task |
+| `Esc` | Close the active panel/dialog |
+| `M`, then lane number | Move selected task |
+| `Shift+Left/Right` | Move to previous/next lane |
+| `/` | Focus task filter |
+| `C` | Create task |
+| `A` / `L` | Open selected task for assignee/label editing |
+| `W` | Toggle the waiting-task view |
+
+The command palette exposes navigation, view, workspace, and move actions with
+bindings shown beside discoverable commands.
 
 ## Views, preferences, and deep links
 
-The canonical explorer and task URLs are:
+Canonical URLs are:
 
 ```text
 http://127.0.0.1:7463/workspaces/dispatch
 http://127.0.0.1:7463/workspaces/dispatch/tasks/JOB-0001
 ```
 
-Existing `?workspace=NAME&task=TASK-ID` links remain supported and are
-canonicalized to the clean task URL on load. View mode, filters, ordering, empty
-status visibility, and hidden statuses are stored per workspace in browser local
-storage; they do not modify `.docket/config.yaml` or task files.
+Existing `?workspace=NAME&task=TASK-ID` links and `/next/workspaces/...` links
+are canonicalized to those paths. The classic fallback uses
+`/classic/workspaces/...`.
 
-## Drag and drop
+View mode, filters, ordering, empty/hidden status visibility, card fields,
+theme, and named views are stored per workspace in browser local storage. The
+new board reads the classic `docket.explorer.v1.{workspace}` preferences when
+migrating to its v2 shape. Preferences never modify `.docket/config.yaml` or
+task files.
 
-Drag a task card onto another configured status column. The board updates optimistically, sends a validated status mutation, and restores the previous lane if the write fails.
+## Plugin registry seam
 
-Unknown statuses found in older task files are displayed in an additional column so tasks never disappear. New and edited tasks may select only statuses currently configured in `.docket/config.yaml`.
+The board consumes the approved JOB-0047 v1 interfaces from
+`web/src/registry/contracts.ts`: framework-neutral task cards use
+`appliesTo` + `mount/update/destroy`, while URL resolvers expose
+`pattern`/`kinds` + synchronous-or-async `resolve`. Build-time modules are
+loaded as lazy ESM chunks and registered by their namespaced keys.
+
+Reference chips on cards, task resources, and reference-bearing activity flow
+through one `ResolvedReference` component with a safe hostname/kind fallback.
+Plugin cards mount on board cards and task-detail headers. Every imperative
+mount/update/destroy call is isolated so one broken plugin degrades to a local
+fallback instead of breaking the board. The bundled demo plugin resolves
+`plans.myslop.app` plan links and mounts a live-updating plan/status card; tests
+also register a deliberately broken card to prove failure isolation.
+
+## Ephemeral live data
+
+External local services can publish high-frequency display state without
+writing the durable ledger:
+
+```sh
+curl -sS \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"dispatch/session","task":"JOB-0001","session":"abc","payload":{"state":"working"},"ttl_ms":30000}' \
+  http://127.0.0.1:7463/api/workspaces/dispatch/live
+```
+
+`kind` is required, payload must be valid JSON no larger than 64 KiB, and TTL is
+1–600000 ms. At most 2048 current items are retained per workspace. Data and
+expiry are in memory only; there is no call path from this endpoint to
+`events.jsonl`.
 
 ## Actor identity
 
-The **Acting as** field is stored in browser local storage and sent as `X-Docket-Actor` on writes. It becomes the actor on task events and comment author metadata. The default is `web`.
-
-## Editing and refresh behaviour
-
-Task descriptions and comments are stored as Markdown and rendered with raw HTML
-disabled. Task titles and rendered descriptions are directly contenteditable,
-without swapping to a separate input or source editor; property controls remain
-compact field editors. Blur converts edited rendered content back to Markdown
-and sends a partial task PATCH. Untouched Markdown is never rewritten. Failed
-saves retain the editable draft and expose a retry action.
-
-The explorer refreshes every three seconds and when **Refresh** is pressed. Lane,
-list, and horizontal board scroll positions survive quiet refreshes. A focused or
-failed task editor, comment draft, wait-resolution draft, or resource dialog is
-never replaced by background task-detail polling.
+The **Acting as** field is stored in local storage and sent as
+`X-Docket-Actor` on writes. It becomes the event actor and comment author. The
+default is `web`.
 
 ## Security model
 
-The interface has no authentication and Docket binds to loopback by default. A non-loopback bind is refused unless `--allow-remote` is explicitly supplied.
+The interface has no authentication and binds to loopback by default. A
+non-loopback bind is refused unless `--allow-remote` is explicitly supplied.
+Use an authenticated tailnet/reverse-proxy edge before remote exposure.
 
-Mutation endpoints:
+All routes, including the stream, reject non-loopback Host headers on the
+default service. Mutations:
 
-- require `Content-Type: application/json`, except the bounded multipart attachment upload;
-- reject non-loopback Host headers on the default loopback service, preventing DNS-rebinding reads and writes;
-- reject cross-origin browser writes; and
-- limit JSON request bodies to 1 MiB and uploaded files to 25 MiB.
+- require JSON content type except bounded multipart upload;
+- reject cross-origin browser writes;
+- limit JSON bodies to 1 MiB, live payloads to 64 KiB, and uploads to 25 MiB;
+- validate complete PATCH requests before mutation; and
+- use the same action layer, task locks, atomic writes, and events as the CLI.
 
-Downloads are restricted to exact attachment-manifest entries and are always
-served with `Content-Disposition: attachment`, `nosniff`, and a sandbox CSP so
-uploaded HTML cannot execute on the Docket origin.
-
-Do not expose the board to an untrusted network merely by passing `--allow-remote`; put authenticated access in front of it first.
+Downloads resolve exact attachment-manifest entries and always use attachment
+disposition, `nosniff`, and a sandbox CSP. Markdown is rendered server-side
+with raw HTML disabled and unsafe links removed. The client uses same-origin
+relative URLs and cookie-compatible EventSource, so future edge authentication
+does not require a transport redesign.
 
 ## HTTP API
-
-The UI uses a small local JSON API:
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Service health |
 | `GET` | `/api/workspaces` | Runtime status for registered workspaces |
-| `GET` | `/api/plugins` | Installed plugin schemas and instance values |
+| `GET` | `/api/plugins` | Installed plugin schemas and current scoped values |
 | `PATCH` | `/api/plugins/{plugin}/config` | Validate and update instance plugin config |
-| `GET` | `/api/workspaces/{name}/board` | Status config, plugin metadata, and task-card summaries |
+| `GET` | `/api/workspaces/{name}/board` | Compatibility board snapshot with plugin metadata |
+| `GET` | `/api/workspaces/{name}/stream` | SSE snapshot + resumable live tail, including plugin metadata |
+| `POST` | `/api/workspaces/{name}/live` | Publish in-memory TTL data |
 | `PATCH` | `/api/workspaces/{name}/plugins/{plugin}/config` | Update workspace plugin config |
 | `PATCH` | `/api/workspaces/{name}/plugins/{plugin}/statuses/{status}` | Update status-scoped plugin config |
 | `POST` | `/api/workspaces/{name}/tasks` | Create a task |
 | `GET` | `/api/workspaces/{name}/tasks/{id}` | Read a complete task bundle |
 | `PATCH` | `/api/workspaces/{name}/tasks/{id}` | Edit task fields or move status |
-| `PUT` | `/api/workspaces/{name}/tasks/{id}/wait` | Set the one active wait |
+| `PUT` | `/api/workspaces/{name}/tasks/{id}/wait` | Set the active wait |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/wait/resolve` | Resolve an exact wait ID |
-| `POST` | `/api/workspaces/{name}/tasks/{id}/references` | Add a typed external reference |
+| `POST` | `/api/workspaces/{name}/tasks/{id}/references` | Add a typed reference |
 | `DELETE` | `/api/workspaces/{name}/tasks/{id}/references/{reference}` | Remove a reference; send `{}` JSON |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/comments` | Append a comment |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/attachments` | Upload a file and optional caption (multipart, 25 MiB max) |
@@ -116,80 +185,23 @@ The UI uses a small local JSON API:
 
 See [Plugin UI registry contract](plugin-ui.md) for the board-facing metadata and settings schemas.
 
-### Create
+Errors use `{"error":"..."}`. Existing endpoint fields remain compatible;
+mutation bundles only add the optional `cursor` field.
+
+## Development and committed build
+
+Frontend source lives under `web/`. Vite emits the committed `web/dist` tree,
+which a small Go package embeds so `go build`, `go install`, and release builds
+remain self-contained without Bun at runtime.
 
 ```sh
-curl -sS \
-  -H 'Content-Type: application/json' \
-  -H 'X-Docket-Actor: web-api' \
-  -d '{"title":"Investigate cache","status":"ready","labels":["bug"]}' \
-  http://127.0.0.1:7463/api/workspaces/dispatch/tasks
-```
-
-Fields: `title`, `description`, `project`, `labels`, `assignee`, and `status`. Only `title` is required; an omitted status uses the workspace's first lane.
-
-### Update or move
-
-All fields are optional, but at least one must be present:
-
-```sh
-curl -sS -X PATCH \
-  -H 'Content-Type: application/json' \
-  -H 'X-Docket-Actor: web-api' \
-  -d '{"status":"in-review","assignee":"reviewer"}' \
-  http://127.0.0.1:7463/api/workspaces/dispatch/tasks/JOB-0001
-```
-
-Supported fields: `title`, `description`, `labels`, `assignee`, and `status`. The API validates the complete request before applying any field, writes the dossier once under one task lock, and commits the resulting event group before releasing that lock. If event commit fails, the original dossier is restored.
-
-### Wait and resume
-
-```sh
-WAIT=$(curl -sS -X PUT \
-  -H 'Content-Type: application/json' \
-  -H 'X-Docket-Actor: planner' \
-  -d '{"kind":"plan_feedback","reason":"Awaiting plan review","reference":"https://example.com/plan"}' \
-  http://127.0.0.1:7463/api/workspaces/dispatch/tasks/JOB-0001/wait)
-
-WAIT_ID=$(printf '%s' "$WAIT" | jq -r .wait.id)
-curl -sS -X POST \
-  -H 'Content-Type: application/json' \
-  -d "{\"wait_id\":\"$WAIT_ID\",\"result\":\"approved\"}" \
-  http://127.0.0.1:7463/api/workspaces/dispatch/tasks/JOB-0001/wait/resolve
-```
-
-The board can add a comment and then resolve the active wait. The status lane does not change. See [Waits, references, and activity](waits-and-references.md).
-
-### Comment
-
-```sh
-curl -sS \
-  -H 'Content-Type: application/json' \
-  -H 'X-Docket-Actor: web-api' \
-  -d '{"text":"Research complete"}' \
-  http://127.0.0.1:7463/api/workspaces/dispatch/tasks/JOB-0001/comments
-```
-
-Errors use a stable JSON shape:
-
-```json
-{"error":"task \"JOB-9999\" not found"}
-```
-
-## Development without a release
-
-Build and run a second local instance on another port:
-
-```sh
+cd web && bun install
+make web          # type-check, build, and enforce ≤170 KiB gzip
+make web-check    # rebuild and fail if web/dist differs
+make test         # Go, classic Bun helpers, and React/Vitest tests
 make build
-./bin/docket serve --all --listen 127.0.0.1:7464
 ```
 
-The embedded HTML, CSS, and JavaScript modules live under `internal/service/web/`.
-Rebuilding the Go binary embeds changed assets; no frontend package manager or
-runtime build step is required. Pure route and view-model tests use Bun without
-installing packages:
-
-```sh
-bun test internal/service/web/*.test.js
-```
+The classic source remains under `internal/service/web/` during the fallback
+window. CI installs the locked Bun dependencies, verifies dist drift and bundle
+size, then runs Go tests, both frontend suites, vet, and formatting checks.

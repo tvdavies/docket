@@ -15,6 +15,7 @@ import (
 
 	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/bundle"
+	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/plugin"
 	"github.com/tvdavies/docket/internal/project"
 	"github.com/tvdavies/docket/internal/registry"
@@ -92,6 +93,7 @@ type taskDetailResponse struct {
 	*bundle.Bundle
 	DescriptionHTML string             `json:"description_html"`
 	Activity        []activityResponse `json:"activity"`
+	Cursor          string             `json:"cursor,omitempty"`
 }
 
 type createTaskRequest struct {
@@ -133,6 +135,7 @@ type addReferenceRequest struct {
 }
 
 func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
+	registerStreamAPI(mux, manager, allowRemoteHost)
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "workspaces": len(manager.Statuses())})
 	})
@@ -228,17 +231,7 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 			Tasks:     make([]boardTask, 0, len(tasks)),
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
-		for _, loaded := range ws.Plugins {
-			metadata := boardPlugin{
-				Name: loaded.Manifest.Name, Version: loaded.Manifest.Version,
-				Cards:              append([]plugin.Card{}, loaded.Manifest.UI.Cards...),
-				ReferenceResolvers: append([]plugin.ReferenceResolver{}, loaded.Manifest.UI.ReferenceResolvers...),
-			}
-			if loaded.Manifest.Service != nil {
-				metadata.ServiceBase = "/plugins/" + loaded.Manifest.Name
-			}
-			result.Plugins = append(result.Plugins, metadata)
-		}
+		result.Plugins = pluginsForBoard(ws)
 		for _, value := range tasks {
 			summary, err := summariseTask(value)
 			if err != nil {
@@ -307,7 +300,7 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 				return
 			}
 		}
-		operations := webTaskActions(ws, request)
+		operations, capture := webMutationActions(ws, request)
 		created, err := operations.Create(task.CreateOptions{
 			Title:       input.Title,
 			Description: input.Description,
@@ -320,7 +313,7 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusCreated, ws, created.ID)
+		writeTaskBundleWithCursor(writer, http.StatusCreated, ws, created.ID, capture.token(manager, request.PathValue("workspace")))
 	})
 	mux.HandleFunc("GET /api/workspaces/{workspace}/tasks/{task}", func(writer http.ResponseWriter, request *http.Request) {
 		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
@@ -344,11 +337,12 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		defer release()
 		id := request.PathValue("task")
-		if err := updateTaskFromAPI(ws, webTaskActions(ws, request), id, input); err != nil {
+		operations, capture := webMutationActions(ws, request)
+		if err := updateTaskFromAPI(ws, operations, id, input); err != nil {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusOK, ws, id)
+		writeTaskBundleWithCursor(writer, http.StatusOK, ws, id, capture.token(manager, request.PathValue("workspace")))
 	})
 	mux.HandleFunc("PUT /api/workspaces/{workspace}/tasks/{task}/wait", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowJSONMutation(writer, request, allowRemoteHost) {
@@ -364,13 +358,14 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		defer release()
 		id := request.PathValue("task")
-		if _, err := webTaskActions(ws, request).SetWait(id, actions.SetWaitOptions{
+		operations, capture := webMutationActions(ws, request)
+		if _, err := operations.SetWait(id, actions.SetWaitOptions{
 			Kind: input.Kind, Reason: input.Reason, Reference: input.Reference,
 		}); err != nil {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusCreated, ws, id)
+		writeTaskBundleWithCursor(writer, http.StatusCreated, ws, id, capture.token(manager, request.PathValue("workspace")))
 	})
 	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/wait/resolve", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowJSONMutation(writer, request, allowRemoteHost) {
@@ -386,13 +381,14 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		defer release()
 		id := request.PathValue("task")
-		if _, err := webTaskActions(ws, request).ResolveWait(id, actions.ResolveWaitOptions{
+		operations, capture := webMutationActions(ws, request)
+		if _, err := operations.ResolveWait(id, actions.ResolveWaitOptions{
 			WaitID: input.WaitID, Result: input.Result,
 		}); err != nil {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusOK, ws, id)
+		writeTaskBundleWithCursor(writer, http.StatusOK, ws, id, capture.token(manager, request.PathValue("workspace")))
 	})
 	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/references", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowJSONMutation(writer, request, allowRemoteHost) {
@@ -408,11 +404,12 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		defer release()
 		id := request.PathValue("task")
-		if _, _, err := webTaskActions(ws, request).AddReference(id, input.Kind, input.URL, input.Title); err != nil {
+		operations, capture := webMutationActions(ws, request)
+		if _, _, err := operations.AddReference(id, input.Kind, input.URL, input.Title); err != nil {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusCreated, ws, id)
+		writeTaskBundleWithCursor(writer, http.StatusCreated, ws, id, capture.token(manager, request.PathValue("workspace")))
 	})
 	mux.HandleFunc("DELETE /api/workspaces/{workspace}/tasks/{task}/references/{reference}", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowJSONMutation(writer, request, allowRemoteHost) {
@@ -427,11 +424,12 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		defer release()
 		id := request.PathValue("task")
-		if _, _, err := webTaskActions(ws, request).RemoveReference(id, request.PathValue("reference")); err != nil {
+		operations, capture := webMutationActions(ws, request)
+		if _, _, err := operations.RemoveReference(id, request.PathValue("reference")); err != nil {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusOK, ws, id)
+		writeTaskBundleWithCursor(writer, http.StatusOK, ws, id, capture.token(manager, request.PathValue("workspace")))
 	})
 	mux.HandleFunc("POST /api/workspaces/{workspace}/tasks/{task}/attachments", func(writer http.ResponseWriter, request *http.Request) {
 		if !allowMultipartMutation(writer, request, allowRemoteHost) {
@@ -474,11 +472,12 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		defer release()
 		id := request.PathValue("task")
-		if _, err := webTaskActions(ws, request).Attach(id, header.Filename, data, request.FormValue("caption")); err != nil {
+		operations, capture := webMutationActions(ws, request)
+		if _, err := operations.Attach(id, header.Filename, data, request.FormValue("caption")); err != nil {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusCreated, ws, id)
+		writeTaskBundleWithCursor(writer, http.StatusCreated, ws, id, capture.token(manager, request.PathValue("workspace")))
 	})
 	mux.HandleFunc("GET /api/workspaces/{workspace}/tasks/{task}/attachments/{file}", func(writer http.ResponseWriter, request *http.Request) {
 		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
@@ -528,12 +527,29 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 		}
 		defer release()
 		id := request.PathValue("task")
-		if _, err := webTaskActions(ws, request).Comment(id, input.Text); err != nil {
+		operations, capture := webMutationActions(ws, request)
+		if _, err := operations.Comment(id, input.Text); err != nil {
 			writeAPIError(writer, err)
 			return
 		}
-		writeTaskBundle(writer, http.StatusCreated, ws, id)
+		writeTaskBundleWithCursor(writer, http.StatusCreated, ws, id, capture.token(manager, request.PathValue("workspace")))
 	})
+}
+
+func pluginsForBoard(ws *workspace.Workspace) []boardPlugin {
+	result := make([]boardPlugin, 0, len(ws.Plugins))
+	for _, loaded := range ws.Plugins {
+		metadata := boardPlugin{
+			Name: loaded.Manifest.Name, Version: loaded.Manifest.Version,
+			Cards:              append([]plugin.Card{}, loaded.Manifest.UI.Cards...),
+			ReferenceResolvers: append([]plugin.ReferenceResolver{}, loaded.Manifest.UI.ReferenceResolvers...),
+		}
+		if loaded.Manifest.Service != nil {
+			metadata.ServiceBase = "/plugins/" + loaded.Manifest.Name
+		}
+		result = append(result, metadata)
+	}
+	return result
 }
 
 func patchInstancePluginConfig(name string, values map[string]any) error {
@@ -630,6 +646,27 @@ func updateTaskFromAPI(ws *workspace.Workspace, operations actions.Tasks, id str
 	return err
 }
 
+type mutationCursorCapture struct {
+	value *events.LogCursor
+}
+
+func webMutationActions(ws *workspace.Workspace, request *http.Request) (actions.Tasks, *mutationCursorCapture) {
+	operations := webTaskActions(ws, request)
+	capture := &mutationCursorCapture{}
+	operations.RecordCursor = func(cursor events.LogCursor) {
+		copy := cursor
+		capture.value = &copy
+	}
+	return operations, capture
+}
+
+func (capture *mutationCursorCapture) token(manager *Manager, workspaceName string) string {
+	if capture == nil || capture.value == nil {
+		return ""
+	}
+	return manager.cursorForLeasedMutation(workspaceName, *capture.value)
+}
+
 func webTaskActions(ws *workspace.Workspace, request *http.Request) actions.Tasks {
 	actor := strings.TrimSpace(request.Header.Get("X-Docket-Actor"))
 	if actor == "" {
@@ -651,6 +688,10 @@ func leaseAPIWorkspace(writer http.ResponseWriter, manager *Manager, name string
 }
 
 func writeTaskBundle(writer http.ResponseWriter, status int, ws *workspace.Workspace, id string) {
+	writeTaskBundleWithCursor(writer, status, ws, id, "")
+}
+
+func writeTaskBundleWithCursor(writer http.ResponseWriter, status int, ws *workspace.Workspace, id, cursor string) {
 	result, err := bundle.Build(ws, id, 0)
 	if err != nil {
 		writeAPIError(writer, err)
@@ -673,7 +714,7 @@ func writeTaskBundle(writer http.ResponseWriter, status int, ws *workspace.Works
 		}
 		activity = append(activity, activityResponse{ActivityView: entry, BodyHTML: bodyHTML})
 	}
-	writeJSON(writer, status, taskDetailResponse{Bundle: result, DescriptionHTML: descriptionHTML, Activity: activity})
+	writeJSON(writer, status, taskDetailResponse{Bundle: result, DescriptionHTML: descriptionHTML, Activity: activity, Cursor: cursor})
 }
 
 func summariseTask(value *task.Task) (boardTask, error) {

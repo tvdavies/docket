@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -523,30 +524,62 @@ func TestBoardAssetsAreEmbeddedWithStrictCSP(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := readBody(t, response)
-	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Kanban board") || !strings.Contains(body, "type=\"module\"") || !strings.Contains(body, "/assets/app.js") {
-		t.Fatalf("index response = %d %q", response.StatusCode, body)
+	if response.StatusCode != http.StatusOK || !strings.Contains(body, "<div id=\"root\"></div>") || !strings.Contains(body, "type=\"module\"") {
+		t.Fatalf("next index response = %d %q", response.StatusCode, body)
 	}
 	csp := response.Header.Get("Content-Security-Policy")
 	if strings.Contains(csp, "unsafe-inline") || !strings.Contains(csp, "script-src 'self'") {
 		t.Fatalf("unexpected CSP: %s", csp)
 	}
-
-	response, err = http.Get(server.URL + "/assets/app.js")
+	match := regexp.MustCompile(`src="([^"]+\.js)"`).FindStringSubmatch(body)
+	if len(match) != 2 {
+		t.Fatalf("next index has no JS asset: %s", body)
+	}
+	response, err = http.Get(server.URL + match[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	asset := readBody(t, response)
-	if response.StatusCode != http.StatusOK || !strings.Contains(asset, "async function loadBoard") || !strings.Contains(asset, "buildTaskPath") {
-		t.Fatalf("JS asset response = %d", response.StatusCode)
+	if response.StatusCode != http.StatusOK || !strings.Contains(asset, "EventSource") || response.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("next JS asset response = %d", response.StatusCode)
+	}
+	for _, reference := range regexp.MustCompile(`(?:src|href)="(/assets/[^"]+)"`).FindAllStringSubmatch(body, -1) {
+		response, err = http.Get(server.URL + reference[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = readBody(t, response)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("embedded asset %s = %d", reference[1], response.StatusCode)
+		}
 	}
 
-	response, err = http.Get(server.URL + "/workspaces/demo/tasks/TASK-0001")
+	response, err = http.Get(server.URL + "/classic")
 	if err != nil {
 		t.Fatal(err)
 	}
-	deepLink := readBody(t, response)
-	if response.StatusCode != http.StatusOK || !strings.Contains(deepLink, "Docket tasks") || response.Header.Get("Content-Security-Policy") != csp {
-		t.Fatalf("deep-link shell = %d %q", response.StatusCode, deepLink)
+	classic := readBody(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(classic, "Docket tasks") || !strings.Contains(classic, "/classic-assets/app.js") {
+		t.Fatalf("classic shell = %d %q", response.StatusCode, classic)
+	}
+	response, err = http.Get(server.URL + "/classic-assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	classicAsset := readBody(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(classicAsset, "async function loadBoard") {
+		t.Fatalf("classic JS asset response = %d", response.StatusCode)
+	}
+
+	for _, path := range []string{"/workspaces/demo/tasks/TASK-0001", "/next/workspaces/demo", "/classic/workspaces/demo/tasks/TASK-0001"} {
+		response, err = http.Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deepLink := readBody(t, response)
+		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Security-Policy") != csp || !strings.Contains(deepLink, "Docket") {
+			t.Fatalf("deep-link shell %s = %d %q", path, response.StatusCode, deepLink)
+		}
 	}
 	response, err = http.Get(server.URL + "/not-an-app-route")
 	if err != nil {

@@ -160,9 +160,10 @@ examples, retry semantics, and debugging guide.
 ## Develop
 
 ```sh
-make build        # → bin/docket
+make build        # → bin/docket, using the committed web/dist build
 make test
-go test ./...
+make web          # rebuild the React/Vite/Tailwind board (requires Bun)
+make web-check    # rebuild and fail if committed dist drifted
 make snapshot     # cross-platform release build (needs goreleaser)
 ```
 
