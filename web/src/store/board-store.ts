@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { BoardTask, LivePayload, StreamConfig, StreamInit, StreamPatch } from '../types';
+import type { BoardTask, CreateTaskInput, LivePayload, StreamConfig, StreamInit, StreamPatch, TaskPatch } from '../types';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
 export type PendingMutation = {
@@ -7,7 +7,9 @@ export type PendingMutation = {
   kind: 'patch' | 'create';
   taskId: string;
   patch?: Partial<BoardTask>;
+  requestPatch?: TaskPatch;
   created?: BoardTask;
+  createInput?: CreateTaskInput;
   cursor?: string;
   failed?: string;
 };
@@ -94,16 +96,16 @@ export class BoardStore {
     this.emit();
   }
 
-  optimisticPatch(taskId: string, patch: Partial<BoardTask>) {
+  optimisticPatch(taskId: string, patch: Partial<BoardTask>, requestPatch: TaskPatch = patch) {
     const id = `mutation-${++mutationSequence}`;
-    this.pending.push({ id, kind: 'patch', taskId, patch });
+    this.pending.push({ id, kind: 'patch', taskId, patch, requestPatch });
     this.emit();
     return id;
   }
 
-  optimisticCreate(task: BoardTask) {
+  optimisticCreate(task: BoardTask, createInput?: CreateTaskInput) {
     const id = `mutation-${++mutationSequence}`;
-    this.pending.push({ id, kind: 'create', taskId: task.id, created: task });
+    this.pending.push({ id, kind: 'create', taskId: task.id, created: task, createInput });
     this.emit();
     return id;
   }

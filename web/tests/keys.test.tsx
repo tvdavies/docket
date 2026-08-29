@@ -27,4 +27,14 @@ describe('keyboard model', () => {
     fireEvent.keyDown(view.getByLabelText('typing'), { key: 'c' });
     expect(handlers.onCreate).not.toHaveBeenCalled();
   });
+
+  test('does not trigger board commands from dialogs', () => {
+    const handlers = { onSelect: vi.fn(), onOpen: vi.fn(), onMove: vi.fn(), onPalette: vi.fn(), onCreate: vi.fn(), onFilter: vi.fn(), onAssign: vi.fn(), onLabel: vi.fn(), onWaitView: vi.fn() };
+    function DialogHarness() { useBoardKeys({ tasks, statuses: ['todo', 'done'], selected: 'TASK-1', ...handlers }); return <div role="dialog"><button>Save</button></div>; }
+    const view = render(<DialogHarness />);
+    const save = view.getByRole('button', { name: 'Save' });
+    fireEvent.keyDown(save, { key: 'm' }); fireEvent.keyDown(save, { key: '2' }); fireEvent.keyDown(save, { key: 'c' });
+    expect(handlers.onMove).not.toHaveBeenCalled();
+    expect(handlers.onCreate).not.toHaveBeenCalled();
+  });
 });

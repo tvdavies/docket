@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { BoardTask } from '../types';
 
-const isTyping = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+const inOverlay = (target: EventTarget | null) => target instanceof HTMLElement && Boolean(target.closest('[role="dialog"], [role="menu"], [role="menuitem"]'));
+const isInteractiveContext = (target: EventTarget | null) => target instanceof HTMLElement && (
+  target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)
+);
 
 export function useBoardKeys({ tasks, statuses, selected, onSelect, onOpen, onMove, onPalette, onCreate, onFilter, onAssign, onLabel, onWaitView }: {
   tasks: BoardTask[]; statuses: string[]; selected: string;
@@ -11,8 +14,9 @@ export function useBoardKeys({ tasks, statuses, selected, onSelect, onOpen, onMo
   const moveMode = useRef<number | null>(null);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (inOverlay(event.target)) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); onPalette(); return; }
-      if (isTyping(event.target) || event.altKey || event.metaKey || event.ctrlKey) return;
+      if (isInteractiveContext(event.target) || event.altKey || event.metaKey || event.ctrlKey) return;
       const index = Math.max(0, tasks.findIndex((task) => task.id === selected));
       const task = tasks[index];
       if (moveMode.current && /^\d$/.test(event.key)) {

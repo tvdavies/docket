@@ -27,6 +27,7 @@ const (
 )
 
 var streamHeartbeatInterval = 25 * time.Second
+var streamWriteTimeout = 10 * time.Second
 var errWorkspaceStreamUnavailable = errors.New("workspace stream is unavailable")
 
 type streamConfig struct {
@@ -58,14 +59,17 @@ type livePayload struct {
 type liveItem struct {
 	payload   livePayload
 	expiresAt time.Time
+	version   uint64
 }
 
 type streamNotification struct {
-	kind       string
-	cursor     string
-	generation string
-	offset     int64
-	data       any
+	kind        string
+	cursor      string
+	generation  string
+	offset      int64
+	data        any
+	expiresAt   time.Time
+	liveVersion uint64
 }
 
 type publicCursor struct {
@@ -83,6 +87,7 @@ type workspaceStream struct {
 	configValue string
 	subscribers map[chan streamNotification]struct{}
 	live        map[string]liveItem
+	liveVersion uint64
 	closed      bool
 }
 
@@ -242,9 +247,11 @@ func (stream *workspaceStream) ingestLive(payload livePayload, ttl time.Duration
 		stream.mu.Unlock()
 		return time.Time{}, fmt.Errorf("live item limit reached")
 	}
-	stream.live[key] = liveItem{payload: payload, expiresAt: expiresAt}
+	stream.liveVersion++
+	version := stream.liveVersion
+	stream.live[key] = liveItem{payload: payload, expiresAt: expiresAt, version: version}
 	stream.mu.Unlock()
-	stream.publish(streamNotification{kind: "live", data: payload})
+	stream.publish(streamNotification{kind: "live", data: payload, expiresAt: expiresAt, liveVersion: version})
 	return expiresAt, nil
 }
 
@@ -256,18 +263,16 @@ func (stream *workspaceStream) pruneLiveLocked(now time.Time) {
 	}
 }
 
-func (stream *workspaceStream) liveSnapshot() []livePayload {
+func (stream *workspaceStream) liveSnapshot() ([]streamNotification, uint64) {
 	now := time.Now().UTC()
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	stream.pruneLiveLocked(now)
-	result := make([]livePayload, 0, len(stream.live))
+	result := make([]streamNotification, 0, len(stream.live))
 	for _, item := range stream.live {
-		payload := item.payload
-		payload.TTLMS = max(1, item.expiresAt.Sub(now).Milliseconds())
-		result = append(result, payload)
+		result = append(result, streamNotification{kind: "live", data: item.payload, expiresAt: item.expiresAt, liveVersion: item.version})
 	}
-	return result
+	return result, stream.liveVersion
 }
 
 func (stream *workspaceStream) restart() {
@@ -417,8 +422,7 @@ func validLiveKind(value string) bool {
 }
 
 func serveWorkspaceStream(writer http.ResponseWriter, request *http.Request, running *runtime) {
-	flusher, ok := writer.(http.Flusher)
-	if !ok {
+	if _, ok := writer.(http.Flusher); !ok {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "streaming is not supported"})
 		return
 	}
@@ -438,9 +442,12 @@ func serveWorkspaceStream(writer http.ResponseWriter, request *http.Request, run
 	writer.Header().Set("Cache-Control", "no-cache, no-transform")
 	writer.Header().Set("Connection", "keep-alive")
 	writer.Header().Set("X-Accel-Buffering", "no")
-	_ = http.NewResponseController(writer).SetWriteDeadline(time.Time{})
-	_, _ = fmt.Fprint(writer, "retry: 1000\n\n")
-	flusher.Flush()
+	if err := writeStreamFrame(writer, func() error {
+		_, err := fmt.Fprint(writer, "retry: 1000\n\n")
+		return err
+	}); err != nil {
+		return
+	}
 
 	requested := strings.TrimSpace(request.URL.Query().Get("cursor"))
 	if requested == "" {
@@ -458,11 +465,11 @@ func serveWorkspaceStream(writer http.ResponseWriter, request *http.Request, run
 					generation = cursor.Generation
 					replayEnd = end
 					resumed = true
-					if err := writeSSE(writer, flusher, "config", "", running.stream.currentConfig()); err != nil {
+					if err := writeSSE(writer, "config", "", running.stream.currentConfig()); err != nil {
 						return
 					}
 					for _, record := range records {
-						if err := writeReplayPatch(writer, flusher, ws, generation, record); err != nil {
+						if err := writeReplayPatch(writer, ws, generation, record); err != nil {
 							return
 						}
 					}
@@ -482,12 +489,17 @@ func serveWorkspaceStream(writer http.ResponseWriter, request *http.Request, run
 		if buildErr != nil {
 			return
 		}
-		if err := writeSSE(writer, flusher, "init", cursor, initial); err != nil {
+		if err := writeSSE(writer, "init", cursor, initial); err != nil {
 			return
 		}
 	}
-	for _, live := range running.stream.liveSnapshot() {
-		if err := writeSSE(writer, flusher, "live", "", live); err != nil {
+	liveSnapshot, liveSnapshotVersion := running.stream.liveSnapshot()
+	for _, notification := range liveSnapshot {
+		payload, ok := prepareLivePayload(notification, time.Now())
+		if !ok {
+			continue
+		}
+		if err := writeSSE(writer, "live", "", payload); err != nil {
 			return
 		}
 	}
@@ -509,16 +521,50 @@ func serveWorkspaceStream(writer http.ResponseWriter, request *http.Request, run
 				generation = notification.generation
 				replayEnd = notification.offset
 			}
-			if err := writeSSE(writer, flusher, notification.kind, notification.cursor, notification.data); err != nil {
+			data := notification.data
+			if notification.kind == "live" {
+				payload, version, ok := prepareLiveNotification(notification, liveSnapshotVersion, time.Now())
+				if !ok {
+					continue
+				}
+				data = payload
+				liveSnapshotVersion = version
+			}
+			if err := writeSSE(writer, notification.kind, notification.cursor, data); err != nil {
 				return
 			}
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(writer, ": ping\n\n"); err != nil {
+			if err := writeStreamFrame(writer, func() error {
+				_, err := fmt.Fprint(writer, ": ping\n\n")
+				return err
+			}); err != nil {
 				return
 			}
-			flusher.Flush()
 		}
 	}
+}
+
+func prepareLivePayload(notification streamNotification, now time.Time) (livePayload, bool) {
+	if !notification.expiresAt.After(now) {
+		return livePayload{}, false
+	}
+	payload, ok := notification.data.(livePayload)
+	if !ok {
+		return livePayload{}, false
+	}
+	payload.TTLMS = max(1, notification.expiresAt.Sub(now).Milliseconds())
+	return payload, true
+}
+
+func prepareLiveNotification(notification streamNotification, snapshotVersion uint64, now time.Time) (livePayload, uint64, bool) {
+	if notification.liveVersion <= snapshotVersion {
+		return livePayload{}, snapshotVersion, false
+	}
+	payload, ok := prepareLivePayload(notification, now)
+	if !ok {
+		return livePayload{}, snapshotVersion, false
+	}
+	return payload, notification.liveVersion, true
 }
 
 func buildStreamInit(ws *workspace.Workspace, workspaceName, cursor string) (streamInit, error) {
@@ -542,7 +588,7 @@ func buildStreamInit(ws *workspace.Workspace, workspaceName, cursor string) (str
 	return result, nil
 }
 
-func writeReplayPatch(writer http.ResponseWriter, flusher http.Flusher, ws *workspace.Workspace, generation string, record events.LogRecord) error {
+func writeReplayPatch(writer http.ResponseWriter, ws *workspace.Workspace, generation string, record events.LogRecord) error {
 	var summary *boardTask
 	if record.Event.Task != "" {
 		value, err := task.Load(ws, record.Event.Task)
@@ -555,10 +601,10 @@ func writeReplayPatch(writer http.ResponseWriter, flusher http.Flusher, ws *work
 		}
 		summary = &card
 	}
-	return writeSSE(writer, flusher, "patch", encodeStreamCursor(generation, events.LogCursor{Offset: record.Offset, PrefixHash: record.PrefixHash}), streamPatch{Event: record.Event, Task: summary})
+	return writeSSE(writer, "patch", encodeStreamCursor(generation, events.LogCursor{Offset: record.Offset, PrefixHash: record.PrefixHash}), streamPatch{Event: record.Event, Task: summary})
 }
 
-func writeSSE(writer http.ResponseWriter, flusher http.Flusher, eventType, id string, value any) error {
+func writeSSE(writer http.ResponseWriter, eventType, id string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -566,19 +612,41 @@ func writeSSE(writer http.ResponseWriter, flusher http.Flusher, eventType, id st
 	if strings.ContainsAny(id, "\r\n") {
 		return errors.New("invalid SSE id")
 	}
-	if id != "" {
-		if _, err := fmt.Fprintf(writer, "id: %s\n", id); err != nil {
+	return writeStreamFrame(writer, func() error {
+		if id != "" {
+			if _, err := fmt.Fprintf(writer, "id: %s\n", id); err != nil {
+				return err
+			}
+		}
+		if eventType != "" {
+			if _, err := fmt.Fprintf(writer, "event: %s\n", eventType); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintf(writer, "data: %s\n\n", data)
+		return err
+	})
+}
+
+func writeStreamFrame(writer http.ResponseWriter, write func() error) error {
+	controller := http.NewResponseController(writer)
+	deadlineSet := true
+	if err := controller.SetWriteDeadline(time.Now().Add(streamWriteTimeout)); err != nil {
+		if !errors.Is(err, http.ErrNotSupported) {
 			return err
 		}
+		deadlineSet = false
 	}
-	if eventType != "" {
-		if _, err := fmt.Fprintf(writer, "event: %s\n", eventType); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintf(writer, "data: %s\n\n", data); err != nil {
+	if err := write(); err != nil {
 		return err
 	}
-	flusher.Flush()
+	if err := controller.Flush(); err != nil {
+		return err
+	}
+	if deadlineSet {
+		if err := controller.SetWriteDeadline(time.Time{}); err != nil {
+			return err
+		}
+	}
 	return nil
 }

@@ -76,7 +76,7 @@ export function App() {
     if (patch.status !== undefined) boardPatch.status = patch.status;
     if (patch.assignee !== undefined) boardPatch.assignee = patch.assignee;
     if (patch.labels !== undefined) boardPatch.labels = patch.labels;
-    const mutation = store.optimisticPatch(taskId, boardPatch);
+    const mutation = store.optimisticPatch(taskId, boardPatch, patch);
     try {
       const updated = await patchTask(workspace, taskId, patch);
       store.acknowledge(mutation, updated.cursor, toBoardTask(updated)); setNotice(''); return updated;
@@ -90,15 +90,15 @@ export function App() {
   const performCreate = async (input: CreateTaskInput) => {
     const now = new Date().toISOString(); const tempId = `NEW-${Date.now()}`;
     const optimistic: BoardTask = { id: tempId, title: input.title, status: input.status || snapshot.config.statuses[0] || '', project: input.project, labels: input.labels || [], assignee: input.assignee, references: [], active_sessions: [], created_at: now, updated_at: now, resource_count: 0 };
-    const mutation = store.optimisticCreate(optimistic);
+    const mutation = store.optimisticCreate(optimistic, input);
     try { const created = await createTask(workspace, input); store.acknowledge(mutation, created.cursor, toBoardTask(created)); navigateTask(created.id); }
     catch (cause) { store.fail(mutation, cause instanceof Error ? cause.message : String(cause)); throw cause; }
   };
 
   const retryMutation = (mutation: PendingMutation) => {
     store.dismiss(mutation.id);
-    if (mutation.kind === 'patch' && mutation.patch) void performPatch(mutation.taskId, mutation.patch as TaskPatch).catch(() => undefined);
-    else if (mutation.created) void performCreate({ title: mutation.created.title, status: mutation.created.status, assignee: mutation.created.assignee, labels: mutation.created.labels, project: mutation.created.project }).catch(() => undefined);
+    if (mutation.kind === 'patch' && mutation.requestPatch) void performPatch(mutation.taskId, mutation.requestPatch).catch(() => undefined);
+    else if (mutation.createInput) void performCreate(mutation.createInput).catch(() => undefined);
   };
 
   const updatePreferences = (change: (value: Preferences) => Preferences) => setPreferences((current) => current ? change(current) : current);

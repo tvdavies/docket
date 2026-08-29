@@ -33,6 +33,19 @@ describe('BoardStore fold and optimistic overlay', () => {
     expect(store.getSnapshot().pending[0].failed).toBe('conflict');
   });
 
+  test('keeps the complete API patch for retries when only card fields are optimistic', () => {
+    const store = new BoardStore('demo');
+    store.applyInit({ workspace: 'demo', config: { statuses: ['todo'], terminal: [], labels: [] }, tasks: [task()], cursor: 'c0' }, 'c0');
+    const mutation = store.optimisticPatch('TASK-0001', {}, { description: 'Preserve this draft' });
+    store.fail(mutation, 'offline');
+    expect(store.getSnapshot().pending[0].requestPatch).toEqual({ description: 'Preserve this draft' });
+
+    const optimistic = task({ id: 'NEW-1', title: 'Created draft' });
+    const create = store.optimisticCreate(optimistic, { title: 'Created draft', description: 'Preserve create description', status: 'todo' });
+    store.fail(create, 'offline');
+    expect(store.getSnapshot().pending.find((item) => item.id === create)?.createInput?.description).toBe('Preserve create description');
+  });
+
   test('acknowledges a mutation whose stream cursor arrived before HTTP success', () => {
     const store = new BoardStore('demo');
     store.applyInit({ workspace: 'demo', config: { statuses: ['todo'], terminal: [], labels: [] }, tasks: [task()], cursor: 'c0' }, 'c0');

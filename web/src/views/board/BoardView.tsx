@@ -35,14 +35,14 @@ export function BoardView(props: {
   return (
     <div className="board-scroll" aria-label="Task board">
       <div className="board-grid" style={{ gridTemplateColumns: `repeat(${Math.max(1, statuses.length)}, minmax(280px, 1fr))` }}>
-        {statuses.map((status) => <Lane key={status} workspace={props.workspace} status={status} tasks={grouped.get(status)!} config={props.config} preferences={props.preferences} selected={props.selected} live={props.live} onSelect={props.onSelect} onMove={props.onMove} />)}
+        {statuses.map((status) => <Lane key={status} workspace={props.workspace} status={status} tasks={grouped.get(status)!} allTasks={props.tasks} config={props.config} preferences={props.preferences} selected={props.selected} live={props.live} onSelect={props.onSelect} onMove={props.onMove} />)}
       </div>
     </div>
   );
 }
 
-function Lane({ workspace, status, tasks, config, preferences, selected, live, onSelect, onMove }: {
-  workspace: string; status: string; tasks: BoardTask[]; config: StreamConfig; preferences: Preferences; selected: string; live: LivePayload[];
+function Lane({ workspace, status, tasks, allTasks, config, preferences, selected, live, onSelect, onMove }: {
+  workspace: string; status: string; tasks: BoardTask[]; allTasks: BoardTask[]; config: StreamConfig; preferences: Preferences; selected: string; live: LivePayload[];
   onSelect(task: string): void; onMove(task: BoardTask, status: string): void;
 }) {
   const parent = useRef<HTMLDivElement>(null);
@@ -51,7 +51,7 @@ function Lane({ workspace, status, tasks, config, preferences, selected, live, o
     <section className={`lane ${config.terminal.includes(status) ? 'terminal' : ''}`} data-status={status}
       onDragOver={(event) => { event.preventDefault(); event.currentTarget.dataset.drag = 'true'; }}
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) delete event.currentTarget.dataset.drag; }}
-      onDrop={(event) => { event.preventDefault(); delete event.currentTarget.dataset.drag; const id = event.dataTransfer.getData('text/plain'); const task = tasks.find((item) => item.id === id); if (task) onMove(task, status); }}>
+      onDrop={(event) => { event.preventDefault(); delete event.currentTarget.dataset.drag; const id = event.dataTransfer.getData('text/plain'); const task = allTasks.find((item) => item.id === id); if (task) onMove(task, status); }}>
       <header className="lane-header"><span className="status-dot" /><h2>{humanize(status)}</h2><span className="lane-count">{tasks.length}</span></header>
       <div className="lane-list" ref={parent}>
         {!tasks.length && <div className="lane-empty">No tasks</div>}
@@ -72,8 +72,9 @@ export function TaskCard({ workspace, task, selected, config, preferences, live,
 }) {
   const liveForTask = live.filter((item) => item.task === task.id);
   return (
-    <article className={`task-card ${selected ? 'selected' : ''}`} tabIndex={selected ? 0 : -1} data-task={task.id} draggable
+    <article className={`task-card ${selected ? 'selected' : ''}`} role="link" aria-current={selected ? 'true' : undefined} tabIndex={selected ? 0 : -1} data-task={task.id} draggable
       onDragStart={(event) => { event.dataTransfer.setData('text/plain', task.id); event.dataTransfer.effectAllowed = 'move'; }}
+      onKeyDown={(event) => { if (event.key === ' ') { event.preventDefault(); onSelect(task.id); } }}
       onClick={() => onSelect(task.id)} onDoubleClick={() => onSelect(task.id)}>
       <div className="card-top"><span className="task-id">{task.id}</span>{task.wait && <span className="wait-pill">Waiting · {humanize(task.wait.kind)}</span>}
         <DropdownMenu.Root><DropdownMenu.Trigger asChild><button className="icon-button card-menu" aria-label={`Move ${task.id}`} onClick={(event) => event.stopPropagation()}>•••</button></DropdownMenu.Trigger>
