@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Textarea } from '../../components/ui/textarea';
 import type { LivePayload, StreamConfig, TaskDetail as TaskDetailValue, TaskPatch } from '../../types';
 import { addComment, addReference, getActor, getTask, removeReference, resolveWait, taskPath, uploadAttachment } from '../../api/client';
 import { ResolvedReference } from '../../registry/ResolvedReference';
@@ -60,31 +62,35 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
     } finally { setBusy(false); }
   };
 
-  const close = () => {
-    if (hasDraft && !window.confirm('Discard unsaved task input?')) return;
-    onClose();
-  };
+  const close = onClose;
 
   const liveForTask = live.filter((item) => item.task === taskId);
 
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (open) heading.current?.focus(); }, [open, taskId]);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.title;
+    document.title = `${taskId}${detail ? ` · ${detail.title}` : ''} · Docket`;
+    return () => { document.title = previous; };
+  }, [open, taskId, detail?.title]);
+  if (!open) return null;
+
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => { if (!next) close(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className="task-detail-panel" aria-describedby={undefined}>
-          <header className="detail-header"><div><span className="task-id">{taskId}</span><Dialog.Title>{detail?.title || 'Task'}</Dialog.Title></div><Dialog.Close asChild><button className="icon-button" onClick={(event) => { event.preventDefault(); close(); }} aria-label="Close task">×</button></Dialog.Close></header>
+        <div className="task-detail-page">
+          <header className="detail-header"><Button variant="ghost" size="sm" onClick={close}>← Back to tasks</Button><h2 ref={heading} tabIndex={-1} className="task-id">{taskId}</h2></header>
           {error && <div className="error-banner">Could not load task: {error} <button onClick={() => void load()}>Retry</button></div>}
           {!detail && !error && <div className="detail-loading">Loading task…</div>}
           {detail && <div className="detail-layout">
-            <main className="detail-document">
+            <div className="detail-document">
               {liveForTask.length > 0 && <div className="live-detail">Live · {liveForTask.map((item) => item.kind).join(', ')}</div>}
               <PluginCardHost workspace={workspace} task={detailToBoard(detail)} refresh={() => void load(true)} />
               {editing ? <section className="edit-stack">
-                <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} disabled={busy} /></label>
-                <label>Description<textarea rows={12} value={description} onChange={(event) => setDescription(event.target.value)} disabled={busy} /></label>
-                <div className="button-row"><button className="primary-button" disabled={busy || !title.trim()} onClick={() => void patch({ title: title.trim(), description })}>{busy ? 'Saving…' : 'Save'}</button><button onClick={() => { setEditing(false); setTitle(detail.title); setDescription(detail.description); setSaveError(''); }}>Cancel</button></div>
+                <label>Title<Input value={title} onChange={(event) => setTitle(event.target.value)} disabled={busy} /></label>
+                <label>Description<Textarea rows={12} value={description} onChange={(event) => setDescription(event.target.value)} disabled={busy} /></label>
+                <div className="button-row"><Button disabled={busy || !title.trim()} onClick={() => void patch({ title: title.trim(), description }).catch(() => undefined)}>{busy ? 'Saving…' : 'Save'}</Button><Button variant="outline" onClick={() => { setEditing(false); setTitle(detail.title); setDescription(detail.description); setSaveError(''); }}>Cancel</Button></div>
               </section> : <>
-                <div className="document-heading"><h1>{detail.title}</h1><button onClick={() => setEditing(true)}>Edit</button></div>
+                <div className="document-heading"><h1>{detail.title}</h1><Button variant="outline" size="sm" onClick={() => setEditing(true)}>Edit</Button></div>
                 <section><h2>Description</h2>{detail.description_html ? <div className="markdown" dangerouslySetInnerHTML={{ __html: detail.description_html }} /> : <p className="muted">No description yet.</p>}</section>
               </>}
               {saveError && <div className="error-banner" role="alert">Not saved · {saveError}</div>}
@@ -92,29 +98,27 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
               <Resources detail={detail} workspace={workspace} setDetail={acceptDetail} onCursor={onCursor} onDraftChange={setResourceDraft} />
               <Relationships detail={detail} />
               <Activity detail={detail} />
-              <section><h2>Comment</h2><textarea className="comment-box" rows={4} placeholder="Add durable context…" value={comment} onChange={(event) => setComment(event.target.value)} />
-                <div className="button-row"><button className="primary-button" disabled={busy || !comment.trim()} onClick={async () => {
+              <section className="comment-composer"><label className="sr-only" htmlFor="task-comment">Comment</label><Textarea id="task-comment" className="comment-box" rows={3} placeholder="Leave a comment…" value={comment} onChange={(event) => setComment(event.target.value)} />
+                <div className="button-row"><Button disabled={busy || !comment.trim()} onClick={async () => {
                   const text = comment.trim(); if (!text) return; setBusy(true); setComment('');
                   const previous = detail; const now = new Date().toISOString();
                   const actor = getActor(); setDetail({ ...detail, comments: [...detail.comments, { author: actor, created_at: now, body: text }], activity: [...detail.activity, { at: now, kind: 'comment', type: 'comment', actor, body: text }] });
                   try { request.current += 1; const updated = await addComment(workspace, taskId, text); acceptDetail(updated); }
                   catch (cause) { setDetail(previous); setComment(text); setSaveError(cause instanceof Error ? cause.message : String(cause)); }
                   finally { setBusy(false); }
-                }}>Comment</button></div>
+                }}>Comment</Button></div>
               </section>
-            </main>
+            </div>
             <aside className="detail-properties"><h2>Properties</h2>
-              <Property label="Status"><select value={detail.status} onChange={(event) => void patch({ status: event.target.value })}>{[...config.statuses, ...(!config.statuses.includes(detail.status) ? [detail.status] : [])].map((status) => <option key={status} value={status}>{humanize(status)}</option>)}</select></Property>
-              <Property label="Assignee"><input key={`assignee-${detail.updated_at}`} defaultValue={detail.assignee || ''} placeholder="Unassigned" onFocus={() => setPropertyDraft(true)} onBlur={(event) => { if (event.target.value.trim() !== (detail.assignee || '')) void patch({ assignee: event.target.value.trim() }); else setPropertyDraft(false); }} /></Property>
-              <Property label="Labels"><input key={`labels-${detail.updated_at}`} defaultValue={detail.labels.join(', ')} onFocus={() => setPropertyDraft(true)} onBlur={(event) => { const labels = [...new Set(event.target.value.split(',').map((item) => item.trim()).filter(Boolean))]; if (JSON.stringify(labels) !== JSON.stringify(detail.labels)) void patch({ labels }); else setPropertyDraft(false); }} /></Property>
+              <Property label="Status"><select value={detail.status} onChange={(event) => void patch({ status: event.target.value }).catch(() => undefined)}>{[...config.statuses, ...(!config.statuses.includes(detail.status) ? [detail.status] : [])].map((status) => <option key={status} value={status}>{humanize(status)}</option>)}</select></Property>
+              <Property label="Assignee"><Input key={`assignee-${detail.updated_at}`} defaultValue={detail.assignee || ''} placeholder="Unassigned" onFocus={() => setPropertyDraft(true)} onBlur={(event) => { if (event.target.value.trim() !== (detail.assignee || '')) void patch({ assignee: event.target.value.trim() }).catch(() => undefined); else setPropertyDraft(false); }} /></Property>
+              <Property label="Labels"><Input key={`labels-${detail.updated_at}`} defaultValue={detail.labels.join(', ')} onFocus={() => setPropertyDraft(true)} onBlur={(event) => { const labels = [...new Set(event.target.value.split(',').map((item) => item.trim()).filter(Boolean))]; if (JSON.stringify(labels) !== JSON.stringify(detail.labels)) void patch({ labels }).catch(() => undefined); else setPropertyDraft(false); }} /></Property>
               <Property label="Project"><span>{detail.project?.name || detail.project?.id || 'None'}</span></Property>
               <Property label="Created"><time>{formatDate(detail.created_at)}</time></Property><Property label="Updated"><time>{formatDate(detail.updated_at)}</time></Property>
               <a className="classic-link" href={`/classic/workspaces/${encodeURIComponent(workspace)}/tasks/${encodeURIComponent(taskId)}`}>Open classic task view</a>
             </aside>
           </div>}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        </div>
   );
 }
 
@@ -154,12 +158,17 @@ function Relationships({ detail }: { detail: TaskDetailValue }) {
   return <section><h2>Relationships</h2><div className="relationship-list">{entries.flatMap(([kind, tasks]) => tasks.map((task) => <span key={`${kind}-${task.id}`}>{humanize(kind)} · {task.id}{task.title ? ` · ${task.title}` : ''}</span>))}</div></section>;
 }
 
-function Activity({ detail }: { detail: TaskDetailValue }) {
-  const entries = useMemo(() => [...detail.activity].reverse(), [detail.activity]);
-  return <section><h2>Activity</h2><div className="activity-list">{entries.map((entry, index) => {
+export function Activity({ detail }: { detail: TaskDetailValue }) {
+  const entries = useMemo(() => [...detail.activity].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)), [detail.activity]);
+  return <section className="activity-section"><h2>Activity <span className="activity-count">{entries.length}</span></h2>{!entries.length && <p className="muted">No activity yet.</p>}<ol className="activity-list">{entries.map((entry, index) => {
     const reference = entry.data?.reference as any;
-    return <article key={`${entry.at}-${index}`} className={`activity-entry ${entry.kind === 'comment' ? 'comment-entry' : ''}`}><div><b>{entry.actor || 'Docket'}</b> {activityTitle(entry)}<time>{formatDate(entry.at)}</time></div>{entry.body_html ? <div className="markdown" dangerouslySetInnerHTML={{ __html: entry.body_html }} /> : entry.body ? <p>{entry.body}</p> : null}{reference?.url && <ResolvedReference reference={reference} />}</article>;
-  })}</div></section>;
+    const isComment = entry.kind === 'comment' || entry.type === 'comment';
+    return <li key={`${entry.at}-${index}`} className={`activity-entry ${isComment ? 'comment-entry' : ''}`}>
+      <span className="activity-marker" aria-hidden="true">{isComment ? (entry.actor || 'D').slice(0, 1).toUpperCase() : '·'}</span>
+      <article><header className="activity-meta"><span><b>{entry.actor || 'Docket'}</b> {activityTitle(entry)}</span><time dateTime={entry.at}>{formatDate(entry.at)}</time></header>
+      {entry.body_html ? <div className="markdown activity-body" dangerouslySetInnerHTML={{ __html: entry.body_html }} /> : entry.body ? <p className="activity-body">{entry.body}</p> : null}{reference?.url && <ResolvedReference reference={reference} />}</article>
+    </li>;
+  })}</ol></section>;
 }
 function detailToBoard(detail: TaskDetailValue) {
   return { id: detail.id, title: detail.title, status: detail.status, project: detail.project?.id, labels: detail.labels, assignee: detail.assignee, wait: detail.wait, references: detail.references, active_sessions: [], created_at: detail.created_at, updated_at: detail.updated_at, resource_count: detail.references.length + detail.attachments.length };

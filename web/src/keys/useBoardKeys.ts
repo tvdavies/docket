@@ -6,8 +6,8 @@ const isInteractiveContext = (target: EventTarget | null) => target instanceof H
   target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)
 );
 
-export function useBoardKeys({ tasks, statuses, selected, onSelect, onOpen, onMove, onPalette, onCreate, onFilter, onAssign, onLabel, onWaitView }: {
-  tasks: BoardTask[]; statuses: string[]; selected: string;
+export function useBoardKeys({ enabled = true, tasks, statuses, selected, onSelect, onOpen, onMove, onPalette, onCreate, onFilter, onAssign, onLabel, onWaitView }: {
+  enabled?: boolean; tasks: BoardTask[]; statuses: string[]; selected: string;
   onSelect(task: string): void; onOpen(task: string): void; onMove(task: BoardTask, status: string): void;
   onPalette(): void; onCreate(): void; onFilter(): void; onAssign(task: BoardTask): void; onLabel(task: BoardTask): void; onWaitView(): void;
 }) {
@@ -16,6 +16,7 @@ export function useBoardKeys({ tasks, statuses, selected, onSelect, onOpen, onMo
     const handler = (event: KeyboardEvent) => {
       if (inOverlay(event.target)) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); onPalette(); return; }
+      if (!enabled) return;
       if (isInteractiveContext(event.target) || event.altKey || event.metaKey || event.ctrlKey) return;
       const index = Math.max(0, tasks.findIndex((task) => task.id === selected));
       const task = tasks[index];
@@ -37,5 +38,5 @@ export function useBoardKeys({ tasks, statuses, selected, onSelect, onOpen, onMo
     };
     window.addEventListener('keydown', handler);
     return () => { window.removeEventListener('keydown', handler); if (moveMode.current) window.clearTimeout(moveMode.current); };
-  }, [tasks, statuses, selected, onSelect, onOpen, onMove, onPalette, onCreate, onFilter, onAssign, onLabel, onWaitView]);
+  }, [enabled, tasks, statuses, selected, onSelect, onOpen, onMove, onPalette, onCreate, onFilter, onAssign, onLabel, onWaitView]);
 }

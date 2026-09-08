@@ -1,0 +1,64 @@
+import { chromium } from 'playwright';
+// Isolated browser smoke test: fixture API only, never touches a real workspace.
+// Run after building: bun run check:ui (optionally set CHROMIUM_PATH).
+const root = new URL('../dist', import.meta.url).pathname;
+const config = { statuses: ['todo', 'in_progress', 'review', 'done'], terminal: ['done'], labels: ['design', 'frontend'] };
+let tasks = Array.from({ length: 35 }, (_, i) => ({ id: `TASK-${i + 1}`, title: i % 3 === 0 ? 'A longer task title to check that multiple lines and rich metadata never overlap with the following card in this column' : `Improve the task experience ${i + 1}`, status: config.statuses[i % 4], labels: ['design', 'frontend'], assignee: 'Tom', references: [{ id: 'r', kind: 'plan', url: 'https://example.com', title: 'Implementation plan', added_at: '2026-01-01', added_by: 'Tom' }], active_sessions: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-03T00:00:00Z', resource_count: 1 }));
+const detail = (task: any) => ({ ...task, cursor: '2', description: 'Task context', description_html: '<p>A focused task page with room for the description, resources and activity.</p>', attachments: [], comments: [], activity: [ { at: '2026-01-03T00:00:00Z', kind: 'comment', type: 'comment', actor: 'Tom', body: 'Most recent comment. This should appear at the bottom of the timeline.' }, { at: '2026-01-01T00:00:00Z', kind: 'event', type: 'task.created', actor: 'Tom' }, { at: '2026-01-02T00:00:00Z', kind: 'event', type: 'task.moved', actor: 'Tom', data: { from: 'todo', to: 'in_progress' } } ] });
+const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+  const path = new URL(req.url).pathname;
+  if (path === '/api/workspaces') return Response.json([{ name: 'demo', state: 'watching' }]);
+  if (path.endsWith('/stream')) return new Response(`event: init\ndata: ${JSON.stringify({ workspace: 'demo', config, tasks, cursor: '1' })}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
+  if (path.startsWith('/api/') && path.includes('/tasks/')) { const id = path.split('/').pop(); let task = tasks.find(t => t.id === id)!; if (req.method === 'PATCH') { Object.assign(task, await req.json()); } return Response.json(detail(task)); }
+  if (path.startsWith('/assets/')) return new Response(Bun.file(root + path));
+  return new Response(Bun.file(root + '/index.html'));
+}});
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true, args: ['--no-sandbox'] });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+const assert = (value: unknown, text: string) => { if (!value) throw new Error(text); console.log('PASS', text); };
+try {
+  await page.goto(`http://localhost:${server.port}/workspaces/demo`);
+  await page.locator('.task-card').first().waitFor(); await page.waitForTimeout(400);
+  assert(await page.evaluate(() => [...document.querySelectorAll('.lane')].every(lane => { const boxes = [...lane.querySelectorAll('.task-card')].map(card => card.getBoundingClientRect()); return boxes.every((box, i) => !i || box.top >= boxes[i-1].bottom + 6); })), 'Variable-height cards do not overlap');
+  const card = page.locator('[data-task="TASK-1"]');
+  const before = await card.boundingBox(); await card.hover(); const after = await card.boundingBox(); assert(before?.y === after?.y, 'Card does not move on hover');
+  await page.screenshot({ path: '/tmp/docket-board.png' });
+  await card.evaluate(el => (window as any).draggedCard = el);
+  const dest = await page.locator('[data-status="in_progress"]').boundingBox();
+  await page.mouse.move(before!.x + 60, before!.y + 60); await page.mouse.down(); await page.mouse.move(dest!.x + 90, dest!.y + 140, { steps: 12 });
+  assert(await card.evaluate(el => el === (window as any).draggedCard && el.getAttribute('data-dragging') === 'true'), 'The original DOM card is dragged');
+  assert(await page.locator('[data-task="TASK-1"]').count() === 1, 'No duplicate drag preview');
+  assert(await page.locator('.drag-placeholder').evaluate(el => el.getBoundingClientRect().height) >= before!.height, 'Drag preserves measured placeholder height');
+  await page.screenshot({ path: '/tmp/docket-drag.png' });
+  await page.mouse.up(); await page.waitForTimeout(250);
+  await page.screenshot({ path: '/tmp/docket-after-drop.png' });
+  assert(await page.locator('[data-status="in_progress"] [data-task="TASK-1"]').count() === 1, 'Drop moves task to destination');
+  assert(!page.url().endsWith('/tasks/TASK-1'), 'Drop does not open task');
+  await page.locator('[data-task="TASK-1"] h3').click(); await page.locator('.activity-entry').first().waitFor();
+  assert(page.url().endsWith('/tasks/TASK-1'), 'Click navigates to task URL');
+  assert(await page.locator('.board-scroll, [role="dialog"]').count() === 0, 'Task is a page, not an overlay over the board');
+  assert(await page.locator('.activity-entry').last().textContent().then(t => t!.includes('Most recent comment')), 'Latest activity is at bottom');
+  await page.screenshot({ path: '/tmp/docket-task.png' });
+  await page.goBack(); await page.locator('.board-scroll').waitFor();
+  await page.goForward(); await page.locator('.task-detail-page').waitFor();
+  assert(page.url().endsWith('/tasks/TASK-1'), 'Browser back and forward restore task route');
+  await page.reload(); await page.locator('.activity-entry').first().waitFor(); assert(await page.locator('.task-detail-page').count() === 1, 'Task deep link survives reload');
+  await page.getByRole('button', { name: 'Back to tasks' }).click(); await page.getByRole('button', { name: 'List', exact: true }).click();
+  await page.locator('.list-group-toggle').first().waitFor(); assert(await page.locator('.list-group-toggle').first().textContent().then(t => t!.includes('Todo')), 'List starts with configured status group');
+  await page.screenshot({ path: '/tmp/docket-list.png' });
+  const firstToggle = page.locator('.list-group-toggle').first(); await firstToggle.click(); assert(await firstToggle.getAttribute('aria-expanded') === 'false', 'Status groups collapse');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: '/tmp/docket-dark-list.png' });
+  assert(await page.locator('.list-view').evaluate(el => getComputedStyle(el).scrollbarColor) !== 'auto', 'Scrollbars use theme tokens');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  assert(await page.locator('.list-view').evaluate(el => el.getBoundingClientRect().right <= window.innerWidth), 'Mobile list fits the viewport');
+  await page.screenshot({ path: '/tmp/docket-mobile-list.png' });
+  await page.goto(`http://localhost:${server.port}/workspaces/demo/tasks/TASK-1`); await page.locator('.activity-entry').first().waitFor();
+  assert(await page.evaluate(() => document.documentElement.scrollWidth === window.innerWidth), 'Mobile task page has no horizontal page overflow');
+  assert(await page.locator('.detail-properties').evaluate(el => el.getBoundingClientRect().top >= document.querySelector('.detail-header')!.getBoundingClientRect().bottom), 'Mobile properties are visible at the top of the scroll area');
+  await page.screenshot({ path: '/tmp/docket-mobile-task.png' });
+  assert(errors.length === 0, 'No browser runtime errors: ' + errors.join(', '));
+} finally { await browser.close(); server.stop(true); }

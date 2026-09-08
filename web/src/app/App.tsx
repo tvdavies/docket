@@ -67,7 +67,7 @@ export function App() {
   useEffect(() => { if (!selected || !visibleTasks.some((task) => task.id === selected)) setSelected(visibleTasks[0]?.id || ''); }, [visibleTasks, selected]);
 
   const navigateTask = useCallback((task: string) => { if (!workspace) return; if (taskDraft && routeTask && task !== routeTask && !window.confirm('Discard unsaved task input?')) return; setSelected(task); setRouteTask(task); history.pushState(null, '', taskRoutePath(workspace, task)); }, [workspace, taskDraft, routeTask]);
-  const closeTask = useCallback(() => { setRouteTask(''); history.pushState(null, '', explorerPath(workspace)); }, [workspace]);
+  const closeTask = useCallback(() => { if (taskDraft && !window.confirm('Discard unsaved task input?')) return; setRouteTask(''); history.pushState(null, '', explorerPath(workspace)); }, [workspace, taskDraft]);
   const switchWorkspace = (name: string) => { if (name === workspace) return; if (taskDraft && !window.confirm('Discard unsaved task input?')) return; setWorkspace(name); setRouteTask(''); setSelected(''); setPreferences(null); history.pushState(null, '', explorerPath(name)); };
 
   const performPatch = useCallback(async (taskId: string, patch: TaskPatch): Promise<TaskDetail> => {
@@ -103,7 +103,7 @@ export function App() {
 
   const updatePreferences = (change: (value: Preferences) => Preferences) => setPreferences((current) => current ? change(current) : current);
   const statuses = allStatuses(snapshot.config, snapshot.tasks);
-  useBoardKeys({ tasks: visibleTasks, statuses, selected, onSelect: setSelected, onOpen: navigateTask, onMove: moveTask, onPalette: () => setPaletteOpen(true), onCreate: () => setCreateOpen(true), onFilter: () => search.current?.focus(), onAssign: (task) => navigateTask(task.id), onLabel: (task) => navigateTask(task.id), onWaitView: () => updatePreferences((value) => ({ ...value, filters: { ...value.filters, states: value.filters.states.includes('waiting') ? [] : ['waiting'] } })) });
+  useBoardKeys({ enabled: !routeTask, tasks: visibleTasks, statuses, selected, onSelect: setSelected, onOpen: navigateTask, onMove: moveTask, onPalette: () => setPaletteOpen(true), onCreate: () => setCreateOpen(true), onFilter: () => search.current?.focus(), onAssign: (task) => navigateTask(task.id), onLabel: (task) => navigateTask(task.id), onWaitView: () => updatePreferences((value) => ({ ...value, filters: { ...value.filters, states: value.filters.states.includes('waiting') ? [] : ['waiting'] } })) });
 
   const paletteActions: PaletteAction[] = useMemo(() => [
     { id: 'create', label: 'Create task', group: 'Tasks', shortcut: 'C', run: () => setCreateOpen(true) },
@@ -122,24 +122,23 @@ export function App() {
   if (!workspace) return <div className="boot-screen"><span className="brand-mark">D</span><p>{notice || 'Loading Docket…'}</p></div>;
   if (!preferences) return <div className="boot-screen"><span className="brand-mark">D</span><p>Opening {workspace}…</p></div>;
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${routeTask ? 'task-route' : ''}`}>
     <header className="topbar"><a className="brand" href={explorerPath(workspace)} onClick={(event) => { event.preventDefault(); closeTask(); }}><span className="brand-mark">D</span><b>Docket</b></a>
       <select className="workspace-select" aria-label="Workspace" value={workspace} onChange={(event) => switchWorkspace(event.target.value)}>{workspaces.map((item) => <option key={item.name} value={item.name}>{item.name}{item.state !== 'watching' ? ` · ${item.state}` : ''}</option>)}</select>
       <div className={`connection ${snapshot.connection}`}><i />{snapshot.connection === 'open' ? 'Live' : snapshot.connection}</div>
       <div className="topbar-spacer" /><a className="quiet-link" href={classicPath(workspace, routeTask)}>Classic</a><button className="command-button" onClick={() => setPaletteOpen(true)}>Search commands <kbd>⌘K</kbd></button><button className="primary-button" onClick={() => setCreateOpen(true)}>New task</button>
     </header>
-    <section className="toolbar"><div><h1>{activeWorkspace?.name || workspace}</h1><p>{visibleTasks.length} of {snapshot.tasks.length} tasks</p></div><div className="toolbar-actions">
+    {!routeTask && <section className="toolbar"><div><h1>{activeWorkspace?.name || workspace}</h1><p>{visibleTasks.length} of {snapshot.tasks.length} tasks</p></div><div className="toolbar-actions">
       <input ref={search} className="search-input" type="search" placeholder="Filter tasks…" value={preferences.filters.query} onChange={(event) => updatePreferences((value) => ({ ...value, filters: { ...value.filters, query: event.target.value } }))} />
       <button aria-pressed={preferences.view === 'board'} onClick={() => updatePreferences((value) => ({ ...value, view: 'board' }))}>Board</button><button aria-pressed={preferences.view === 'list'} onClick={() => updatePreferences((value) => ({ ...value, view: 'list' }))}>List</button>
       <select aria-label="Task order" value={preferences.order} onChange={(event) => updatePreferences((value) => ({ ...value, order: event.target.value as Preferences['order'] }))}><option value="updated-desc">Recently updated</option><option value="updated-asc">Least recently updated</option><option value="created-desc">Newest created</option><option value="created-asc">Oldest created</option><option value="id-asc">ID ascending</option><option value="id-desc">ID descending</option><option value="title-asc">Title A–Z</option><option value="title-desc">Title Z–A</option></select>
       <FilterMenu tasks={snapshot.tasks} preferences={preferences} config={snapshot.config} update={updatePreferences} />
       <ViewMenu statuses={statuses} preferences={preferences} update={updatePreferences} />
-    </div></section>
+    </div></section>}
     <div className="notices">{(notice || activeWorkspace?.last_error) && <div className="notice error-banner">{notice || activeWorkspace?.last_error}</div>}
       {snapshot.pending.filter((item) => item.failed).map((mutation) => <div className="notice error-banner" key={mutation.id}>Mutation failed · {mutation.failed}<span><button onClick={() => retryMutation(mutation)}>Retry</button><button onClick={() => store.dismiss(mutation.id)}>Dismiss</button></span></div>)}</div>
-    <main className="explorer">{visibleTasks.length ? (preferences.view === 'board' ? <BoardView workspace={workspace} tasks={visibleTasks} config={snapshot.config} preferences={preferences} selected={selected} live={snapshot.live} onSelect={navigateTask} onMove={moveTask} /> : <ListView tasks={visibleTasks} selected={selected} onSelect={navigateTask} />) : <div className="empty-state"><h2>No tasks match this view</h2><p>Clear filters or create a task.</p><button onClick={() => updatePreferences((value) => ({ ...value, filters: { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }, hiddenStatuses: [] }))}>Clear filters</button></div>}</main>
-    <footer className="statusbar"><label>Acting as <input maxLength={100} value={actor} onChange={(event) => { setActorState(event.target.value); setActor(event.target.value); }} /></label><span>{activeFilterCount(preferences.filters)} active filters</span><span>J/K navigate · Enter open · M + lane move</span></footer>
-    <TaskDetailPanel workspace={workspace} taskId={routeTask} open={Boolean(routeTask)} config={snapshot.config} live={snapshot.live} summaryUpdatedAt={snapshot.tasks.find((task) => task.id === routeTask)?.updated_at} onClose={closeTask} onPatch={performPatch} onCursor={() => undefined} onDraftChange={setTaskDraft} />
+    <main className={routeTask ? 'task-page-container' : 'explorer'}>{routeTask ? <TaskDetailPanel key={`${workspace}/${routeTask}`} workspace={workspace} taskId={routeTask} open config={snapshot.config} live={snapshot.live} summaryUpdatedAt={snapshot.tasks.find((task) => task.id === routeTask)?.updated_at} onClose={closeTask} onPatch={performPatch} onCursor={() => undefined} onDraftChange={setTaskDraft} /> : visibleTasks.length ? (preferences.view === 'board' ? <BoardView workspace={workspace} tasks={visibleTasks} config={snapshot.config} preferences={preferences} selected={selected} live={snapshot.live} onSelect={navigateTask} onMove={moveTask} /> : <ListView tasks={visibleTasks} statuses={statuses} showEmpty={preferences.showEmpty} hiddenStatuses={preferences.hiddenStatuses} selected={selected} onSelect={navigateTask} />) : <div className="empty-state"><h2>No tasks match this view</h2><p>Clear filters or create a task.</p><button onClick={() => updatePreferences((value) => ({ ...value, filters: { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }, hiddenStatuses: [] }))}>Clear filters</button></div>}</main>
+    <footer className="statusbar"><label>Acting as <input maxLength={100} value={actor} onChange={(event) => { setActorState(event.target.value); setActor(event.target.value); }} /></label><span>{activeFilterCount(preferences.filters)} active filters</span><span>{routeTask ? 'Task details' : 'J/K navigate · Enter open · M + lane move'}</span></footer>
     <CreateTaskDialog open={createOpen} config={snapshot.config} onOpenChange={setCreateOpen} onCreate={performCreate} />
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
   </div>;

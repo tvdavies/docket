@@ -21,6 +21,15 @@ describe('keyboard model', () => {
     fireEvent.keyDown(window, { key: 'k', metaKey: true }); expect(handlers.onPalette).toHaveBeenCalled();
   });
 
+  test('disables board shortcuts on task pages but keeps the command palette', () => {
+    const onMove = vi.fn(), onSelect = vi.fn(), onOpen = vi.fn(), onPalette = vi.fn();
+    render(<Harness enabled={false} onMove={onMove} onSelect={onSelect} onOpen={onOpen} onPalette={onPalette} />);
+    fireEvent.keyDown(window, { key: 'j' }); fireEvent.keyDown(window, { key: 'Enter' });
+    fireEvent.keyDown(window, { key: 'm' }); fireEvent.keyDown(window, { key: '2' });
+    expect(onMove).not.toHaveBeenCalled(); expect(onSelect).not.toHaveBeenCalled(); expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true }); expect(onPalette).toHaveBeenCalledOnce();
+  });
+
   test('does not trigger single-key commands while typing', () => {
     const handlers = { onSelect: vi.fn(), onOpen: vi.fn(), onMove: vi.fn(), onPalette: vi.fn(), onCreate: vi.fn(), onFilter: vi.fn(), onAssign: vi.fn(), onLabel: vi.fn(), onWaitView: vi.fn() };
     const view = render(<Harness {...handlers} />);
