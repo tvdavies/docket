@@ -17,7 +17,7 @@ export type Preferences = {
 };
 
 const orders = new Set<Order>(['updated-desc', 'updated-asc', 'created-desc', 'created-asc', 'id-asc', 'id-desc', 'title-asc', 'title-desc']);
-const emptyFilters = (): Filters => ({ query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] });
+export const emptyFilters = (): Filters => ({ query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] });
 
 export function allStatuses(config: StreamConfig, tasks: BoardTask[]) {
   const configured = [...config.statuses];

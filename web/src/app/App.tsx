@@ -8,6 +8,7 @@ import { activeFilterCount, allStatuses, filterAndSort, loadPreferences, savePre
 import { classicPath, explorerPath, parseRoute, resolveRoute, taskRoutePath } from './router';
 import { BoardView } from '../views/board/BoardView';
 import { ListView } from '../views/list/ListView';
+import { FilterPopover } from '../views/filters/FilterPopover';
 import { TaskDetail as TaskDetailPanel } from '../views/task/TaskDetail';
 import { CreateTaskDialog } from '../views/task/CreateTaskDialog';
 import { CommandPalette, type PaletteAction } from '../views/palette/CommandPalette';
@@ -132,7 +133,7 @@ export function App() {
       <input ref={search} className="search-input" type="search" placeholder="Filter tasks…" value={preferences.filters.query} onChange={(event) => updatePreferences((value) => ({ ...value, filters: { ...value.filters, query: event.target.value } }))} />
       <button aria-pressed={preferences.view === 'board'} onClick={() => updatePreferences((value) => ({ ...value, view: 'board' }))}>Board</button><button aria-pressed={preferences.view === 'list'} onClick={() => updatePreferences((value) => ({ ...value, view: 'list' }))}>List</button>
       <select aria-label="Task order" value={preferences.order} onChange={(event) => updatePreferences((value) => ({ ...value, order: event.target.value as Preferences['order'] }))}><option value="updated-desc">Recently updated</option><option value="updated-asc">Least recently updated</option><option value="created-desc">Newest created</option><option value="created-asc">Oldest created</option><option value="id-asc">ID ascending</option><option value="id-desc">ID descending</option><option value="title-asc">Title A–Z</option><option value="title-desc">Title Z–A</option></select>
-      <FilterMenu tasks={snapshot.tasks} preferences={preferences} config={snapshot.config} update={updatePreferences} />
+      <FilterPopover tasks={snapshot.tasks} preferences={preferences} config={snapshot.config} update={updatePreferences} />
       <ViewMenu statuses={statuses} preferences={preferences} update={updatePreferences} />
     </div></section>}
     <div className="notices">{(notice || activeWorkspace?.last_error) && <div className="notice error-banner">{notice || activeWorkspace?.last_error}</div>}
@@ -142,14 +143,6 @@ export function App() {
     <CreateTaskDialog open={createOpen} config={snapshot.config} onOpenChange={setCreateOpen} onCreate={performCreate} />
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
   </div>;
-}
-
-function FilterMenu({ tasks, preferences, config, update }: { tasks: BoardTask[]; preferences: Preferences; config: any; update(change: (value: Preferences) => Preferences): void }) {
-  const options = { statuses: allStatuses(config, tasks), assignees: [...new Set(tasks.map((task) => task.assignee || ''))], labels: [...new Set(tasks.flatMap((task) => task.labels))], projects: [...new Set(tasks.map((task) => task.project || ''))], states: ['open', 'terminal', 'waiting'] };
-  return <DropdownMenu.Root><DropdownMenu.Trigger asChild><button>Filter{activeFilterCount(preferences.filters) ? ` · ${activeFilterCount(preferences.filters)}` : ''}</button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="menu-content filter-menu" align="end">
-    {Object.entries(options).map(([key, values]) => <DropdownMenu.Sub key={key}><DropdownMenu.SubTrigger className="menu-item">{humanize(key)}</DropdownMenu.SubTrigger><DropdownMenu.Portal><DropdownMenu.SubContent className="menu-content">{values.map((item) => { const selected = (preferences.filters as any)[key].includes(item); return <DropdownMenu.CheckboxItem className="menu-item" checked={selected} key={item || 'empty'} onCheckedChange={(checked) => update((value) => ({ ...value, filters: { ...value.filters, [key]: checked ? [...new Set([...(value.filters as any)[key], item])] : (value.filters as any)[key].filter((entry: string) => entry !== item) } }))}><DropdownMenu.ItemIndicator>✓</DropdownMenu.ItemIndicator>{item || `No ${key.slice(0, -1)}`}</DropdownMenu.CheckboxItem>; })}</DropdownMenu.SubContent></DropdownMenu.Portal></DropdownMenu.Sub>)}
-    <DropdownMenu.Separator className="menu-separator" /><DropdownMenu.Item className="menu-item" onSelect={() => update((value) => ({ ...value, filters: { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] } }))}>Clear filters</DropdownMenu.Item>
-  </DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>;
 }
 
 function ViewMenu({ statuses, preferences, update }: { statuses: string[]; preferences: Preferences; update(change: (value: Preferences) => Preferences): void }) {
