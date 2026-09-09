@@ -31,7 +31,16 @@ export type BoardTask = {
   resource_count: number;
 };
 
-export type StreamConfig = { statuses: string[]; terminal: string[]; labels: string[] };
+export type PluginCardDeclaration = { type: string; title: string };
+export type PluginReferenceResolverDeclaration = { id: string; pattern: string; kinds?: string[] };
+export type PluginMetadata = {
+  name: string;
+  version: string;
+  cards: PluginCardDeclaration[];
+  reference_resolvers: PluginReferenceResolverDeclaration[];
+  service_base?: string;
+};
+export type StreamConfig = { statuses: string[]; terminal: string[]; labels: string[]; plugins?: PluginMetadata[] };
 export type StreamInit = { workspace: string; config: StreamConfig; tasks: BoardTask[]; cursor: string };
 export type LedgerEvent = { seq: number; time: string; type: string; task?: string; title?: string; actor?: string; assignee?: string; data?: Record<string, unknown> };
 export type StreamPatch = { event: LedgerEvent; task?: BoardTask };

@@ -72,12 +72,18 @@ func newWorkspaceCheckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			plugins := make([]string, 0, len(ws.Plugins))
+			for _, loaded := range ws.Plugins {
+				plugins = append(plugins, loaded.Manifest.Name)
+			}
 			summary := map[string]any{
-				"workspace": ws.Root,
-				"statuses":  ws.Config.Statuses,
-				"tasks":     len(tasks),
-				"events":    events.Count(ws),
-				"handlers":  len(ws.Config.Handlers),
+				"workspace":     ws.Root,
+				"statuses":      ws.Config.Statuses,
+				"tasks":         len(tasks),
+				"events":        events.Count(ws),
+				"handlers":      ws.Config.HandlerNames(),
+				"handler_count": len(ws.Config.Handlers),
+				"plugins":       plugins,
 			}
 			if flagJSON {
 				return printJSON(summary)
@@ -85,6 +91,10 @@ func newWorkspaceCheckCmd() *cobra.Command {
 			fmt.Printf("Workspace valid: %s\n", ws.Root)
 			fmt.Printf("Statuses: %v\n", ws.Config.Statuses)
 			fmt.Printf("Tasks: %d  Events: %d  Handlers: %d\n", len(tasks), events.Count(ws), len(ws.Config.Handlers))
+			if len(plugins) > 0 {
+				fmt.Printf("Plugins: %v\n", plugins)
+				fmt.Printf("Handler identities: %v\n", ws.Config.HandlerNames())
+			}
 			return nil
 		},
 	}

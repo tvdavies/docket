@@ -7,6 +7,7 @@ import (
 )
 
 func TestInitAndDiscoverUpward(t *testing.T) {
+	t.Setenv("DOCKET_HOME", "")
 	root := t.TempDir()
 	if _, err := Init(root); err != nil {
 		t.Fatal(err)
@@ -81,6 +82,7 @@ func TestInitTwiceIsIdempotent(t *testing.T) {
 }
 
 func TestConfigLoadsHandlers(t *testing.T) {
+	t.Setenv("DOCKET_HOME", "")
 	root := t.TempDir()
 	if _, err := Init(root); err != nil {
 		t.Fatal(err)

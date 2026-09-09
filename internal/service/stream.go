@@ -31,9 +31,10 @@ var streamWriteTimeout = 10 * time.Second
 var errWorkspaceStreamUnavailable = errors.New("workspace stream is unavailable")
 
 type streamConfig struct {
-	Statuses []string `json:"statuses"`
-	Terminal []string `json:"terminal"`
-	Labels   []string `json:"labels"`
+	Statuses []string      `json:"statuses"`
+	Terminal []string      `json:"terminal"`
+	Labels   []string      `json:"labels"`
+	Plugins  []boardPlugin `json:"plugins"`
 }
 
 type streamInit struct {
@@ -307,6 +308,7 @@ func configForStream(ws *workspace.Workspace) streamConfig {
 		Statuses: nonNilStrings(ws.Config.Statuses),
 		Terminal: nonNilStrings(ws.Config.Terminal),
 		Labels:   nonNilStrings(ws.Config.Labels),
+		Plugins:  pluginsForBoard(ws),
 	}
 }
 

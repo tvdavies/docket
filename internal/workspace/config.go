@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -26,8 +28,62 @@ type Config struct {
 	// Handlers are post-hoc event consumers. Each handler has its own durable
 	// cursor. Executables receive JSON lines; Lua handlers receive event tables.
 	Handlers map[string]HandlerConfig `yaml:"handlers,omitempty"`
-	Settings Settings                 `yaml:"settings"`
+	// Plugins declares instance-installed plugins enabled for this workspace.
+	// Declaration order is retained because contribution precedence is ordered.
+	Plugins  PluginUses `yaml:"plugins,omitempty"`
+	Settings Settings   `yaml:"settings"`
 }
+
+// PluginUse contains the workspace- and status-scoped values for one plugin.
+type PluginUse struct {
+	Config   map[string]any            `yaml:"config,omitempty" json:"config,omitempty"`
+	Statuses map[string]map[string]any `yaml:"statuses,omitempty" json:"statuses,omitempty"`
+}
+
+// PluginUses is a YAML mapping with stable declaration order.
+type PluginUses struct {
+	Order  []string             `yaml:"-" json:"order"`
+	Values map[string]PluginUse `yaml:"-" json:"values"`
+}
+
+func (p *PluginUses) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("plugins must be a mapping")
+	}
+	p.Values = map[string]PluginUse{}
+	for index := 0; index < len(node.Content); index += 2 {
+		name := node.Content[index].Value
+		if _, exists := p.Values[name]; exists {
+			return fmt.Errorf("plugin %q is duplicated", name)
+		}
+		var value PluginUse
+		if err := node.Content[index+1].Decode(&value); err != nil {
+			return fmt.Errorf("plugin %q: %w", name, err)
+		}
+		p.Order = append(p.Order, name)
+		p.Values[name] = value
+	}
+	return nil
+}
+
+func (p PluginUses) MarshalYAML() (any, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, name := range p.Order {
+		value, ok := p.Values[name]
+		if !ok {
+			continue
+		}
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
+		valueNode := &yaml.Node{}
+		if err := valueNode.Encode(value); err != nil {
+			return nil, err
+		}
+		node.Content = append(node.Content, keyNode, valueNode)
+	}
+	return node, nil
+}
+
+func (p PluginUses) IsZero() bool { return len(p.Order) == 0 }
 
 // HandlerConfig registers one event consumer. Exactly one of Run or Lua is
 // required. Relative paths resolve from the project root (the parent of
@@ -41,6 +97,11 @@ type HandlerConfig struct {
 	// the handler cursor pending for docket.service so the mutating CLI returns
 	// immediately while retaining durable, retryable execution.
 	Delivery string `yaml:"delivery,omitempty"`
+	// Runtime-only plugin context. Workspace YAML never serialises these fields.
+	PluginName         string                    `yaml:"-" json:"-"`
+	PluginRoot         string                    `yaml:"-" json:"-"`
+	PluginConfig       map[string]any            `yaml:"-" json:"-"`
+	PluginStatusConfig map[string]map[string]any `yaml:"-" json:"-"`
 }
 
 // Matches reports whether this handler consumes an event type. "*" matches
@@ -112,8 +173,20 @@ func (c *Config) Validate() error {
 	if c.Settings.IDPadding < 1 || c.Settings.ProjectPadding < 1 {
 		return fmt.Errorf("id padding values must be positive")
 	}
-	for name, handler := range c.Handlers {
+	for _, name := range c.Plugins.Order {
 		if !handlerNamePattern.MatchString(name) {
+			return fmt.Errorf("plugin %q: name must contain only lowercase letters, numbers, hyphens, and underscores", name)
+		}
+		if _, ok := c.Plugins.Values[name]; !ok {
+			return fmt.Errorf("plugin %q: declaration is missing", name)
+		}
+	}
+	for name, handler := range c.Handlers {
+		validName := handlerNamePattern.MatchString(name)
+		if handler.PluginName != "" {
+			validName = strings.HasPrefix(name, handler.PluginName+"/") && handlerNamePattern.MatchString(strings.TrimPrefix(name, handler.PluginName+"/"))
+		}
+		if !validName {
 			return fmt.Errorf("handler %q: name must contain only lowercase letters, numbers, hyphens, and underscores", name)
 		}
 		hasRun := strings.TrimSpace(handler.Run) != ""

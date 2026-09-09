@@ -105,6 +105,62 @@ end
 	}
 }
 
+func TestRunExposesPluginSDKOnlyForPluginHandlers(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot := t.TempDir()
+	script := filepath.Join(pluginRoot, "plugin.lua")
+	source := `
+function handle(event, docket)
+  assert(docket.plugin.name == "example")
+  assert(docket.plugin.root == os.getenv("DOCKET_PLUGIN_ROOT"))
+  assert(docket.plugin.config.endpoint == "local")
+  assert(docket.plugin.status_config.review.agent == "worker")
+  assert(docket.plugin.path("asset.txt"):match("/asset.txt$"))
+end
+`
+	if err := os.WriteFile(script, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKET_PLUGIN", "example")
+	t.Setenv("DOCKET_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("DOCKET_PLUGIN_CONFIG", `{"config":{"endpoint":"local"},"status_config":{"review":{"agent":"worker"}}}`)
+	if err := luahook.Run(luahook.Options{Workspace: ws, Script: script, Input: strings.NewReader(`{"seq":1,"type":"task.created"}` + "\n")}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DOCKET_PLUGIN", "")
+	plain := filepath.Join(root, "plain.lua")
+	if err := os.WriteFile(plain, []byte("function handle(event, docket) assert(docket.plugin == nil) end\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := luahook.Run(luahook.Options{Workspace: ws, Script: plain, Input: strings.NewReader(`{"seq":2,"type":"task.created"}` + "\n")}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunRejectsMalformedPluginConfigWithoutPanicking(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "noop.lua")
+	if err := os.WriteFile(script, []byte("function handle(event, docket) end\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKET_PLUGIN", "example")
+	t.Setenv("DOCKET_PLUGIN_ROOT", root)
+	t.Setenv("DOCKET_PLUGIN_CONFIG", "{")
+	err = luahook.Run(luahook.Options{Workspace: ws, Script: script})
+	if err == nil || !strings.Contains(err.Error(), "decode DOCKET_PLUGIN_CONFIG") {
+		t.Fatalf("malformed config error = %v", err)
+	}
+}
+
 func TestRunRequiresHandleFunction(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Init(root)

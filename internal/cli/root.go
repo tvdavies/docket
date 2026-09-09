@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/handlers"
+	"github.com/tvdavies/docket/internal/plugin"
 	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/workspace"
 )
@@ -89,7 +90,7 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 	automationCommands := []*cobra.Command{newInboxCmd(), newEventsCmd(), newWatchCmd()}
 	setCommandGroup(groupAutomation, automationCommands...)
 
-	serviceCommands := []*cobra.Command{newWorkspaceCmd(), newServeCmd(), newServiceCmd(), newReindexCmd()}
+	serviceCommands := []*cobra.Command{newWorkspaceCmd(), newPluginCmd(), newServeCmd(), newServiceCmd(), newReindexCmd()}
 	setCommandGroup(groupService, serviceCommands...)
 
 	sessionCommand := newSessionCmd()
@@ -122,6 +123,19 @@ func setCommandGroup(group string, commands ...*cobra.Command) {
 
 // Execute runs the CLI and returns a process exit code.
 func Execute() int {
+	plugin.EngineVersion = Version
+	handled, err := tryPluginPassthrough(os.Args[1:])
+	if handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "docket: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "docket: %v\n", err)
+		return 1
+	}
 	return executeRoot(newRootCmd(), os.Stderr)
 }
 
@@ -186,7 +200,7 @@ func appendEvent(ws *workspace.Workspace, event events.Event) error {
 	if err := events.Append(ws, event); err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
-	for _, failure := range handlers.DrainAll(ws, handlers.Options{Scope: handlers.ScopeInline, Output: os.Stderr}) {
+	for _, failure := range handlers.DrainAll(ws, handlers.Options{Scope: handlers.ScopeInline, Output: os.Stderr, RefreshConfig: true}) {
 		fmt.Fprintf(os.Stderr, "docket: warning: %s\n", failure.Error())
 	}
 	return nil

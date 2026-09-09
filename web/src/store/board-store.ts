@@ -25,7 +25,7 @@ export type BoardSnapshot = {
   live: LivePayload[];
 };
 
-const emptyConfig: StreamConfig = { statuses: [], terminal: [], labels: [] };
+const emptyConfig: StreamConfig = { statuses: [], terminal: [], labels: [], plugins: [] };
 let mutationSequence = 0;
 
 export class BoardStore {

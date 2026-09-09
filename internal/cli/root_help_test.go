@@ -52,6 +52,7 @@ func TestCommandErrorPrintsExactUsageAndRecoveryHelp(t *testing.T) {
 }
 
 func TestOperationalErrorDoesNotPretendArgumentsAreWrong(t *testing.T) {
+	t.Setenv("DOCKET_HOME", "")
 	rootDir := t.TempDir()
 	if _, err := workspace.Init(rootDir); err != nil {
 		t.Fatal(err)

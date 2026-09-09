@@ -5,10 +5,15 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,12 +42,15 @@ type WorkspaceStatus struct {
 }
 
 type runtime struct {
-	entry  registry.WorkspaceEntry
-	cancel context.CancelFunc
-	stream *workspaceStream
+	entry      registry.WorkspaceEntry
+	generation string
+	cancel     context.CancelFunc
+	stream     *workspaceStream
 
-	mu     sync.RWMutex
-	status WorkspaceStatus
+	mu           sync.RWMutex
+	status       WorkspaceStatus
+	handlerNames map[string]bool
+	initialised  bool
 }
 
 // Manager owns one runtime per registered workspace.
@@ -66,7 +74,15 @@ func NewManager(ctx context.Context, output io.Writer) *Manager {
 // SetWorkspaces reconciles the running set with entries. Unchanged workspaces
 // keep running; changed, added, and removed registrations are restarted safely.
 func (m *Manager) SetWorkspaces(entries []registry.WorkspaceEntry) {
+	m.setWorkspaces(entries, "")
+}
+
+func (m *Manager) setWorkspaces(entries []registry.WorkspaceEntry, generation string) {
 	wanted := make(map[string]registry.WorkspaceEntry, len(entries))
+	inherited := map[string]struct {
+		names       map[string]bool
+		initialised bool
+	}{}
 	for _, entry := range entries {
 		wanted[entry.Name] = entry
 	}
@@ -78,20 +94,31 @@ func (m *Manager) SetWorkspaces(entries []registry.WorkspaceEntry) {
 	}
 	for name, running := range m.runtimes {
 		entry, keep := wanted[name]
-		if keep && entry.Path == running.entry.Path {
+		if keep && entry.Path == running.entry.Path && running.generation == generation {
 			delete(wanted, name)
 			continue
 		}
+		running.mu.RLock()
+		names := make(map[string]bool, len(running.handlerNames))
+		for handler := range running.handlerNames {
+			names[handler] = true
+		}
+		inherited[name] = struct {
+			names       map[string]bool
+			initialised bool
+		}{names: names, initialised: running.initialised}
+		running.mu.RUnlock()
 		running.stream.close()
 		running.cancel()
 		delete(m.runtimes, name)
 	}
 	for name, entry := range wanted {
 		ctx, cancel := context.WithCancel(m.ctx)
+		prior := inherited[name]
 		running := &runtime{
-			entry:  entry,
-			cancel: cancel,
-			stream: newWorkspaceStream(),
+			entry: entry, generation: generation,
+			cancel: cancel, stream: newWorkspaceStream(),
+			handlerNames: prior.names, initialised: prior.initialised,
 			status: WorkspaceStatus{
 				Name: entry.Name, Path: entry.Path, State: "starting", UpdatedAt: now(),
 			},
@@ -124,7 +151,7 @@ func (m *Manager) FollowRegistry(ctx context.Context, interval time.Duration) {
 		entries := registry.PruneMissing(config, missing, time.Now(), func(format string, args ...any) {
 			fmt.Fprintf(m.output, format+"\n", args...)
 		})
-		m.SetWorkspaces(entries)
+		m.setWorkspaces(entries, pluginGeneration(config.Plugins))
 	}
 	load()
 	ticker := time.NewTicker(interval)
@@ -228,12 +255,34 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 			if err != nil {
 				return err
 			}
-			failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Scope: handlers.ScopeAll, Output: m.output})
-			running.update(func(status *WorkspaceStatus) {
-				status.EventCount = events.Count(fresh)
-				status.HandlerCount = len(fresh.Config.Handlers)
-				status.UpdatedAt = now()
-			})
+			running.mu.RLock()
+			initialised := running.initialised
+			previous := make(map[string]bool, len(running.handlerNames))
+			for name := range running.handlerNames {
+				previous[name] = true
+			}
+			running.mu.RUnlock()
+			if initialised {
+				for name, config := range fresh.Config.Handlers {
+					if config.PluginName != "" && !previous[name] {
+						if err := handlers.SeedCursorAtEnd(fresh, name); err != nil {
+							return fmt.Errorf("seed hot-reloaded plugin handler %q: %w", name, err)
+						}
+					}
+				}
+			}
+			failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Scope: handlers.ScopeAll, Output: m.output, RefreshConfig: true})
+			current := make(map[string]bool, len(fresh.Config.Handlers))
+			for name := range fresh.Config.Handlers {
+				current[name] = true
+			}
+			running.mu.Lock()
+			running.handlerNames = current
+			running.initialised = true
+			running.status.EventCount = events.Count(fresh)
+			running.status.HandlerCount = len(fresh.Config.Handlers)
+			running.status.UpdatedAt = now()
+			running.mu.Unlock()
 			if len(failures) == 0 {
 				return nil
 			}
@@ -325,3 +374,18 @@ func sortStatuses(statuses []WorkspaceStatus) {
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
+
+func pluginGeneration(entries []registry.PluginEntry) string {
+	parts := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		manifest := filepath.Join(entry.Path, "docket-plugin.yaml")
+		stamp := "missing"
+		if data, err := os.ReadFile(manifest); err == nil {
+			stamp = fmt.Sprintf("%x", sha256.Sum256(data))
+		}
+		metadata, _ := json.Marshal(entry)
+		parts = append(parts, fmt.Sprintf("%x:%s", sha256.Sum256(metadata), stamp))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
+}

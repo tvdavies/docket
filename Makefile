@@ -2,7 +2,7 @@ VERSION ?= dev
 LDFLAGS := -s -w -X github.com/tvdavies/docket/internal/cli.Version=$(VERSION)
 PREFIX  ?= $(HOME)/.local
 
-.PHONY: build test test-web web web-check fmt vet install clean snapshot
+.PHONY: build test test-web test-types web web-check fmt vet install clean snapshot
 
 build:
 	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o bin/docket .
@@ -11,6 +11,8 @@ test:
 	go test ./...
 	bun test internal/service/web/*.test.js
 	cd web && bun run test
+	bun install --frozen-lockfile
+	bun run typecheck:plugin-ui
 
 test-web:
 	bun test internal/service/web/*.test.js
@@ -23,6 +25,10 @@ web-check:
 	cd web && bun run build
 	git diff --exit-code -- web/dist
 	test -z "$$(git ls-files --others --exclude-standard -- web/dist)"
+
+test-types:
+	bun install --frozen-lockfile
+	bun run typecheck:plugin-ui
 
 fmt:
 	gofmt -w .

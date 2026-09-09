@@ -1,12 +1,32 @@
 import { describe, expect, test, vi } from 'vitest';
 import { BoardStore } from '../src/store/board-store';
-import type { BoardTask } from '../src/types';
+import type { BoardTask, PluginMetadata } from '../src/types';
 
 const task = (overrides: Partial<BoardTask> = {}): BoardTask => ({
   id: 'TASK-0001', title: 'Original', status: 'todo', labels: [], references: [], active_sessions: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', resource_count: 0, ...overrides,
 });
 
 describe('BoardStore fold and optimistic overlay', () => {
+  test('preserves plugin metadata from stream init and replaces it on config reload', () => {
+    const store = new BoardStore('demo');
+    expect(store.getSnapshot().config.plugins).toEqual([]);
+    const plugin: PluginMetadata = {
+      name: 'dispatch', version: '1.0.0', service_base: '/plugins/dispatch',
+      cards: [{ type: 'dispatch/session', title: 'Live session' }],
+      reference_resolvers: [{ id: 'dispatch/session', pattern: '/sessions/', kinds: ['session'] }],
+    };
+    const config = { statuses: ['todo', 'review', 'merge'], terminal: [], labels: [], plugins: [plugin] };
+    store.applyInit({ workspace: 'demo', config, tasks: [task()], cursor: 'c0' }, 'c0');
+    expect(store.getSnapshot().config.plugins).toEqual([plugin]);
+    const updated = { ...plugin, version: '1.1.0', cards: [] };
+    store.applyConfig({ ...config, plugins: [updated] });
+    expect(store.getSnapshot().config.plugins).toEqual([updated]);
+    store.applyConfig({ ...config, plugins: [] });
+    expect(store.getSnapshot().config.plugins).toEqual([]);
+    expect(store.getSnapshot().tasks).toEqual([task()]);
+    store.destroy();
+  });
+
   test('resets from init and applies idempotent full-summary patches', () => {
     const store = new BoardStore('demo');
     store.applyInit({ workspace: 'demo', config: { statuses: ['todo', 'done'], terminal: ['done'], labels: [] }, tasks: [task()], cursor: 'c0' }, 'c0');

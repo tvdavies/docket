@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "typecheck:plugin-ui": "tsc --noEmit --lib DOM,ES2022 docs/plugin-ui.d.ts"
+  }
+}
