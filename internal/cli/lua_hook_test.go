@@ -11,6 +11,8 @@ import (
 )
 
 func TestHiddenLuaHookCommandRunsProductionCommandPath(t *testing.T) {
+	// Never let an inherited workspace override redirect the Lua fixture write.
+	t.Setenv("DOCKET_HOME", "")
 	root := t.TempDir()
 	if _, err := workspace.Init(root); err != nil {
 		t.Fatal(err)

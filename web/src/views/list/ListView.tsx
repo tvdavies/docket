@@ -1,22 +1,45 @@
-import { useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { Button } from '../../components/ui/button';
+import { Badge } from '../../components/ui/badge';
 import type { BoardTask } from '../../types';
 
 const humanize = (value: string) => value.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+type Row = { kind: 'status'; status: string; count: number } | { kind: 'task'; task: BoardTask };
 
-export function ListView({ tasks, selected, onSelect }: { tasks: BoardTask[]; selected: string; onSelect(task: string): void }) {
+export function groupTaskRows(tasks: BoardTask[], statuses: string[], hidden: string[], collapsed: Set<string>, showEmpty: boolean): Row[] {
+  const groups = new Map([...statuses, ...tasks.map((task) => task.status)].map((status) => [status, [] as BoardTask[]]));
+  for (const task of tasks) groups.get(task.status)!.push(task);
+  return [...groups].flatMap(([status, items]): Row[] => hidden.includes(status) || (!showEmpty && !items.length) ? [] : [
+    { kind: 'status', status, count: items.length },
+    ...(collapsed.has(status) ? [] : items.map((task): Row => ({ kind: 'task', task }))),
+  ]);
+}
+
+export function ListView({ tasks, statuses = [], hiddenStatuses = [], showEmpty = false, selected, onSelect }: {
+  tasks: BoardTask[]; statuses?: string[]; hiddenStatuses?: string[]; showEmpty?: boolean; selected: string; onSelect(task: string): void;
+}) {
   const parent = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({ count: tasks.length, getScrollElement: () => parent.current, estimateSize: () => 54, overscan: 10 });
+  const [collapsed, setCollapsed] = useState(new Set<string>());
+  const rows = useMemo(() => groupTaskRows(tasks, statuses, hiddenStatuses, collapsed, showEmpty), [tasks, statuses, hiddenStatuses, collapsed, showEmpty]);
+  const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => parent.current,
+    getItemKey: (index) => rows[index].kind === 'status' ? `status:${rows[index].status}` : `task:${rows[index].task.id}`,
+    estimateSize: (index) => rows[index].kind === 'status' ? 42 : 48, overscan: 12 });
   return (
-    <div className="list-view" ref={parent} role="grid" aria-label="Task list">
-      <div className="list-header" role="row"><span>Status</span><span>Task</span><span>Assignee</span><span>Labels</span><span>Updated</span></div>
-      <div className="virtual-stack" style={{ height: virtualizer.getTotalSize() }}>
+    <div className="list-view" ref={parent} aria-label="Task list">
+      <div className="virtual-stack grouped-list" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((item) => {
-          const task = tasks[item.index];
-          return <button key={task.id} className={`list-row virtual-row ${selected === task.id ? 'selected' : ''}`} style={{ transform: `translateY(${item.start}px)` }} onClick={() => onSelect(task.id)} role="row">
-            <span><i className="status-dot" />{humanize(task.status)}</span>
-            <span className="list-title"><b>{task.id}</b>{task.title}</span>
-            <span>{task.assignee || '—'}</span><span>{task.labels.join(', ') || '—'}</span><time dateTime={task.updated_at}>{new Date(task.updated_at).toLocaleDateString()}</time>
+          const row = rows[item.index];
+          if (row.kind === 'status') return <div key={item.key} className="virtual-row list-group" style={{ top: item.start, height: item.size }}>
+            <Button variant="ghost" className="list-group-toggle" aria-expanded={!collapsed.has(row.status)} onClick={() => setCollapsed((current) => {
+              const next = new Set(current); if (next.has(row.status)) next.delete(row.status); else next.add(row.status); return next;
+            })}><span className="group-chevron" aria-hidden="true">{collapsed.has(row.status) ? '▸' : '▾'}</span><i className="status-dot" /><span>{humanize(row.status)}</span><span className="lane-count">{row.count}</span></Button>
+          </div>;
+          const task = row.task;
+          return <button key={item.key} className={`list-row virtual-row ${selected === task.id ? 'selected' : ''}`} style={{ top: item.start, height: item.size }} onClick={() => onSelect(task.id)}>
+            <span className="task-id">{task.id}</span><span className="list-title" title={task.title}>{task.title}</span>
+            <span className="list-labels">{task.labels.slice(0, 3).map((label) => <Badge variant="secondary" key={label}>{label}</Badge>)}</span>
+            <span className="list-assignee">{task.assignee || 'Unassigned'}</span><time dateTime={task.updated_at}>{new Date(task.updated_at).toLocaleDateString()}</time>
           </button>;
         })}
       </div>

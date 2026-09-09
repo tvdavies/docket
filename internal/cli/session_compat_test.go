@@ -9,6 +9,7 @@ import (
 )
 
 func TestGroupedAndLegacySessionCommandsRemainFunctional(t *testing.T) {
+	t.Setenv("DOCKET_HOME", "")
 	rootDir := t.TempDir()
 	ws, err := workspace.Init(rootDir)
 	if err != nil {
