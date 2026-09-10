@@ -830,6 +830,14 @@ func TestExistingReceiptIsInspectionOnlyAndClassifiesState(t *testing.T) {
 
 func TestHandoffWaitsForInFlightSourceAndBlocksConcurrentTransition(t *testing.T) {
 	f := newFixture(t)
+	// Other handlers may not have drained when the waiter acquires all locks.
+	// Give every identity a valid zero before delivery so that scheduling can
+	// change pending ranges, but never determines whether adoption is valid.
+	for _, name := range f.names {
+		if err := handlers.ResetCursor(f.open(), name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	started := filepath.Join(f.home, "alpha-started")
 	release := filepath.Join(f.home, "alpha-release")
 	f.writeScript(f.project, "alpha", "touch "+shellQuote(started)+"\nwhile [ ! -f "+shellQuote(release)+" ]; do sleep 0.01; done\n")
@@ -879,6 +887,9 @@ func TestHandoffWaitsForInFlightSourceAndBlocksConcurrentTransition(t *testing.T
 	f.assertNoDuplicates("alpha")
 	if got := f.seqs("alpha"); fmt.Sprint(got) != "[1 2]" {
 		t.Fatalf("alpha = %v", got)
+	}
+	for _, name := range f.names {
+		f.assertNoDuplicates(name)
 	}
 }
 
