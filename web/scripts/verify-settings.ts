@@ -71,6 +71,11 @@ try {
   assert(await page.locator('[data-key="api_base"] input').evaluate((node) => node === document.activeElement), 'Keyboard Tab reaches the labelled generated text field');
   await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.type('https://keyboard.invalid');
   assert(await page.locator('[data-key="api_base"] input').inputValue() === 'https://keyboard.invalid', 'Keyboard edits are retained');
+  await page.getByRole('button', { name: 'Set value for Greeting', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  assert(await page.locator('[data-key="greeting"] input').evaluate((node) => node === document.activeElement), 'Keyboard Set value focuses the new editor instead of losing focus');
+  await page.keyboard.type('keyboard greeting');
+  assert(await page.locator('[data-key="greeting"] input').inputValue() === 'keyboard greeting', 'An unset field can be activated and edited without another pointer action');
   await edit('api_base', ''); await edit('max_parallel', '0'); await edit('telemetry', false);
   await edit('log_level', '0', true); await edit('retry_backoff', '2', true);
   await edit('allowed_hosts', '[1,false,{"nested":[null,"x"]}]'); await edit('headers', '{"nested":{"enabled":true}}'); await edit('greeting', '  hello  ');

@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react';
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
 import { Input } from '../../components/ui/input';
@@ -11,6 +12,13 @@ export function FieldEditor({ id, model, draft, edited, error, disabled, onChang
   const { field, key } = model;
   const describedBy = [field.description ? `${id}-description` : '', `${id}-provenance`, error ? `${id}-error` : ''].filter(Boolean).join(' ');
   const controlId = `${id}-control`;
+  const focusNewEditor = useRef(false);
+  useLayoutEffect(() => {
+    if (focusNewEditor.current && draft.set) {
+      focusNewEditor.current = false;
+      document.getElementById(controlId)?.focus();
+    }
+  }, [controlId, draft.set]);
   const jsonKind = isJsonKind(field);
   const canFormat = jsonKind && !hasEnum(field) && draft.set && evaluateDraft(field, draft).ok;
   return (
@@ -32,7 +40,7 @@ export function FieldEditor({ id, model, draft, edited, error, disabled, onChang
         <p className="settings-secret-note">Configured only through the plugin service environment. There is nothing to enter here.</p>
       ) : !draft.set ? (
         <div className="settings-field-actions">
-          <Button type="button" variant="outline" size="sm" id={controlId} aria-label={`Set value for ${model.label}`} aria-describedby={describedBy} disabled={disabled} onClick={() => onChange(seedDraft(field))}>Set value</Button>
+          <Button type="button" variant="outline" size="sm" id={controlId} aria-label={`Set value for ${model.label}`} aria-describedby={describedBy} disabled={disabled} onClick={() => { focusNewEditor.current = true; onChange(seedDraft(field)); }}>Set value</Button>
         </div>
       ) : (
         <div className="settings-control">

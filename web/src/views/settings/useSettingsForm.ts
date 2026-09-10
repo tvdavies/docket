@@ -91,7 +91,8 @@ export function useSettingsForm({ entry, target, reload, checkTarget, blocked = 
   const requiredGaps = useMemo(() => Object.fromEntries(Object.entries(evaluation.errors).filter(([key]) => !evaluation.editedKeys.includes(key))), [evaluation]);
   const blockingErrors = useMemo(() => Object.fromEntries(Object.entries(evaluation.errors).filter(([key]) => evaluation.editedKeys.includes(key) || (applied.fields.find((model) => model.key === key)?.field.required && !applied.baselines[key]?.set))), [evaluation, applied]);
   const errors = useMemo(() => {
-    const visible: Record<string, string> = { ...serverErrors };
+    // Schema keys such as "constructor" are valid; inherited object properties are not errors.
+    const visible: Record<string, string> = Object.assign(Object.create(null), serverErrors);
     for (const [key, text] of Object.entries(evaluation.errors)) if (!(key in visible) && (evaluation.editedKeys.includes(key) || (attempted && key in requiredGaps))) visible[key] = text;
     return visible;
   }, [serverErrors, evaluation, attempted, requiredGaps]);
@@ -127,7 +128,7 @@ export function useSettingsForm({ entry, target, reload, checkTarget, blocked = 
   }, [applied, drafts, fields, fingerprint]);
 
   const focusFirstError = useCallback((problems: Record<string, string>) => {
-    const first = applied.fields.find((model) => problems[model.key]);
+    const first = applied.fields.find((model) => Object.prototype.hasOwnProperty.call(problems, model.key));
     if (first) onFocusField?.(first.key);
   }, [applied.fields, onFocusField]);
 

@@ -2,10 +2,11 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook } from '@testing-library/react';
 import { PluginSettingsForm } from '../src/views/settings/PluginSettingsForm';
 import { useSettingsForm } from '../src/views/settings/useSettingsForm';
-import { listPluginCatalogue, patchInstanceConfig, patchWorkspaceConfig, patchStatusConfig, type PluginCatalogueEntry } from '../src/api/plugin-settings';
+import { listPluginCatalogue, patchInstanceConfig, patchWorkspaceConfig, patchStatusConfig, type PluginCatalogueEntry, type PluginConfigField } from '../src/api/plugin-settings';
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { cleanup(); globalThis.fetch = originalFetch; });
+const originalResizeObserver = globalThis.ResizeObserver;
+afterEach(() => { cleanup(); globalThis.fetch = originalFetch; globalThis.ResizeObserver = originalResizeObserver; });
 const entry = (): PluginCatalogueEntry => ({ name: 'fixture', version: '99.0.0', source: { type: 'local' }, schemas: { instance: { text: { type: 'string' }, json: { type: 'list' }, token: { type: 'string', secret: true } } }, instance_values: { text: 'old' }, workspace_values: {} });
 const target = { scope: 'instance' as const, workspace: '', plugin: 'fixture', status: '' };
 const draft = (text: string) => ({ set: true, text, checked: false, option: -1 });
@@ -37,6 +38,30 @@ describe('settings API wrappers', () => {
 });
 
 describe('failure-safe settings controller', () => {
+  test('a declared constructor field does not inherit a spurious validation error', () => {
+    const current: PluginCatalogueEntry = { ...entry(), schemas: { instance: { constructor: { type: 'number' as const } } }, instance_values: { constructor: 1 } };
+    const view = render(<PluginSettingsForm entry={current} target={target} reload={async () => [current]} checkTarget={() => ''} />);
+    const input = view.container.querySelector('[data-key="constructor"] input')!;
+    expect(input.hasAttribute('aria-invalid')).toBe(false);
+    expect(view.queryByRole('alert')).toBeNull();
+    fireEvent.change(input, { target: { value: 'invalid' } });
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(view.container.querySelector('.settings-field-error')?.textContent).toContain('finite number');
+  });
+  test('Set value moves keyboard focus into each kind of newly created editor', () => {
+    // Radix measures its checkbox's hidden input; JSDOM has no layout observer.
+    globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    const fields: PluginConfigField[] = [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'list' }, { type: 'map' }, { type: 'string', enum: ['one', 'two'] }];
+    for (const field of fields) {
+      const current: PluginCatalogueEntry = { ...entry(), schemas: { instance: { optional: field } }, instance_values: {} };
+      const view = render(<PluginSettingsForm entry={current} target={target} reload={async () => [current]} checkTarget={() => ''} />);
+      const set = view.getByRole('button', { name: 'Set value for Optional' });
+      set.focus(); fireEvent.click(set);
+      const input = view.container.querySelector('[data-key="optional"] [id$="-control"]')!;
+      expect(document.activeElement === input).toBe(true);
+      view.unmount();
+    }
+  });
   test('unsupported schema refresh retains old drafts without crashing or saving', async () => {
     const current = entry();
     const props = { entry: current, target, reload: async () => [current], checkTarget: () => '' };
