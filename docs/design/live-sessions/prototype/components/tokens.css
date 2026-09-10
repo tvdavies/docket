@@ -1,0 +1,99 @@
+/* Semantic widget tokens (illustrative `--widget-*` vocabulary, JOB-0092).
+ *
+ * Aliases derive from Docket web/src/styles.css at 30ec1b1c and are copied
+ * here so the isolated demo never imports the app. JOB-0093 owns production
+ * token names. Custom-element bodies inherit these through the shadow
+ * boundary; they must not define app-wide selectors of their own.
+ */
+
+:root {
+  /* Docket base palette (copied, light) */
+  --bg: #f7f8fa; --panel: #ffffff; --panel-2: #f1f3f6; --panel-3: #e8ebf0;
+  --text: #161922; --muted: #6e7482; --faint: #969ca8; --line: #dfe3e8; --line-strong: #c9ced7;
+  --accent: #5e5ce6; --accent-strong: #4744cb; --accent-soft: #ecebff;
+  --danger: #c0354b; --danger-soft: #fff0f2; --success: #1b8a5a; --success-soft: #e6f6ee;
+  --warning: #a66b10; --warning-soft: #fff6e6;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d0f14; --panel: #14171e; --panel-2: #1a1e27; --panel-3: #242936;
+  --text: #f2f4f8; --muted: #a0a7b4; --faint: #737b8a; --line: #292e3a; --line-strong: #3a4150;
+  --accent: #8b88ff; --accent-strong: #aaa8ff; --accent-soft: #262448;
+  --danger: #ff7085; --danger-soft: #3b1d25; --success: #59d49a; --success-soft: #16362a;
+  --warning: #f0b85e; --warning-soft: #3a2c12;
+  --widget-text-muted: var(--muted);
+  --widget-positive-fg: var(--success);
+  --widget-warning-fg: var(--warning);
+}
+
+:root {
+  /* Color roles.
+   * Text-bearing roles are verified in tests/contrast.test.ts (text ≥ 4.5:1,
+   * focus ≥ 3:1). Docket's raw --muted/--warning/--success accents are not all
+   * text colours on raised surfaces, so the light theme darkens those three
+   * roles slightly instead of assuming every existing accent is readable. */
+  --widget-surface: var(--panel);
+  --widget-surface-raised: var(--panel-2);
+  --widget-surface-sunken: var(--panel-3);
+  --widget-text: var(--text);
+  --widget-text-muted: #5f6573;
+  --widget-border: var(--line);
+  --widget-border-strong: var(--line-strong);
+  --widget-accent: var(--accent-strong);
+  --widget-focus: var(--accent);
+  --widget-positive-fg: #15784e;
+  --widget-positive-bg: var(--success-soft);
+  --widget-warning-fg: #80510a;
+  --widget-warning-bg: var(--warning-soft);
+  --widget-danger-fg: var(--danger);
+  --widget-danger-bg: var(--danger-soft);
+  --widget-info-fg: var(--accent-strong);
+  --widget-info-bg: var(--accent-soft);
+
+  /* Typography (inherited system font; no external fonts) */
+  --widget-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --widget-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --widget-text-size: 14px;
+  --widget-meta-size: 12px;
+  --widget-line-height: 1.5;
+
+  /* Spacing roles */
+  --widget-space-1: 4px;
+  --widget-space-2: 8px;
+  --widget-space-3: 12px;
+  --widget-space-4: 16px;
+
+  /* Borders and focus */
+  --widget-border-width: 1px;
+  --widget-radius-inner: 7px;
+  --widget-radius-outer: 10px;
+  --widget-focus-ring: 2px solid var(--widget-focus);
+  --widget-focus-offset: 2px;
+
+  /* Motion */
+  --widget-pulse-duration: 1.2s;
+  --widget-scroll-behavior: smooth;
+
+  /* Density (comfortable default) */
+  --widget-pad-x: var(--widget-space-4);
+  --widget-pad-y: var(--widget-space-3);
+  --widget-gap: var(--widget-space-2);
+  --widget-target-min: 44px;
+}
+
+:root[data-density="compact"] {
+  --widget-pad-x: var(--widget-space-3);
+  --widget-pad-y: var(--widget-space-2);
+  --widget-gap: var(--widget-space-1);
+}
+
+:root[data-reduced-motion="true"] {
+  --widget-pulse-duration: 0s;
+  --widget-scroll-behavior: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="false"]) {
+    --widget-pulse-duration: 0s;
+    --widget-scroll-behavior: auto;
+  }
+}
