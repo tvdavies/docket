@@ -5,7 +5,9 @@ import { createTask, getActor, listWorkspaces, patchTask, setActor } from '../ap
 import { connectWorkspaceStream } from '../stream/connect';
 import { getBoardStore, useBoardStore, type PendingMutation } from '../store/board-store';
 import { activeFilterCount, allStatuses, filterAndSort, loadPreferences, savePreferences, type Preferences } from '../store/preferences';
-import { classicPath, explorerPath, parseRoute, resolveRoute, taskRoutePath } from './router';
+import { classicPath, explorerPath, instanceSettingsPath, parseRoute, resolveRoute, settingsPath, statusSettingsPath, taskRoutePath, workspaceSettingsPath, type SettingsRoute } from './router';
+import { SettingsPage } from '../views/settings/SettingsPage';
+import { useSettingsNavigation } from '../views/settings/useSettingsNavigation';
 import { BoardView } from '../views/board/BoardView';
 import { ListView } from '../views/list/ListView';
 import { FilterPopover } from '../views/filters/FilterPopover';
@@ -24,12 +26,16 @@ export function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceStatus[]>([]);
   const [workspace, setWorkspace] = useState('');
   const [routeTask, setRouteTask] = useState('');
+  const [settings, setSettings] = useState<SettingsRoute | undefined>(() => parseRoute(window.location).settings);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
   const [selected, setSelected] = useState('');
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [actor, setActorState] = useState(getActor());
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [taskDraft, setTaskDraft] = useState(false);
+  const navigation = useSettingsNavigation(settingsDirty, settingsBusy, taskDraft);
   const [notice, setNotice] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const store = useMemo(() => getBoardStore(workspace || '__pending__'), [workspace]);
@@ -41,9 +47,9 @@ export function App() {
       if (values.length && (!workspace || !values.some((item) => item.name === workspace))) {
         let stored = ''; try { stored = localStorage.getItem('docket.workspace') || ''; } catch { /* optional */ }
         const route = resolveRoute(parseRoute(window.location), values.map((item) => item.name), stored);
-        setWorkspace(route.workspace); setRouteTask(route.task); setPreferences(null);
+        setWorkspace(route.workspace); setRouteTask(route.task); setSettings(route.settings); setPreferences(null);
         if (!route.valid || parseRoute(window.location).legacy || window.location.pathname === '/' || window.location.pathname.startsWith('/next')) {
-          history.replaceState(null, '', route.task ? taskRoutePath(route.workspace, route.task) : explorerPath(route.workspace));
+          history.replaceState(history.state, '', route.settings ? settingsPath(route.settings) : route.task ? taskRoutePath(route.workspace, route.task) : explorerPath(route.workspace));
         }
       }
     } catch (cause) { setNotice(`Could not load workspaces: ${cause instanceof Error ? cause.message : String(cause)}`); }
@@ -53,8 +59,8 @@ export function App() {
   useEffect(() => { if (!workspace || workspace === '__pending__') return; try { localStorage.setItem('docket.workspace', workspace); } catch { /* optional */ } return connectWorkspaceStream(workspace, store); }, [workspace, store]);
   useEffect(() => {
     const pop = () => {
-      if (taskDraft && routeTask && !window.confirm('Discard unsaved task input?')) { history.pushState(null, '', taskRoutePath(workspace, routeTask)); return; }
-      const route = resolveRoute(parseRoute(window.location), workspaces.map((item) => item.name), workspace); setWorkspace(route.workspace); setRouteTask(route.task);
+      const route = resolveRoute(parseRoute(window.location), workspaces.map((item) => item.name), workspace); if (route.workspace !== workspace) setPreferences(null);
+      setWorkspace(route.workspace); setRouteTask(route.task); setSettings(route.settings);
     };
     window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop);
   }, [workspaces, workspace, routeTask, taskDraft]);
@@ -67,9 +73,15 @@ export function App() {
   const visibleTasks = useMemo(() => preferences ? filterAndSort(snapshot.tasks, snapshot.config, preferences) : snapshot.tasks, [snapshot.tasks, snapshot.config, preferences]);
   useEffect(() => { if (!selected || !visibleTasks.some((task) => task.id === selected)) setSelected(visibleTasks[0]?.id || ''); }, [visibleTasks, selected]);
 
-  const navigateTask = useCallback((task: string) => { if (!workspace) return; if (taskDraft && routeTask && task !== routeTask && !window.confirm('Discard unsaved task input?')) return; setSelected(task); setRouteTask(task); history.pushState(null, '', taskRoutePath(workspace, task)); }, [workspace, taskDraft, routeTask]);
-  const closeTask = useCallback(() => { if (taskDraft && !window.confirm('Discard unsaved task input?')) return; setRouteTask(''); history.pushState(null, '', explorerPath(workspace)); }, [workspace, taskDraft]);
-  const switchWorkspace = (name: string) => { if (name === workspace) return; if (taskDraft && !window.confirm('Discard unsaved task input?')) return; setWorkspace(name); setRouteTask(''); setSelected(''); setPreferences(null); history.pushState(null, '', explorerPath(name)); };
+  const navigate = useCallback((path: string) => {
+    if (!navigation.push(path)) return;
+    const route = resolveRoute(parseRoute(window.location), workspaces.map((item) => item.name), workspace);
+    if (route.workspace !== workspace) setPreferences(null);
+    setWorkspace(route.workspace); setRouteTask(route.task); setSettings(route.settings); setSelected(route.task);
+  }, [navigation.push, taskDraft, workspaces, workspace]);
+  const navigateTask = useCallback((task: string) => { if (workspace) navigate(taskRoutePath(workspace, task)); }, [workspace, navigate]);
+  const closeTask = useCallback(() => navigate(workspace ? explorerPath(workspace) : '/'), [workspace, navigate]);
+  const switchWorkspace = (name: string) => { if (name === workspace) return; navigate(settings ? workspaceSettingsPath(name) : explorerPath(name)); };
 
   const performPatch = useCallback(async (taskId: string, patch: TaskPatch): Promise<TaskDetail> => {
     const boardPatch: Partial<BoardTask> = {};
@@ -104,9 +116,13 @@ export function App() {
 
   const updatePreferences = (change: (value: Preferences) => Preferences) => setPreferences((current) => current ? change(current) : current);
   const statuses = allStatuses(snapshot.config, snapshot.tasks);
-  useBoardKeys({ enabled: !routeTask, tasks: visibleTasks, statuses, selected, onSelect: setSelected, onOpen: navigateTask, onMove: moveTask, onPalette: () => setPaletteOpen(true), onCreate: () => setCreateOpen(true), onFilter: () => search.current?.focus(), onAssign: (task) => navigateTask(task.id), onLabel: (task) => navigateTask(task.id), onWaitView: () => updatePreferences((value) => ({ ...value, filters: { ...value.filters, states: value.filters.states.includes('waiting') ? [] : ['waiting'] } })) });
+  useBoardKeys({ enabled: !routeTask && !settings, tasks: visibleTasks, statuses, selected, onSelect: setSelected, onOpen: navigateTask, onMove: moveTask, onPalette: () => setPaletteOpen(true), onCreate: () => setCreateOpen(true), onFilter: () => search.current?.focus(), onAssign: (task) => navigateTask(task.id), onLabel: (task) => navigateTask(task.id), onWaitView: () => updatePreferences((value) => ({ ...value, filters: { ...value.filters, states: value.filters.states.includes('waiting') ? [] : ['waiting'] } })) });
 
-  const paletteActions: PaletteAction[] = useMemo(() => [
+  const paletteActions: PaletteAction[] = useMemo(() => settings ? [
+    { id: 'instance-settings', label: 'Instance plugin settings', group: 'Settings', run: () => navigate(instanceSettingsPath()) },
+    ...workspaces.map((item) => ({ id: `settings-${item.name}`, label: `Board settings · ${item.name}`, group: 'Settings', run: () => navigate(workspaceSettingsPath(item.name)) })),
+    { id: 'back-board', label: 'Back to board', group: 'View', run: closeTask },
+  ] : [
     { id: 'create', label: 'Create task', group: 'Tasks', shortcut: 'C', run: () => setCreateOpen(true) },
     { id: 'open', label: 'Open selected task', group: 'Tasks', shortcut: 'Enter', run: () => selected && navigateTask(selected) },
     { id: 'filter', label: 'Focus filter', group: 'View', shortcut: '/', run: () => search.current?.focus() },
@@ -117,19 +133,21 @@ export function App() {
     { id: 'list', label: 'List view', group: 'View', run: () => updatePreferences((value) => ({ ...value, view: 'list' })) },
     ...workspaces.map((item) => ({ id: `workspace-${item.name}`, label: `Switch to ${item.name}`, group: 'Workspaces', run: () => switchWorkspace(item.name) })),
     ...statuses.map((status, index) => ({ id: `move-${status}`, label: `Move selected to ${humanize(status)}`, group: 'Move', shortcut: index < 9 ? `M ${index + 1}` : undefined, run: () => { const task = snapshot.tasks.find((item) => item.id === selected); if (task) moveTask(task, status); } })),
-  ], [selected, navigateTask, workspaces, statuses, snapshot.tasks, moveTask]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [settings, navigate, closeTask, selected, navigateTask, workspaces, statuses, snapshot.tasks, moveTask]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeWorkspace = workspaces.find((item) => item.name === workspace);
-  if (!workspace) return <div className="boot-screen"><span className="brand-mark">D</span><p>{notice || 'Loading Docket…'}</p></div>;
-  if (!preferences) return <div className="boot-screen"><span className="brand-mark">D</span><p>Opening {workspace}…</p></div>;
-
-  return <div className={`app-shell ${routeTask ? 'task-route' : ''}`}>
-    <header className="topbar"><a className="brand" href={explorerPath(workspace)} onClick={(event) => { event.preventDefault(); closeTask(); }}><span className="brand-mark">D</span><b>Docket</b></a>
+  const header = <header className="topbar"><a className="brand" href={explorerPath(workspace)} onClick={(event) => { event.preventDefault(); closeTask(); }}><span className="brand-mark">D</span><b>Docket</b></a>
       <select className="workspace-select" aria-label="Workspace" value={workspace} onChange={(event) => switchWorkspace(event.target.value)}>{workspaces.map((item) => <option key={item.name} value={item.name}>{item.name}{item.state !== 'watching' ? ` · ${item.state}` : ''}</option>)}</select>
       <div className={`connection ${snapshot.connection}`}><i />{snapshot.connection === 'open' ? 'Live' : snapshot.connection}</div>
-      <div className="topbar-spacer" /><a className="quiet-link" href={classicPath(workspace, routeTask)}>Classic</a><button className="command-button" onClick={() => setPaletteOpen(true)}>Search commands <kbd>⌘K</kbd></button><button className="primary-button" onClick={() => setCreateOpen(true)}>New task</button>
-    </header>
+      <div className="topbar-spacer" /><a className="quiet-link plugin-settings-link" href={instanceSettingsPath()} onClick={(event) => { event.preventDefault(); navigate(instanceSettingsPath()); }}>Plugin settings</a>{workspace && <a className="quiet-link" href={classicPath(workspace, routeTask)} onClick={(event) => { if (!navigation.allow()) event.preventDefault(); }}>Classic</a>}<button className="command-button" onClick={() => setPaletteOpen(true)}>Search commands <kbd>⌘K</kbd></button>{!settings && preferences && <button className="primary-button" onClick={() => setCreateOpen(true)}>New task</button>}
+    </header>;
+  if (settings) return <div className="app-shell settings-shell">{header}<SettingsPage key={settingsPath(settings)} route={settings} selectedWorkspace={workspace} onNavigate={navigate} onDirtyChange={setSettingsDirty} onBusyChange={setSettingsBusy} /><footer className="statusbar"><label>Acting as <input maxLength={100} value={actor} onChange={(event) => { setActorState(event.target.value); setActor(event.target.value); }} /></label><span>Attribution, not access control</span></footer><CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} /></div>;
+  if (!workspace || !preferences) return <div className="app-shell">{header}<div className="boot-screen"><span className="brand-mark">D</span><p>{notice || activeWorkspace?.last_error || (!workspace ? 'No workspace is selected. Register a board or open plugin settings.' : `Opening ${workspace}…`)}</p><button onClick={() => void refreshWorkspaces()}>Retry workspaces</button></div></div>;
+
+  return <div className={`app-shell ${routeTask ? 'task-route' : ''}`}>
+    {header}
     {!routeTask && <section className="toolbar"><div><h1>{activeWorkspace?.name || workspace}</h1><p>{visibleTasks.length} of {snapshot.tasks.length} tasks</p></div><div className="toolbar-actions">
+      <a className="quiet-link plugin-settings-link" href={workspaceSettingsPath(workspace)} onClick={(event) => { event.preventDefault(); navigate(workspaceSettingsPath(workspace)); }}>Board settings</a>
       <input ref={search} className="search-input" type="search" placeholder="Filter tasks…" value={preferences.filters.query} onChange={(event) => updatePreferences((value) => ({ ...value, filters: { ...value.filters, query: event.target.value } }))} />
       <button aria-pressed={preferences.view === 'board'} onClick={() => updatePreferences((value) => ({ ...value, view: 'board' }))}>Board</button><button aria-pressed={preferences.view === 'list'} onClick={() => updatePreferences((value) => ({ ...value, view: 'list' }))}>List</button>
       <select aria-label="Task order" value={preferences.order} onChange={(event) => updatePreferences((value) => ({ ...value, order: event.target.value as Preferences['order'] }))}><option value="updated-desc">Recently updated</option><option value="updated-asc">Least recently updated</option><option value="created-desc">Newest created</option><option value="created-asc">Oldest created</option><option value="id-asc">ID ascending</option><option value="id-desc">ID descending</option><option value="title-asc">Title A–Z</option><option value="title-desc">Title Z–A</option></select>
@@ -138,7 +156,7 @@ export function App() {
     </div></section>}
     <div className="notices">{(notice || activeWorkspace?.last_error) && <div className="notice error-banner">{notice || activeWorkspace?.last_error}</div>}
       {snapshot.pending.filter((item) => item.failed).map((mutation) => <div className="notice error-banner" key={mutation.id}>Mutation failed · {mutation.failed}<span><button onClick={() => retryMutation(mutation)}>Retry</button><button onClick={() => store.dismiss(mutation.id)}>Dismiss</button></span></div>)}</div>
-    <main className={routeTask ? 'task-page-container' : 'explorer'}>{routeTask ? <TaskDetailPanel key={`${workspace}/${routeTask}`} workspace={workspace} taskId={routeTask} open config={snapshot.config} live={snapshot.live} summaryUpdatedAt={snapshot.tasks.find((task) => task.id === routeTask)?.updated_at} onClose={closeTask} onPatch={performPatch} onCursor={() => undefined} onDraftChange={setTaskDraft} /> : visibleTasks.length ? (preferences.view === 'board' ? <BoardView workspace={workspace} tasks={visibleTasks} config={snapshot.config} preferences={preferences} selected={selected} live={snapshot.live} onSelect={navigateTask} onMove={moveTask} /> : <ListView tasks={visibleTasks} statuses={statuses} showEmpty={preferences.showEmpty} hiddenStatuses={preferences.hiddenStatuses} selected={selected} onSelect={navigateTask} />) : <div className="empty-state"><h2>No tasks match this view</h2><p>Clear filters or create a task.</p><button onClick={() => updatePreferences((value) => ({ ...value, filters: { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }, hiddenStatuses: [] }))}>Clear filters</button></div>}</main>
+    <main className={routeTask ? 'task-page-container' : 'explorer'}>{routeTask ? <TaskDetailPanel key={`${workspace}/${routeTask}`} workspace={workspace} taskId={routeTask} open config={snapshot.config} live={snapshot.live} summaryUpdatedAt={snapshot.tasks.find((task) => task.id === routeTask)?.updated_at} onClose={closeTask} onPatch={performPatch} onCursor={() => undefined} onDraftChange={setTaskDraft} /> : visibleTasks.length ? (preferences.view === 'board' ? <BoardView workspace={workspace} tasks={visibleTasks} config={snapshot.config} preferences={preferences} selected={selected} live={snapshot.live} onSelect={navigateTask} onMove={moveTask} onSettings={(status) => navigate(statusSettingsPath(workspace, status))} /> : <ListView tasks={visibleTasks} statuses={statuses} showEmpty={preferences.showEmpty} hiddenStatuses={preferences.hiddenStatuses} selected={selected} onSelect={navigateTask} />) : <div className="empty-state"><h2>No tasks match this view</h2><p>Clear filters or create a task.</p><button onClick={() => updatePreferences((value) => ({ ...value, filters: { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }, hiddenStatuses: [] }))}>Clear filters</button></div>}</main>
     <footer className="statusbar"><label>Acting as <input maxLength={100} value={actor} onChange={(event) => { setActorState(event.target.value); setActor(event.target.value); }} /></label><span>{activeFilterCount(preferences.filters)} active filters</span><span>{routeTask ? 'Task details' : 'J/K navigate · Enter open · M + lane move'}</span></footer>
     <CreateTaskDialog open={createOpen} config={snapshot.config} onOpenChange={setCreateOpen} onCreate={performCreate} />
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />

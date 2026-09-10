@@ -9,6 +9,8 @@
     "build": "tsc -b && vite build && bun run check:size",
     "test": "bun test",
     "check:ui": "bun scripts/verify-ui.ts",
+    "check:settings": "bun scripts/verify-settings.ts",
+    "preview:settings": "bun scripts/verify-settings.ts --preview",
     "check:size": "bun scripts/check-size.mjs"
   },
   "dependencies": {

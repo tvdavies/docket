@@ -1,6 +1,6 @@
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
-import { TaskCard } from '../src/views/board/BoardView';
+import { BoardView, TaskCard } from '../src/views/board/BoardView';
 import { defaultPreferences } from '../src/store/preferences';
 import type { BoardTask } from '../src/types';
 
@@ -19,6 +19,15 @@ function setup() {
   Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => destination });
   return { ...view, card, destination, onMove, onSelect, onDragging };
 }
+
+test('settings actions belong only to composed lanes, including empty lanes', () => {
+  const onSettings = vi.fn();
+  const view = render(<BoardView workspace="demo" tasks={[{ ...task, status: 'unknown' }]} config={config} preferences={{ ...defaultPreferences(), showEmpty: true }} selected="" live={[]} onSelect={() => undefined} onMove={() => undefined} onSettings={onSettings} />);
+  fireEvent.click(view.getByRole('button', { name: 'Plugin settings for Todo' }));
+  expect(onSettings).toHaveBeenCalledWith('todo');
+  expect(view.getByRole('button', { name: 'Plugin settings for Done' })).toBeTruthy();
+  expect(view.queryByRole('button', { name: 'Plugin settings for Unknown' })).toBeNull();
+});
 
 describe('same-card pointer dragging', () => {
   test('moves the existing element, drops into another lane, and suppresses navigation', () => {
