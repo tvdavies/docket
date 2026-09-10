@@ -9,7 +9,9 @@ import { code, toolStatusLabel } from "./kit";
 
 /** Full-session only: user messages never appear in board/task previews. */
 export interface UserEntry { id: string; seq: number; type: "user"; text: string }
-export type RenderableEntry = PreviewEntry | DetailEntry | UserEntry;
+/** Full-session tool row: `output` is the revealed prefix; `outputRemaining` counts characters still behind Show more (0 = reader revealed everything; undefined = not chunked). */
+export interface FullToolEntry extends DetailToolEntry { outputRemaining?: number }
+export type RenderableEntry = PreviewEntry | DetailEntry | FullToolEntry | UserEntry;
 
 export interface EntriesOptions {
   /** Expanded task view: tool rows become disclosures over redacted detail. */
@@ -17,6 +19,8 @@ export interface EntriesOptions {
   /** Full session: failed tools open by default. */
   failedOpen?: boolean;
   idPrefix: string;
+  /** Full session: reveal the next bounded output chunk for a tool. */
+  showMore?(toolCallId: string): void;
 }
 
 export function renderEntries(list: HTMLElement, entries: RenderableEntry[], options: EntriesOptions): void {
@@ -65,10 +69,24 @@ function updateEntry(el: HTMLElement, entry: RenderableEntry, options: EntriesOp
     const statusLabel = toolStatusLabel(entry.status, entry.durationMs);
     row.setAttribute("aria-label", `${entry.label}, ${statusLabel}, details`);
     const detail = el.querySelector(".wk-tool-detail") as HTMLElement;
-    const detailEntry = entry as DetailToolEntry;
+    const detailEntry = entry as FullToolEntry;
+    const remaining = detailEntry.outputRemaining ?? 0;
+    // Rebuild the detail only when its content changed: a selection or focus
+    // inside the arguments/result must survive unrelated streaming updates.
+    const signature = JSON.stringify([entry.status, detailEntry.input ?? null, detailEntry.output ?? null, detailEntry.outputRemaining ?? null]);
+    if (detail.dataset.signature === signature) return;
+    detail.dataset.signature = signature;
+    const result = h("dd", {}, detailEntry.output ? code(detailEntry.output) : h("span", { class: "wk-empty", text: entry.status === "running" ? "Still running" : "None published" }));
+    if (remaining > 0 && options.showMore) {
+      const more = h("button", { type: "button", class: "wk-button wk-show-more", "data-tool-call": entry.toolCallId, text: `Show more · ${remaining.toLocaleString()} characters remaining` });
+      more.addEventListener("click", () => options.showMore?.(entry.toolCallId));
+      result.append(more);
+    } else if (detailEntry.outputRemaining === 0 && detailEntry.output) {
+      result.append(h("span", { class: "wk-empty wk-output-end", text: "End of result" }));
+    }
     detail.replaceChildren(
       h("div", {}, h("dt", { text: "Arguments (redacted)" }), h("dd", {}, detailEntry.input ? code(detailEntry.input) : h("span", { class: "wk-empty", text: "None published" }))),
-      h("div", {}, h("dt", { text: "Result (bounded)" }), h("dd", {}, detailEntry.output ? code(detailEntry.output) : h("span", { class: "wk-empty", text: entry.status === "running" ? "Still running" : "None published" }))),
+      h("div", {}, h("dt", { text: "Result (bounded)" }), result),
     );
     // Failed tools open by default in full session; never re-open something the reader closed.
     if (options.failedOpen && entry.status === "failed" && row.dataset.userToggled !== "true" && row.getAttribute("aria-expanded") !== "true") {

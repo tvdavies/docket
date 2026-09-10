@@ -4,12 +4,11 @@
 import { chooseBoardSession } from "./adapter";
 import { cleanupCount } from "./components/bodies";
 import { refreshFreshness } from "./components/wrapper";
-import { renderEntries, type RenderableEntry } from "./components/preview";
+import { renderEntries, type FullToolEntry, type RenderableEntry } from "./components/preview";
 import { containsFocus, containsSelection, formatClock, h, setText } from "./dom";
 import { BOARD_STATUSES, BOARD_TASKS, DEFAULT_SCENARIO, SCENARIOS, WORKSPACE, scenarioById, type Scenario } from "./fixtures";
 import { FixtureHost, type BodyChoice } from "./host";
 import { fullTranscript } from "./publisher";
-import type { DetailEntry } from "../contracts.proposed";
 import { PROPOSED_BUDGETS } from "../contracts.proposed";
 
 const host = new FixtureHost();
@@ -184,7 +183,7 @@ function renderBoard(): { kind: string; cleanup(): void } {
   const lanes = h("div", { class: "board-grid" });
   for (const status of BOARD_STATUSES) {
     const list = h("div", { class: "lane-list" });
-    for (const task of BOARD_TASKS.filter((item) => item.status === status.id)) {
+    for (const task of BOARD_TASKS.map((item) => host.taskFor(item.id) ?? item).filter((item) => item.status === status.id)) {
       const card = h("article", { class: "task-card", "data-task": task.id, "aria-labelledby": `card-${task.id}` });
       card.append(h("div", { class: "card-top" }, h("span", { class: "task-id", text: task.id })));
       card.append(h("h3", { id: `card-${task.id}` }, h("a", { class: "card-title", href: `/workspaces/${WORKSPACE}/tasks/${task.id}`, text: task.title })));
@@ -206,15 +205,20 @@ function renderBoard(): { kind: string; cleanup(): void } {
 }
 
 function renderTask(taskId: string): { kind: string; cleanup(): void } {
-  const task = BOARD_TASKS.find((item) => item.id === taskId);
+  const task = host.taskFor(taskId);
   if (!task) return renderNotFound(`Task ${taskId}`);
   const sessions = sessionsForTask(taskId);
   const document_ = h("div", { class: "detail-document" });
+  const heading = h("h1", { id: "view-heading", tabindex: "-1", text: task.title });
   document_.append(
     h("p", { class: "task-id", text: `Task · ${task.id}` }),
-    h("h1", { id: "view-heading", tabindex: "-1", text: task.title }),
+    heading,
     h("p", { class: "muted", text: "One session, one activity entry. Read the current action here; open the session when you need the full story." }),
   );
+  // Task fields arrive in snapshots; the host applies them to its task record
+  // and the page heading follows without remounting any widget.
+  const stageEl = h("dd", { text: task.status });
+  const unsubscribe = host.onChange(() => { const current = host.taskFor(taskId); if (current) { setText(heading, current.title); setText(stageEl, current.status); document.title = `${taskId} · JOB-0092 fixture demo`; } });
   const activity = h("section", { class: "activity", "aria-labelledby": "activity-heading" }, h("h2", { id: "activity-heading", text: "Activity" }));
   const list = h("ol", { class: "activity-list" });
   for (const state of sessions) {
@@ -228,35 +232,46 @@ function renderTask(taskId: string): { kind: string; cleanup(): void } {
   activity.append(list);
   document_.append(activity);
   const properties = h("aside", { class: "detail-properties" }, h("h2", { text: "Task properties" }),
-    h("dl", {}, h("dt", { text: "Stage" }), h("dd", { text: task.status }), h("dt", { text: "Assignee" }), h("dd", { text: task.assignee ?? "—" }), h("dt", { text: "Workspace" }), h("dd", { text: "Demo" })),
+    h("dl", {}, h("dt", { text: "Stage" }), stageEl, h("dt", { text: "Assignee" }), h("dd", { text: task.assignee ?? "—" }), h("dt", { text: "Workspace" }), h("dd", { text: "Demo" })),
     h("p", { class: "muted small", text: "The board shows one meaningful action, never a scrolling transcript. On a phone, activity uses the full width." }),
   );
   app.replaceChildren(crumb([{ text: "Demo workspace", href: `/workspaces/${WORKSPACE}` }, { text: task.id }]), h("div", { class: "detail-layout" }, document_, properties));
-  return { kind: "task", cleanup: () => { for (const state of sessions) host.unmount("activity", state.fixture.sessionId); } };
+  return { kind: "task", cleanup: () => { unsubscribe(); for (const state of sessions) host.unmount("activity", state.fixture.sessionId); } };
 }
 
 function renderSession(sessionId: string): { kind: string; cleanup(): void } {
   const state = host.sessions.get(sessionId);
   if (!state) return renderNotFound(`Session ${sessionId}`, "The session ID is not known to this demo. Task context is not guessed.");
   const taskPath = `/workspaces/${WORKSPACE}/tasks/${state.taskId}`;
-  const task = BOARD_TASKS.find((item) => item.id === state.taskId);
+  const task = host.taskFor(state.taskId);
   const header = h("header", { class: "session-header" },
     h("p", { class: "task-id" }, "Originating task · ", h("a", { href: taskPath, text: state.taskId })),
-    h("h1", { id: "view-heading", tabindex: "-1", text: task?.title ?? state.taskTitle }),
+    h("h1", { id: "view-heading", tabindex: "-1", text: task?.title ?? state.taskId }),
     h("div", { class: "wk-meta session-meta" }, h("span", { text: "Workspace Demo" }), h("span", { text: `${state.fixture.source.persona} · ${state.fixture.source.stage}` }), h("span", { class: "session-id", text: `Session ${sessionId}` })),
     h("div", { class: "session-status" }, h("span", { class: "wk-status", id: "session-execution" }), h("span", { class: "wk-freshness", id: "session-freshness" }, h("i", { "aria-hidden": "true" }), h("span"))),
   );
   const notices = h("div", { class: "widget-notices" });
   const viewport = h("div", { class: "transcript-viewport", tabindex: "0", "aria-label": "Session transcript" });
   const transcript = h("ol", { class: "wk-steps transcript", "aria-label": "Ordered transcript" });
-  const earlier = h("button", { type: "button", class: "wk-button", hidden: true, text: "Show earlier" });
+  const earlier = h("button", { type: "button", class: "wk-button show-earlier", hidden: true, text: "Show earlier" });
+  const later = h("button", { type: "button", class: "wk-button show-later", hidden: true, text: "Show later" });
+  const windowLabel = h("p", { class: "wk-note transcript-window", role: "status" });
   const jump = h("button", { type: "button", class: "wk-button jump-latest", hidden: true, text: "Jump to latest" });
-  viewport.append(earlier, transcript);
-  let following = true; let windowStart = 0;
-  const measure = () => { following = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120; jump.hidden = following; };
+  viewport.append(earlier, transcript, later);
+  // Explicit reader-owned window over the ordered transcript. `latest` means
+  // "the newest N entries" and follows growth; any other window is pinned to
+  // an absolute start index so streaming never moves the reader. The mounted
+  // count never exceeds PROPOSED_BUDGETS.fullSessionMountedEntries.
+  const SIZE = PROPOSED_BUDGETS.fullSessionMountedEntries;
+  const CHUNK = PROPOSED_BUDGETS.fullSessionOutputChunkChars;
+  let following = true; let windowStart: number | "latest" = "latest"; let total = 0;
+  const revealed = new Map<string, number>(); // toolCallId -> revealed output characters (reader-owned)
+  const measure = () => { following = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120; jump.hidden = following && windowStart === "latest"; };
   viewport.addEventListener("scroll", measure);
-  jump.addEventListener("click", () => { viewport.scrollTo({ top: viewport.scrollHeight, behavior: host.preferences.reducedMotion ? "auto" : "smooth" }); following = true; jump.hidden = true; });
-  earlier.addEventListener("click", () => { windowStart = Math.max(0, windowStart - PROPOSED_BUDGETS.fullSessionMountedEntries); update(); });
+  jump.addEventListener("click", () => { windowStart = "latest"; update(); viewport.scrollTo({ top: viewport.scrollHeight, behavior: host.preferences.reducedMotion ? "auto" : "smooth" }); following = true; jump.hidden = true; });
+  const startOf = () => windowStart === "latest" ? Math.max(0, total - SIZE) : windowStart;
+  earlier.addEventListener("click", () => { windowStart = Math.max(0, startOf() - SIZE); following = false; update(); transcript.firstElementChild?.scrollIntoView({ block: "start", behavior: "auto" }); (transcript.firstElementChild as HTMLElement | null)?.focus?.(); });
+  later.addEventListener("click", () => { const next = startOf() + SIZE; windowStart = next + SIZE >= total ? "latest" : next; update(); transcript.firstElementChild?.scrollIntoView({ block: "start", behavior: "auto" }); });
 
   const update = () => {
     const frame = state.fixture.frames[state.frameIndex];
@@ -272,24 +287,34 @@ function renderSession(sessionId: string): { kind: string; cleanup(): void } {
     if (preview?.attention) notices.append(h("div", { class: "wk-notice", "data-tone": preview.attention.kind === "error" ? "danger" : "warning", role: preview.attention.kind === "error" ? "alert" : "status" }, h("strong", { text: preview.attention.kind === "error" ? "Session failed" : "Input required" }), h("span", { text: preview.attention.message }), h("small", { text: "Read-only view. No approval or reply controls." })));
     if (snapshot?.availability === "plugin_removed") { notices.append(h("div", { class: "wk-notice", "data-tone": "neutral", role: "status" }, h("strong", { text: "Plugin unavailable" }), h("span", { text: "The Dispatch plugin is not enabled in this workspace. The saved record is shown; the transcript is unavailable." }), h("a", { class: "wk-reference", href: taskPath, text: `Back to ${state.taskId}` }))); transcript.replaceChildren(); return; }
     if (snapshot?.availability === "missing_service") notices.append(h("div", { class: "wk-notice", "data-tone": "neutral", role: "status" }, h("strong", { text: "Plugin service unavailable" }), h("span", { text: "Showing the last known transcript." })));
-    const all = fullTranscript(state.fixture.source, frame?.through ?? 0);
+    // The full session reads the accepted payload's extent, never a rejected frame.
+    const all = fullTranscript(state.fixture.source, state.accepted?.through ?? 0);
     const engaged = containsFocus(transcript) || containsSelection(viewport);
     const wasFollowing = following;
-    const total = all.length;
-    if (windowStart === 0 && total > PROPOSED_BUDGETS.fullSessionMountedEntries) windowStart = total - PROPOSED_BUDGETS.fullSessionMountedEntries;
-    earlier.hidden = windowStart === 0;
-    const entries: RenderableEntry[] = all.slice(windowStart).map((entry) => entry.type === "tool"
-      ? ({ id: entry.id, seq: entry.seq, type: "tool", toolCallId: entry.toolCallId!, label: entry.label!, status: entry.status!, summary: entry.summary, durationMs: entry.durationMs, input: entry.input, output: entry.output?.slice(0, PROPOSED_BUDGETS.toolDetailChars) } as DetailEntry)
-      : entry.type === "user" ? ({ id: entry.id, seq: entry.seq, type: "user", text: entry.text ?? "" }) : ({ id: entry.id, seq: entry.seq, type: "assistant", text: entry.text ?? "" }));
+    total = all.length;
+    const start = startOf();
+    const end = Math.min(total, start + SIZE);
+    earlier.hidden = start === 0;
+    later.hidden = end >= total;
+    setText(windowLabel, total > SIZE ? `Showing entries ${start + 1}–${end} of ${total} (${SIZE} at a time)` : `${total} entries`);
+    const entries: RenderableEntry[] = all.slice(start, end).map((entry) => {
+      if (entry.type === "tool") {
+        const output = entry.output ?? "";
+        const shown = Math.min(output.length, Math.max(CHUNK, revealed.get(entry.toolCallId!) ?? 0));
+        const row: FullToolEntry = { id: entry.id, seq: entry.seq, type: "tool", toolCallId: entry.toolCallId!, label: entry.label!, status: entry.status!, summary: entry.summary, durationMs: entry.durationMs, input: entry.input, output: output ? output.slice(0, shown) : undefined, outputRemaining: output.length > CHUNK ? output.length - shown : undefined };
+        return row;
+      }
+      return entry.type === "user" ? ({ id: entry.id, seq: entry.seq, type: "user", text: entry.text ?? "" }) : ({ id: entry.id, seq: entry.seq, type: "assistant", text: entry.text ?? "" });
+    });
     // User messages are permitted in the full session only; they are rendered in order here.
-    renderEntries(transcript, entries, { detail: true, failedOpen: true, idPrefix: `full-${sessionId}` });
-    if (wasFollowing && !engaged) { viewport.scrollTop = viewport.scrollHeight; }
+    renderEntries(transcript, entries, { detail: true, failedOpen: true, idPrefix: `full-${sessionId}`, showMore: (toolCallId) => { revealed.set(toolCallId, Math.max(CHUNK, revealed.get(toolCallId) ?? 0) + CHUNK); update(); transcript.querySelector<HTMLElement>(`.wk-show-more[data-tool-call="${CSS.escape(toolCallId)}"]`)?.focus(); } });
+    if (wasFollowing && !engaged && windowStart === "latest") { viewport.scrollTop = viewport.scrollHeight; }
     measure();
   };
   const unsubscribe = host.onChange(update);
   app.replaceChildren(
     crumb([{ text: "Demo workspace", href: `/workspaces/${WORKSPACE}` }, { text: state.taskId, href: taskPath }, { text: `Session ${sessionId}` }]),
-    h("div", { class: "session-layout" }, header, notices, viewport, h("div", { class: "session-footer" }, jump, h("a", { class: "wk-reference back-to-task", href: taskPath, text: `Back to ${state.taskId}` }))),
+    h("div", { class: "session-layout" }, header, notices, windowLabel, viewport, h("div", { class: "session-footer" }, jump, h("a", { class: "wk-reference back-to-task", href: taskPath, text: `Back to ${state.taskId}` }))),
   );
   update();
   viewport.scrollTop = viewport.scrollHeight;

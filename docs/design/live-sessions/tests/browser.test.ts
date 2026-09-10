@@ -195,7 +195,8 @@ try {
   const mounted = await counter("instancesMounted");
   await widget().locator(".wk-steps > li").first().evaluate((el) => (el as HTMLElement & { __id?: string }).__id = "keep");
   await advance();
-  check(await page.locator("h1#view-heading").textContent().then((t) => t?.includes("(renamed)")) || true, "context-update: task fields delivered in the snapshot (title change observed by host)");
+  check(await page.locator("h1#view-heading").textContent().then((t) => t?.includes("(renamed)")), "context-update: task title change from the snapshot is visible in the page heading");
+  check(await widget().locator(".widget-label").textContent().then((t) => t?.includes("Planner")) && await page.evaluate(() => document.title.startsWith("DEMO-0042")), "context-update: document title follows the task, widget label untouched");
   await advance();
   check(await page.evaluate(() => document.documentElement.dataset.theme === "dark" && document.documentElement.dataset.density === "compact"), "context-update: preference change applied in the same transaction");
   check(await counter("instancesMounted") === mounted && await widget().locator(".wk-steps > li").first().evaluate((el) => (el as HTMLElement & { __id?: string }).__id === "keep"), "context-update: data/preference updates preserve the instance and DOM identity");
@@ -283,6 +284,133 @@ try {
   await page.keyboard.press("Space");
   check(await page.evaluate(() => document.querySelector("demo-session-body")?.shadowRoot?.activeElement?.getAttribute("aria-expanded") === "true"), "theme-density: Space toggles the shadow-root disclosure");
   check(await page.evaluate(() => { const el = document.querySelector("demo-session-body")?.shadowRoot?.activeElement as HTMLElement; return getComputedStyle(el).outlineStyle !== "none"; }), "theme-density: focus is visible inside the shadow root");
+
+  // --- reader-intent (review findings 1 and 2) -----------------------------------
+  const selectFirstAssistant = async (shadow = false) => {
+    if (shadow) await widget().locator("demo-session-body").evaluate((host) => { const el = host.shadowRoot!.querySelector('.wk-step[data-type="assistant"]')!; const range = document.createRange(); range.selectNodeContents(el); const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range); });
+    else await widget().locator('.wk-step[data-type="assistant"]').first().evaluate((el) => { const range = document.createRange(); range.selectNodeContents(el); const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range); });
+  };
+  const selectedText = () => page.evaluate(() => window.getSelection()?.toString() ?? "");
+  for (const body of ["standard", "custom-element"] as const) {
+    // Input notice independent of the held preview
+    await page.goto(`${task}?scenario=awaiting-input&frame=0&paused=1&body=${body}`); await widget().waitFor();
+    await selectFirstAssistant(body === "custom-element");
+    const before = await selectedText();
+    await advance();
+    check(before.length > 0 && await widget().locator('.widget-notices .wk-notice[data-tone="warning"]').isVisible() && await widget().locator(".wk-status.widget-status").textContent().then((t) => t?.trim() === "Awaiting input"), `reader-intent[${body}]: input notice appears while preview text is selected`);
+    check(await selectedText() === before && (await entryTexts()).length === 1, `reader-intent[${body}]: selection survives the input transition (entries unchanged, nothing withheld)`);
+    await advance(); await advance();
+    check(await widget().locator('.widget-notices .wk-notice[data-tone="warning"]').count() === 0 && await widget().locator(".wk-status.widget-status").textContent().then((t) => t?.trim() === "Running"), `reader-intent[${body}]: resolved input notice clears while the window is still held`);
+    // Open session focus survives streaming
+    await page.goto(`${task}?scenario=live&frame=4&paused=1&body=${body}`); await widget().waitFor();
+    await widget().locator('.widget-footer a[data-ref-kind="session"]').focus();
+    await advance();
+    check(await page.evaluate(() => document.activeElement?.id) === "w-activity-demo-s01-open", `reader-intent[${body}]: Open session keeps focus through a streaming update`);
+    check(await widget().locator(".widget-new-activity").isHidden() && (await entryTexts())[1]?.startsWith("tool:completed"), `reader-intent[${body}]: focus on a footer link does not hold the preview window`);
+    // Selected preview survives finalisation
+    await page.goto(`${task}?scenario=live&frame=10&paused=1&body=${body}`); await widget().waitFor();
+    await selectFirstAssistant(body === "custom-element");
+    const selectedBefore = await selectedText();
+    await advance();
+    check(await widget().locator(".widget-body-slot").isVisible() && await selectedText() === selectedBefore && selectedBefore.length > 0, `reader-intent[${body}]: selected preview text survives finalisation (no hidden body, no cleared selection)`);
+    check(await widget().locator(".wk-status.widget-status").textContent().then((t) => t?.trim() === "Completed") && await widget().locator(".widget-new-activity").textContent().then((t) => t?.includes("show summary")), `reader-intent[${body}]: status updates and an explicit control offers the summary`);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await widget().locator(".widget-new-activity").click();
+    check(await widget().locator(".widget-summary").isVisible() && await widget().locator(".widget-new-activity").isHidden(), `reader-intent[${body}]: deliberate control collapses to the durable summary`);
+    // Explicit expansion freezes the reading window
+    await page.goto(`${task}?scenario=live&frame=4&paused=1&body=${body}`); await widget().waitFor();
+    await expand.click();
+    const rowsBefore = await entryTexts();
+    await advance();
+    check(JSON.stringify(await entryTexts()) === JSON.stringify(rowsBefore) && await widget().locator(".widget-new-activity").isVisible(), `reader-intent[${body}]: explicit expansion freezes the reading window; New activity offered`);
+    await widget().locator(".widget-new-activity").click();
+    check(JSON.stringify(await entryTexts()) !== JSON.stringify(rowsBefore) && (await entryTexts())[1]?.startsWith("tool:completed") && await expand.getAttribute("aria-expanded") === "true" && await widget().locator(".widget-new-activity").isHidden(), `reader-intent[${body}]: New activity applies the withheld detail and stays expanded`);
+    // Selected tool output / link inside the expanded body
+    await page.goto(`${task}?scenario=live&frame=6&paused=1&body=${body}`); await widget().waitFor();
+    await expand.click();
+    await widget().locator('.wk-tool-row[data-status="completed"]').first().click();
+    const selectCode = body === "custom-element"
+      ? widget().locator("demo-session-body").evaluate((host) => { const el = host.shadowRoot!.querySelector(".wk-tool-detail:not([hidden]) .wk-code")!; const range = document.createRange(); range.selectNodeContents(el); const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range); })
+      : widget().locator(".wk-tool-detail:not([hidden]) .wk-code").first().evaluate((el) => { const range = document.createRange(); range.selectNodeContents(el); const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range); });
+    await selectCode;
+    const codeBefore = await selectedText();
+    await advance(); await advance();
+    check(codeBefore.includes("sessionProjection.ts") && await selectedText() === codeBefore, `reader-intent[${body}]: selected tool detail inside the body survives streaming`);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    const moreLink = body === "custom-element" ? widget().locator("demo-session-body") : widget().locator(".wk-more a");
+    if (body === "custom-element") await moreLink.evaluate((host) => (host.shadowRoot!.querySelector(".wk-more a") as HTMLElement).focus()); else await moreLink.focus();
+    await advance();
+    check(await page.evaluate(() => { const host = document.querySelector("demo-session-body"); const active = host && document.activeElement === host ? host.shadowRoot?.activeElement : document.activeElement; return active?.classList.contains("wk-reference") && active.closest(".wk-more") !== null; }), `reader-intent[${body}]: focused link inside the body survives streaming`);
+  }
+
+  // --- state-matrix: accepted payload storage (review finding 3) ----------------
+  await page.goto(`${task}?scenario=duplicate-older&frame=0&paused=1`); await widget().waitFor();
+  await advance(); // duplicate revision 5
+  await advance(); // older revision 3
+  const acceptedAfterOlder = await page.evaluate(() => { const s = window.__demo.host.snapshotFor("demo-s01"); return { revision: s?.data?.revision, action: s?.data?.value.currentAction }; });
+  check(acceptedAfterOlder.revision === 5 && acceptedAfterOlder.action === "Read · web/src/sessionProjection.ts", "state-matrix: the accepted payload stays at revision 5 after duplicate and older frames");
+  await page.selectOption("#body", "custom-element"); await widget().waitFor();
+  check(await widget().locator("demo-session-body").evaluate((el) => el.shadowRoot!.querySelectorAll('.wk-step[data-type="tool"]').length) === 1, "state-matrix: remount is served from the accepted payload, not the rejected older frame");
+  await page.selectOption("#theme", "dark");
+  check(await widget().locator("demo-session-body").evaluate((el) => el.shadowRoot!.querySelectorAll('.wk-step[data-type="tool"]').length) === 1, "state-matrix: preference update is served from the accepted payload");
+  await page.selectOption("#theme", "light"); await page.selectOption("#body", "standard"); await widget().waitFor();
+  await page.goto(`${task}?scenario=live&frame=4&paused=1`); await widget().waitFor();
+  const metadataBefore = await counter("metadataApplied"); const appliedBefore = await counter("snapshotsApplied");
+  await page.evaluate(() => { const host = window.__demo.host; const state = host.sessions.get("demo-s01")!; state.fixture.frames[state.frameIndex + 1] = { ...state.fixture.frames[state.frameIndex], revision: state.revision, availability: "missing_service", taskTitle: "Unchanged-revision title" }; host.advance(); });
+  check(await widget().locator(".wk-notice").filter({ hasText: "Plugin service unavailable" }).isVisible(), "state-matrix: availability change is delivered even when the data revision is unchanged");
+  check(await page.locator("h1#view-heading").textContent().then((t) => t?.includes("Unchanged-revision title")), "state-matrix: task field change is delivered with an unchanged data revision");
+  check(await counter("duplicatesIgnored") >= 1 && await counter("snapshotsApplied") === appliedBefore && await counter("metadataApplied") > metadataBefore, "state-matrix: duplicate data counted as ignored while metadata is applied");
+  check((await entryTexts()).length === 2 && (await entryTexts())[1]?.startsWith("tool:running"), "state-matrix: content stays at the accepted revision during the metadata-only update");
+
+  // --- preview-bounds: view-scoped detail selection (review finding 4) ------------
+  await page.goto(`${task}?scenario=multi-session&frame=0&paused=1`); await page.locator(".widget").nth(2).waitFor();
+  const expands = page.locator('.widget[data-location="activity"] .widget-expand');
+  await expands.nth(0).click(); await expands.nth(1).click(); await expands.nth(2).click();
+  check(await counter("activeLeases") === 1 && await counter("leasesRevoked") === 2, "preview-bounds: expanding three cards keeps one detail selection per task view");
+  check(await expands.evaluateAll((els) => els.map((el) => el.getAttribute("aria-expanded"))).then((values) => JSON.stringify(values) === JSON.stringify(["false", "false", "true"])), "preview-bounds: reselection collapses the previously selected cards");
+  check(await page.locator(".widget-control-note:not([hidden])").count() === 2 && await page.locator(".widget-control-note:not([hidden])").first().textContent().then((t) => t?.includes("one session at a time")), "preview-bounds: revoked cards explain why their detail closed");
+  await expands.nth(0).click();
+  check(await counter("activeLeases") === 1 && await expands.nth(2).getAttribute("aria-expanded") === "false" && await expands.nth(0).getAttribute("aria-expanded") === "true", "preview-bounds: selecting back moves the single selection");
+  await page.goto(`${task}?scenario=unknown-version&frame=0&paused=1`); await widget().waitFor();
+  await expand.click();
+  check(await counter("activeLeases") === 1, "preview-bounds: supported data can be expanded before the unsupported frame");
+  await advance();
+  check(await counter("activeLeases") === 0 && await widget().locator("[data-body]").count() === 0 && await widget().locator(".widget-summary").isVisible(), "preview-bounds: unsupported version releases the body and its detail selection");
+  check(await counter("bodyCleanups") >= 1 && await counter("bodyErrors") === 0, "preview-bounds: unsupported data is a release, not a body failure");
+  await page.goto(`${task}?scenario=missing-service&frame=0&paused=1`); await widget().waitFor();
+  await expand.click();
+  check(await counter("activeLeases") === 1 && await expand.getAttribute("aria-expanded") === "true", "preview-bounds: completed card can be expanded while the service is available");
+  await advance();
+  check(await counter("activeLeases") === 0 && await expand.getAttribute("aria-expanded") === "false" && await expand.isDisabled(), "preview-bounds: missing service revokes the detail selection and disables Expand");
+  check(await widget().locator(".widget-summary").textContent().then((t) => t?.includes("Documented the route behavior")) && await widget().locator(".wk-notice").filter({ hasText: "Plugin service unavailable" }).isVisible(), "preview-bounds: saved summary and availability notice remain while unavailable");
+  await advance();
+  check(await expand.isEnabled() && await counter("activeLeases") === 0, "preview-bounds: service return re-enables Expand without re-acquiring detail on its own");
+  await expand.click();
+  check(await counter("activeLeases") === 1 && await counter("leasesDeclined") === 0, "preview-bounds: detail can be reselected after the service returns");
+
+  // --- history: bounded, navigable full-session window (review finding 5) --------
+  await page.goto(`${base}/plugins/dispatch/sessions/demo-s01?scenario=long-session&frame=0&paused=1`); await page.locator(".transcript > li").first().waitFor();
+  const rows = () => page.locator(".transcript > li").count();
+  const firstRow = () => page.locator(".transcript > li").first().textContent();
+  check(await rows() === 200 && await page.locator(".transcript-window").textContent().then((t) => t?.includes("7–206 of 206")), "history: long transcript mounts one 200-entry window ending at the latest entry");
+  check(await page.locator(".show-earlier").isVisible() && await page.locator(".show-later").isHidden(), "history: Show earlier offered, Show later hidden at the latest window");
+  await page.getByRole("button", { name: "Show earlier", exact: true }).click();
+  check(await firstRow().then((t) => t?.startsWith("Entry 1") && t !== "Entry 10") && await rows() <= 200 && await page.locator(".show-earlier").isHidden() && await page.locator(".show-later").isVisible(), "history: Show earlier reaches Entry 1 and offers Show later");
+  await advance();
+  check(await rows() <= 200 && await firstRow().then((t) => t?.startsWith("Entry 1")), "history: an earlier window stays pinned and bounded while new entries stream");
+  await page.getByRole("button", { name: "Show later", exact: true }).click();
+  check(await rows() === 200 && await page.locator(".transcript > li").last().textContent().then((t) => t?.includes("Entry 206")), "history: Show later returns to the latest window including the streamed entry");
+  await advance();
+  check(await rows() === 200 && await page.locator(".transcript > li").last().textContent().then((t) => t?.includes("Entry 207")), "history: the latest window follows growth without exceeding 200 mounted entries");
+  await page.locator('.transcript [data-tool-call="t-long"] .wk-tool-row').click();
+  const codeLength = () => page.locator('.transcript [data-tool-call="t-long"] .wk-code').last().evaluate((el) => el.textContent?.length ?? 0);
+  check(await codeLength() === 2000 && await page.locator(".wk-show-more").textContent().then((t) => t?.includes("3,000 characters remaining")), "history: long tool output starts at one 2,000-character chunk with Show more");
+  await page.locator(".wk-show-more").click();
+  check(await codeLength() === 4000 && await page.locator(".wk-show-more").textContent().then((t) => t?.includes("1,000 characters remaining")), "history: Show more reveals the next bounded chunk");
+  await advance();
+  check(await codeLength() === 4000, "history: revealed output survives streaming");
+  await page.locator(".wk-show-more").click();
+  check(await codeLength() === 5000 && await page.locator(".wk-show-more").count() === 0 && await page.locator(".wk-output-end").isVisible(), "history: the final chunk reveals the whole result and ends the Show more path");
 
   // --- no-live-network ---------------------------------------------------------
   check(violations.length === 0, `no-live-network: ${requests.length} requests, ${violations.length} violations ${violations.join("; ")}`);

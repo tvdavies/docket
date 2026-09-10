@@ -51,7 +51,11 @@ function createCore(container: ParentNode, context: WidgetContext, variant: "sta
       if (expanded) {
         const session = presentation.references.find((ref) => ref.kind === "session");
         const href = session ? ctx.helpers.hrefFor(session) : null;
-        more.replaceChildren("More in the full session: ", href ? h("a", { class: "wk-reference", href, text: "open transcript" }) : h("span", { text: "link unavailable" }));
+        // Rebuild only when the destination changes so a focused link survives streaming.
+        if (more.dataset.href !== (href ?? "")) {
+          more.dataset.href = href ?? "";
+          more.replaceChildren("More in the full session: ", href ? h("a", { class: "wk-reference", href, text: "open transcript" }) : h("span", { text: "link unavailable" }));
+        }
       }
     },
     destroy() { if (destroyed) return; destroyed = true; cleanupCounter += 1; wrap.remove(); },

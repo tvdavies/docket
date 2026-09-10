@@ -63,6 +63,9 @@
 
 .wk-truncation, .wk-more { color: var(--widget-text-muted); font-size: var(--widget-meta-size); }
 .wk-empty { color: var(--widget-text-muted); font-size: var(--widget-meta-size); font-style: italic; }
+.wk-note { margin: 0; color: var(--widget-text-muted); font-size: var(--widget-meta-size); }
+.wk-show-more { margin-top: var(--widget-space-2); }
+.wk-output-end { display: block; margin-top: var(--widget-space-1); }
 
 .wk-button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 11px; border: var(--widget-border-width) solid var(--widget-border); border-radius: var(--widget-radius-inner); background: var(--widget-surface); color: var(--widget-text); font: inherit; font-size: var(--widget-meta-size); font-weight: 600; cursor: pointer; }
 .wk-button:hover { border-color: var(--widget-border-strong); background: var(--widget-surface-raised); }

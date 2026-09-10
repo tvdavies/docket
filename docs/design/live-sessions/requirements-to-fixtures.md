@@ -4,6 +4,8 @@ Each JOB-0092 acceptance requirement (plan v2, "Requirements-to-fixtures and dow
 
 Identifiers: `task-live-unexpanded`, `preview-bounds`, `reader-intent`, `state-matrix`, `terminal-fallback`, `anatomy`, `context-update`, `body-error`, `history`, `theme-density`, `no-live-network`.
 
+The review of `d48e751` (PR #3, review 5168753116) added rows below for reader-owned display state, accepted-payload storage, view-scoped detail selection, the bounded full-session window and the strict context-update title check. Each of the reviewer's fourteen reproductions now has a committed regression under the matching identifier.
+
 ## Live before expansion — `task-live-unexpanded`
 
 Fixture: `live` (12 frames, 1s ticks; autoplay on task entry, `paused=1` to pin).
@@ -32,8 +34,11 @@ Fixtures: `live` (frame 10+ exceeds the preview window), raw events carrying `SE
 | Private data filtered before publication, not CSS-hidden | unit `no user prompt, reasoning, private paths or raw arguments in the preview payload`, `detail carries only the redacted input/output…`; browser `private markers absent from the task DOM (filtered, not CSS-hidden)`, `private markers absent from expanded detail` |
 | Successful tools start collapsed; disclosure shows redacted args/result | browser `successful tools start collapsed in detail`, `tool disclosure shows redacted arguments/result` |
 | Collapse returns focus to its toggle | browser `collapse returns focus to its toggle` |
+| Detail selection is view-scoped: expanding three cards keeps one; reselection collapses the previous card with a note | browser `expanding three cards keeps one detail selection per task view`, `reselection collapses the previously selected cards`, `revoked cards explain why their detail closed`, `selecting back moves the single selection` (fixture `multi-session`) |
+| Unsupported version releases the body and its selection without a body failure | browser `unsupported version releases the body and its detail selection`, `unsupported data is a release, not a body failure` (fixture `unknown-version`, expanded before the unsupported frame) |
+| Missing service revokes the selection, disables Expand, keeps the summary; return re-enables without auto-reacquire | browser `missing service revokes the detail selection and disables Expand`, `saved summary and availability notice remain while unavailable`, `service return re-enables Expand without re-acquiring detail on its own`, `detail can be reselected after the service returns` (fixture `missing-service`, expanded before the outage) |
 
-Owner: JOB-0050 shared filtered projection; JOB-0093 enforced budgets.
+Owner: JOB-0050 shared filtered projection; JOB-0093 enforced budgets and view-scoped selection.
 
 ## Reader intent — `reader-intent`
 
@@ -45,6 +50,11 @@ Fixture: `live`.
 | Streaming never scrolls the page | `streaming never scrolls the page` | 5 |
 | Focus inside the body survives streaming | `focus inside the body survives streaming updates`, `Enter toggles the disclosure` | 6 |
 | Explicit expansion survives finalisation; unattended completion collapses | `explicit expansion survives finalisation; Collapse offered`, `Collapse to summary shows the durable summary`, `unattended completion collapses to the durable summary` | 8 |
+| Input notice renders independently of the held preview (both bodies) | `reader-intent[standard|custom-element]: input notice appears while preview text is selected`, `selection survives the input transition (entries unchanged, nothing withheld)`, `resolved input notice clears while the window is still held` (fixture `awaiting-input`) | 5 |
+| Open session keeps focus through streaming; footer focus does not hold the window | `Open session keeps focus through a streaming update`, `focus on a footer link does not hold the preview window` | 6 |
+| Selected preview survives finalisation: body stays visible, selection intact, explicit summary control | `selected preview text survives finalisation (no hidden body, no cleared selection)`, `status updates and an explicit control offers the summary`, `deliberate control collapses to the durable summary` | 8 |
+| Explicit expansion freezes the reading window; New activity applies detail | `explicit expansion freezes the reading window; New activity offered`, `New activity applies the withheld detail and stays expanded` | 6 |
+| Selected tool detail and focused links inside the body (light DOM and shadow root) survive streaming | `selected tool detail inside the body survives streaming`, `focused link inside the body survives streaming` | 6 |
 
 Owner: JOB-0093 kit/conformance; JOB-0050 integration.
 
@@ -62,6 +72,8 @@ Fixtures: `pending`, `live`, `awaiting-input`, `tool-failure`, `cancelled`, `sta
 | Completed | `live` end | `completed status label`, `known duration shown, no invented metrics`, `published plan reference rendered as a safe https link` |
 | Disconnected → stale → rehydrated | `stale` | `disconnected keeps last-known execution and content`, `stale after TTL, no inferred failure`, `empty live cache means awaiting rehydration`, `rehydration replaces the projection without a second card` |
 | Duplicate / older / newer revision | `duplicate-older` | `duplicate and older revisions ignored`, `newer revision applied` |
+| Accepted payload is stored apart from incoming frames: remount and preference updates never replay a rejected frame | `duplicate-older` (advance to 5, 5, 3, then switch body/theme) | `the accepted payload stays at revision 5 after duplicate and older frames`, `remount is served from the accepted payload, not the rejected older frame`, `preference update is served from the accepted payload` |
+| Task fields and availability are delivered with an unchanged data revision | `live` frame 4 plus a synthetic same-revision `missing_service` frame with a new task title (in-memory only) | `availability change is delivered even when the data revision is unchanged`, `task field change is delivered with an unchanged data revision`, `duplicate data counted as ignored while metadata is applied`, `content stays at the accepted revision during the metadata-only update` |
 | Unknown version | `unknown-version` | `unknown version shows saved record, never assumes running` (unit: `the adapter never presents an unknown version or enum as running`) |
 | Detail gap and reset | `detail-gap-reset` | `detail gap pauses and requests a snapshot`, `reset snapshot resumes detail` |
 
@@ -96,7 +108,7 @@ Fixtures: `context-update` (task title change → theme change → identity swit
 
 | Requirement | Check |
 | --- | --- |
-| Task fields and preferences update in place, same transaction, no remount | `task fields delivered in the snapshot…`, `preference change applied in the same transaction`, `data/preference updates preserve the instance and DOM identity` |
+| Task fields and preferences update in place, same transaction, no remount | `task title change from the snapshot is visible in the page heading` (strict; the earlier unconditional pass was removed), `document title follows the task, widget label untouched`, `preference change applied in the same transaction`, `data/preference updates preserve the instance and DOM identity` |
 | Identity switch retires the instance, releases the lease, removes DOM | `identity switch retires the instance and releases its lease`, `lease had been acquired before retirement`, `retired instance removed from DOM` |
 | Late result for a retired generation ignored | `late result for the retired generation is ignored` (strip: `lateResultsIgnored`) |
 | Body failure → retire, keep generic fallback, no remount loop | `throwing body is retired and the generic fallback shown`, `body resources released on failure`, `later snapshot does not resurrect the body (no remount loop)`, `footer links remain from the durable record` |
@@ -114,6 +126,8 @@ Fixture: `live`; routes `/workspaces/demo`, `/workspaces/demo/tasks/DEMO-0042`, 
 | Refresh restores context; direct navigation focuses heading once | `refresh on the session URL restores task context and transcript`, `fresh navigation focuses the destination heading once` | 7 |
 | Back restores route, expanded card, focus, scroll | `browser Back returns to the task route`, `Back restores the expanded card`, `Back restores focus to the Open session link`, `Back restores scroll position` | 7 |
 | Canonical anchors; honest not-found | `Back to task anchor works`, `breadcrumb anchor navigates to the board`, `unknown session ID is an honest not-found…` | 11 |
+| Full session mounts one explicit ≤ 200-entry window; earlier entries reachable; pinned window stays bounded during streaming | `long transcript mounts one 200-entry window ending at the latest entry`, `Show earlier offered, Show later hidden at the latest window`, `Show earlier reaches Entry 1 and offers Show later`, `an earlier window stays pinned and bounded while new entries stream`, `Show later returns to the latest window including the streamed entry`, `the latest window follows growth without exceeding 200 mounted entries` (fixture `long-session`; unit `the long-session fixture exceeds the full-session window…`) | 12 |
+| Long tool output is revealed in bounded Show more chunks that survive streaming | `long tool output starts at one 2,000-character chunk with Show more`, `Show more reveals the next bounded chunk`, `revealed output survives streaming`, `the final chunk reveals the whole result and ends the Show more path` | 12 |
 
 Owner: JOB-0050, retaining the plugin-prefix routing work.
 

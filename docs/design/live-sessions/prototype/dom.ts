@@ -75,15 +75,26 @@ export function containsFocus(root: Node): boolean {
   return false;
 }
 
+/**
+ * True when `node` is inside `root`, crossing shadow boundaries: a node inside
+ * a shadow tree counts as inside `root` when its shadow host does. Plain
+ * `Node.contains` stops at the shadow boundary, which is why a text selection
+ * inside a custom-element body was previously invisible to the wrapper.
+ */
+export function containsComposed(root: Node, node: Node | null): boolean {
+  let current: Node | null = node;
+  while (current) {
+    if (root.contains(current)) return true;
+    const rootNode = current.getRootNode();
+    current = rootNode instanceof ShadowRoot ? rootNode.host : null;
+  }
+  return false;
+}
+
 export function containsSelection(root: Node): boolean {
   const selection = document.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
-  const range = selection.getRangeAt(0);
-  const common = range.commonAncestorContainer;
-  if (root.contains(common)) return true;
-  // Selection inside a shadow root reports the host as the container.
-  const host = (root as Element).shadowRoot ? root : null;
-  return Boolean(host && common === host);
+  return containsComposed(root, selection.anchorNode) || containsComposed(root, selection.focusNode);
 }
 
 export function formatDuration(ms: number | undefined): string | null {

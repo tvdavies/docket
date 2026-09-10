@@ -4,9 +4,9 @@
 import { describe, expect, test } from "bun:test";
 import { PROPOSED_BUDGETS } from "../contracts.proposed";
 import { chooseBoardSession, presentSession } from "../prototype/adapter";
-import { SCENARIOS, sessionRef } from "../prototype/fixtures";
+import { LONG_SESSION_ENTRIES, SCENARIOS, sessionRef } from "../prototype/fixtures";
 import { safeHref } from "../prototype/links";
-import { currentActionFor, orderEntries, publishDetail, publishPreview, type RawEvent, type SessionSource } from "../prototype/publisher";
+import { currentActionFor, fullTranscript, orderEntries, publishDetail, publishPreview, type RawEvent, type SessionSource } from "../prototype/publisher";
 
 const live = SCENARIOS.find((scenario) => scenario.id === "live")!.sessions[0];
 const source = live.source;
@@ -156,6 +156,24 @@ describe("fixtures", () => {
     for (const state of ["queued", "starting", "running", "awaiting_input", "completed", "failed", "cancelled"]) expect(executions.has(state)).toBe(true);
     for (const state of ["connecting", "live", "disconnected"]) expect(connections.has(state)).toBe(true);
     for (const state of ["available", "missing_service", "plugin_removed"]) expect(availability.has(state)).toBe(true);
+  });
+  test("the long-session fixture exceeds the full-session window and needs more than two output chunks", () => {
+    const long = SCENARIOS.find((scenario) => scenario.id === "long-session")!.sessions[0];
+    const first = long.frames[0];
+    const entries = fullTranscript(long.source, first.through);
+    expect(entries.length).toBe(LONG_SESSION_ENTRIES + 1); // 205 assistant entries + 1 tool
+    expect(entries.length).toBeGreaterThan(PROPOSED_BUDGETS.fullSessionMountedEntries);
+    const tool = entries.find((entry) => entry.type === "tool")!;
+    expect(tool.output!.length).toBe(5_000);
+    expect(tool.output!.length).toBeGreaterThan(2 * PROPOSED_BUDGETS.fullSessionOutputChunkChars);
+    // Its preview/detail payloads stay bounded even for a long session.
+    const preview = publishPreview({ sessionId: long.sessionId, source: long.source, through: long.frames.at(-1)!.through, execution: "running", revision: 4 });
+    expect(preview.previewEntries.length).toBeLessThanOrEqual(PROPOSED_BUDGETS.previewEntries);
+    expect(JSON.stringify(preview)).not.toContain("line 100:");
+    const detail = publishDetail({ workspace: "demo", taskId: "DEMO-0042", sessionId: long.sessionId, source: long.source, through: long.frames.at(-1)!.through, execution: "running", revision: 4 });
+    expect(detail.entries.length).toBeLessThanOrEqual(PROPOSED_BUDGETS.expandedEntries);
+    const detailTool = detail.entries.find((entry) => entry.type === "tool") as { output?: string } | undefined;
+    expect((detailTool?.output ?? "").length).toBeLessThanOrEqual(PROPOSED_BUDGETS.toolDetailChars);
   });
 });
 

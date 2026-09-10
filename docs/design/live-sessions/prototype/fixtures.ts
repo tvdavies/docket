@@ -148,6 +148,21 @@ const s03Completed: SessionFixture = {
   frames: [{ through: 12, execution: "completed", connection: "live", outcome: "completed", summary: "Documented the route behavior and three edge cases.", durationMs: 138_000, references: [PLAN_REF] }],
 };
 
+// Deterministic long session: 205 short assistant entries, then one tool whose
+// bounded output (5,000 synthetic characters) needs two explicit "Show more"
+// chunks in the full session, then three more entries streamed one per frame.
+// 125 lines × 39 characters + 124 newlines + 1 trailing character = exactly 5,000 characters.
+const LONG_OUTPUT = `${Array.from({ length: 125 }, (_, line) => `line ${String(line + 1).padStart(3, "0")}: synthetic bounded output`.padEnd(39, ".")).join("\n")}.`;
+const longEvents: RawEvent[] = [
+  ...Array.from({ length: 205 }, (_, index): RawEvent => ({ seq: index + 1, type: "content.delta", id: `long-${index + 1}`, text: `Entry ${index + 1}` })),
+  { seq: 206, type: "tool.started", toolCallId: "t-long", label: "Run · bounded output", input: "cmd: synthetic" },
+  { seq: 207, type: "tool.updated", toolCallId: "t-long", status: "completed", summary: "125 lines", output: LONG_OUTPUT, durationMs: 3_000 },
+  { seq: 208, type: "content.delta", id: "long-206", text: "Entry 206" },
+  { seq: 209, type: "content.delta", id: "long-207", text: "Entry 207" },
+  { seq: 210, type: "content.delta", id: "long-208", text: "Entry 208" },
+];
+export const LONG_SESSION_ENTRIES = 205;
+
 export const SCENARIOS: Scenario[] = [
   {
     id: "live",
@@ -318,6 +333,18 @@ export const SCENARIOS: Scenario[] = [
       runningThrough(9, { taskId: "DEMO-0043", note: "Identity switch: retire old instance, ignore its late result" }),
       runningThrough(10, { taskId: "DEMO-0043" }),
     ])],
+  },
+  {
+    id: "long-session",
+    title: "Long session and long output",
+    description: "206 entries then streaming: the full session mounts one explicit 200-entry window (Show earlier / Show later), and a 5,000-character tool result is revealed in bounded Show more chunks.",
+    autoplay: false,
+    sessions: [s01([
+      runningThrough(207, { note: "205 entries + completed tool with long output" }),
+      runningThrough(208, { note: "Entry 206 streamed" }),
+      runningThrough(209, { note: "Entry 207 streamed" }),
+      runningThrough(210, { note: "Entry 208 streamed" }),
+    ], longEvents)],
   },
   {
     id: "anatomy",

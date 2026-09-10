@@ -25,7 +25,18 @@ const shots: Shot[] = [
   { name: "task-live-desktop-dark-custom", path: `${task}?scenario=live&frame=8&paused=1&theme=dark&body=custom-element`, width: 1440, height: 1000 },
   { name: "task-live-phone-dark-custom", path: `${task}?scenario=live&frame=8&paused=1&theme=dark&body=custom-element`, width: 390, height: 1100 },
   { name: "task-expanded-desktop", path: `${task}?scenario=live&frame=10&paused=1`, width: 1440, height: 1100, before: async (page) => { await page.locator(".widget-expand").click(); await page.locator('.wk-tool-row[data-status="completed"]').first().click(); } },
+  { name: "task-held-completed-desktop", path: `${task}?scenario=live&frame=10&paused=1`, width: 1440, height: 1000, before: async (page) => {
+    await page.locator('.widget .wk-step[data-type="assistant"]').first().evaluate((el) => { const range = document.createRange(); range.selectNodeContents(el); const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range); });
+    await page.evaluate(() => window.__demo.advance());
+  } },
   { name: "task-multi-session-desktop", path: `${task}?scenario=multi-session&paused=1`, width: 1440, height: 1200 },
+  { name: "task-multi-session-reselected-desktop", path: `${task}?scenario=multi-session&paused=1`, width: 1440, height: 1300, before: async (page) => { for (const el of await page.locator(".widget-expand").all()) await el.click(); } },
+  { name: "session-long-window-desktop", path: `/plugins/dispatch/sessions/demo-s01?scenario=long-session&frame=0&paused=1`, width: 1440, height: 1100, before: async (page) => {
+    await page.getByRole("button", { name: "Show earlier", exact: true }).click();
+    await page.getByRole("button", { name: "Show later", exact: true }).click();
+    await page.locator('.transcript [data-tool-call="t-long"] .wk-tool-row').click();
+    await page.locator(".transcript-viewport").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  } },
   { name: "task-multi-session-phone", path: `${task}?scenario=multi-session&paused=1`, width: 390, height: 1500 },
   { name: "board-desktop", path: `/workspaces/demo?scenario=multi-session&paused=1`, width: 1440, height: 900 },
   { name: "board-phone", path: `/workspaces/demo?scenario=multi-session&paused=1`, width: 390, height: 900 },

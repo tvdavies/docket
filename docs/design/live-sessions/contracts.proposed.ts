@@ -79,16 +79,25 @@ export interface WidgetHelpers {
    */
   hrefFor(reference: WidgetReference): string | null;
   /**
-   * Optional, activity location only: acquire a bounded, read-only lease on
-   * plugin-defined detail for THIS instance and receive detail snapshots
-   * through `listener`. Returns a release function. Board instances never
-   * receive this helper. The host releases the lease when another session is
-   * selected, detail collapses or the instance retires; a listener is never
-   * called after release or abort, and the host drops results that belong to
-   * a retired instance generation.
+   * Optional, activity location only: select THIS instance as the task
+   * view's detail selection and receive bounded, read-only detail snapshots
+   * through `listener`. Returns a release function, or `null` when detail
+   * cannot be provided right now (no live data, missing service). Board
+   * instances never receive this helper.
+   *
+   * Ownership is view-scoped, not instance-scoped: a task view holds at most
+   * `PROPOSED_BUDGETS.detailLeasesPerTaskView` selections. Selecting another
+   * session revokes the previous one (`onRevoked("reselected")`). The host
+   * also revokes when availability leaves `available`, when live data is
+   * absent, or when the instance retires. A listener is never called after
+   * release, revocation or abort, and results that belong to a retired
+   * instance generation are dropped.
    */
-  requestDetail?(listener: (detail: DetailSnapshot) => void): () => void;
+  requestDetail?(listener: (detail: DetailSnapshot) => void, onRevoked?: (reason: DetailRevocation) => void): (() => void) | null;
 }
+
+/** Why the host withdrew a detail selection the widget did not release itself. */
+export type DetailRevocation = "reselected" | "unavailable" | "retired";
 
 export interface WidgetContext {
   identity: WidgetIdentity;
@@ -322,7 +331,12 @@ export interface SessionPreviewV1 {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Dispatch → selected session detail (one lease per task view)
+// 6. Dispatch → selected session detail (one selection per task view)
+//
+// The host stores the last ACCEPTED preview payload per identity separately
+// from whatever arrives next. Duplicate/older revisions never replace it, and
+// a remount, preference change or metadata-only update is served from the
+// accepted payload, never by re-reading the rejected input.
 // ---------------------------------------------------------------------------
 
 export interface DetailToolEntry extends PreviewToolEntry {
@@ -370,7 +384,10 @@ export const PROPOSED_BUDGETS = {
   previewPayloadBytes: 16 * 1024,
   currentActionChars: 120,
   boardActionLines: 2,
+  /** Full session mounts one explicit window of this many entries; earlier/later windows are reader-driven. */
   fullSessionMountedEntries: 200,
+  /** Full-session tool output is revealed in chunks of this size behind an explicit Show more. */
+  fullSessionOutputChunkChars: 2_000,
   detailLeasesPerTaskView: 1,
   detailLeasesPerBoardCard: 0,
   summaryRenewMs: 1_000,

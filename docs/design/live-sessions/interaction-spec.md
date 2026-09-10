@@ -64,7 +64,9 @@ Preview: latest **4** ordered entries, ≤ **600** assistant characters, one lin
 
 ### Full session
 
-Breadcrumb (workspace / originating task), task title, persona/stage, full session ID, execution + freshness, then one ordered transcript. User messages may appear here only. Successful tools collapse; failed tool detail expands by default. Long output uses explicit bounded "Show more" chunks. There is never a second transcript.
+Breadcrumb (workspace / originating task), task title, persona/stage, full session ID, execution + freshness, then one ordered transcript. User messages may appear here only. Successful tools collapse; failed tool detail expands by default. There is never a second transcript.
+
+The transcript mounts one explicit window of at most **200** entries (`fullSessionMountedEntries`). The default window is "latest" and follows growth; "Show earlier" pins an absolute window that starts 200 entries back (reaching entry 1), and "Show later" / "Jump to latest" return forward. A pinned window never moves while new entries stream, and the mounted count never exceeds the bound. Tool output is revealed in explicit **2,000**-character chunks (`fullSessionOutputChunkChars`) behind a "Show more · N characters remaining" button until "End of result"; revealed chunks survive streaming.
 
 ## 3. Navigation and keyboard
 
@@ -80,7 +82,12 @@ Desktop: document column ≤ 760px with a secondary properties column at wide wi
 
 The unexpanded preview updates about once per second: text grows, a tool starts/updates/completes at its original position, later text follows. Expand and Open session are not prerequisites. Preview updates come from the shared bounded workspace snapshot (no per-widget board stream); detail is requested only on expansion. The host routes and deduplicates by identity; widgets never parse the page URL.
 
-Preview updates never scroll the page. While the reader has selected text or expanded the card, the visible window freezes and a "New activity · show" control advances it deliberately. Full-session follow-tail holds only while the reader is at the end and not selecting/focusing transcript content; scrolling up releases it and "Jump to latest" resumes it (instant with reduced motion). Entry IDs and tool-row DOM identity survive updates, including a running tool that fails.
+Preview updates never scroll the page. The wrapper keeps two things apart:
+
+- **Accepted snapshot.** The header (status, freshness), notices (input/error attention, availability, rehydration) and footer (references, Open session, known start/duration) always render from the latest accepted snapshot. An input request therefore surfaces even while the reader is holding the body, and a resolved request clears.
+- **Reader-owned reading window.** The body shows `shown` content. While the reader has selected text or has focus inside the body (in light DOM or inside the custom element's shadow root), or has explicitly expanded the card, changed body content is withheld as `pending` and a "New activity · show" control applies it deliberately. A terminal transition obeys the same rule: a held preview is never hidden under the summary and a selection is never cleared; the control reads "Session finished · show summary". Focus on a footer link does not hold the window, but the link node itself is stable (keyed reconciliation), so focus survives streaming.
+
+Full-session follow-tail holds only while the reader is at the end, in the latest window and not selecting/focusing transcript content; scrolling up releases it and "Jump to latest" resumes it (instant with reduced motion). Entry IDs, tool-row DOM identity and tool detail nodes survive updates, including a running tool that fails, so selected tool output and focused links inside the body survive streaming.
 
 ## 5. State mapping and finalisation
 
@@ -110,13 +117,14 @@ See `contracts.proposed.ts`. Context (identity, location, service base, preferen
 
 | Input change | Outcome |
 | --- | --- |
-| Task fields, newer data, freshness/availability, final fallback | update in place; preserve wrapper/body identity, focus, selection, disclosure; validate version, unknown → generic fallback |
+| Task fields, newer data, freshness/availability, final fallback | update in place; preserve wrapper/body identity, focus, selection, disclosure; validate version, unknown → generic fallback. Task fields, freshness and availability are delivered even when the data revision is unchanged or rejected |
+| Duplicate or older data revision | the host keeps the last *accepted* payload per identity and serves remounts, preference updates and metadata-only updates from it; rejected frames are never re-read |
 | Theme, density, reduced motion | same transaction; tokens update without remount |
 | Identity, location or service base | abort, release lease/listeners/timers, destroy body, mount a new instance only if enabled |
 | Disable/removal, body failure, incompatible version | retire the body; keep the wrapper's fallback; no remount loop; no stale response may resurrect it |
 | Async result after scope change | ignore via abort + host generation + revision checks; cleanup idempotent |
 
-`requestDetail()` is a bounded, read-only, instance-scoped lease released on collapse, selection change or retirement. Preview messages are full replacement snapshots (skipped revisions safe; duplicates/older ignored). Detail gaps pause application and request an owner snapshot; a reset replaces the projection without a second card or regressing a final record.
+`requestDetail()` is a bounded, read-only detail **selection owned by the task view**, not by the instance: a view holds at most one (`detailLeasesPerTaskView`), and none on the board. Expanding another session revokes the previous selection (`reselected`), which collapses that card with a short note; the host also revokes when availability leaves `available` or live data is absent (`unavailable`, Expand is disabled until the service returns) and on retirement. The helper returns `null` when detail cannot be provided, and the card stays collapsed with the same note. Preview messages are full replacement snapshots (skipped revisions safe; duplicates/older ignored). Detail gaps pause application and request an owner snapshot; a reset replaces the projection without a second card or regressing a final record. Unsupported data releases the body and its selection without marking failure; supported data can recreate them.
 
 ## 7. Data minimisation
 
