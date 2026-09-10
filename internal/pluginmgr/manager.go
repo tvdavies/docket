@@ -4,11 +4,13 @@ package pluginmgr
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -336,10 +338,16 @@ func updateOneLocked(managed string, current registry.PluginEntry, engineVersion
 }
 
 // Enable composes a plugin into one workspace and prepares its cursors before
-// atomically publishing the config change.
+// atomically publishing the config change. Adoption runs the shared ownership
+// handoff (see Handoff) so legacy and namespaced identities are both quiescent
+// and an already active destination is never overwritten.
 func Enable(workspacePath, name string, values map[string]any, adopt, fromStart bool, engineVersion string) error {
 	if adopt && fromStart {
 		return errors.New("--adopt-cursors and --from-start are mutually exclusive")
+	}
+	if adopt {
+		_, err := Handoff(HandoffRequest{WorkspacePath: workspacePath, Plugin: name, Direction: Forward, Values: values, EngineVersion: engineVersion})
+		return err
 	}
 	config, err := registry.Load()
 	if err != nil {
@@ -363,58 +371,71 @@ func Enable(workspacePath, name string, values map[string]any, adopt, fromStart 
 	if err != nil {
 		return err
 	}
-	mutate := func() error {
-		return workspace.MutateDeclaredConfig(ws.Root, func(declared *workspace.Config) error {
-			use := declared.Plugins.Values[name]
-			if use.Config == nil {
-				use.Config = map[string]any{}
-			}
-			for key, value := range values {
-				use.Config[key] = value
-			}
-			// The reference dispatch plugin's required server_root naturally defaults
-			// to its linked checkout, while generic plugins still require explicit keys.
-			if field, ok := manifest.Config.Workspace["server_root"]; ok && field.Required {
-				if _, exists := use.Config["server_root"]; !exists {
-					use.Config["server_root"] = manifest.Root
-				}
-			}
-			if err := workspace.EnablePlugin(declared, manifest, use, adopt); err != nil {
-				return err
-			}
-			if err := workspace.ValidatePluginCandidate(declared, manifest, entry.Config); err != nil {
-				return err
-			}
-			for handlerName := range manifest.Handlers {
-				identity := name + "/" + handlerName
-				switch {
-				case adopt:
-					if err := handlers.AdoptCursor(ws, handlerName, identity); err != nil {
-						return err
-					}
-				case fromStart:
-					if err := handlers.ResetCursor(ws, identity); err != nil {
-						return err
-					}
-				default:
-					if err := handlers.SeedCursorAtEnd(ws, identity); err != nil {
-						return err
-					}
-				}
-			}
-			return nil
-		})
-	}
-	if !adopt {
-		return mutate()
-	}
-	legacyNames := make([]string, 0, len(manifest.Handlers))
+	// Handler locks are taken before the declared-config lock, matching the
+	// handoff and drain order, so seeding cannot race a queued delivery or a
+	// concurrent handoff that has prepared these identities.
+	identities := make([]string, 0, len(manifest.Handlers))
 	for handlerName := range manifest.Handlers {
-		legacyNames = append(legacyNames, handlerName)
+		identities = append(identities, name+"/"+handlerName)
 	}
-	return handlers.WithHandlerLocks(nil, ws, legacyNames, mutate)
+	return handlers.WithHandlerLocks(nil, ws, identities, func() error {
+		return workspace.WithDeclaredConfigTransaction(nil, ws.Root, func(tx *workspace.ConfigTransaction) error {
+			return registry.WithReadLock(context.Background(), func(_ *registry.Config) error {
+				freshEntry, freshManifest, err := installedManifest(name, engineVersion)
+				if err != nil {
+					return err
+				}
+				if freshEntry.Path != entry.Path || !reflect.DeepEqual(identityMap(freshManifest), identityMap(manifest)) {
+					return errRegistryChanged
+				}
+				entry, manifest = &freshEntry, freshManifest
+				declared := tx.Config
+				use := declared.Plugins.Values[name]
+				if use.Config == nil {
+					use.Config = map[string]any{}
+				}
+				for key, value := range values {
+					use.Config[key] = value
+				}
+				// The reference dispatch plugin's required server_root naturally defaults
+				// to its linked checkout, while generic plugins still require explicit keys.
+				if field, ok := manifest.Config.Workspace["server_root"]; ok && field.Required {
+					if _, exists := use.Config["server_root"]; !exists {
+						use.Config["server_root"] = manifest.Root
+					}
+				}
+				if err := workspace.EnablePlugin(declared, manifest, use, false); err != nil {
+					return err
+				}
+				if err := workspace.ValidatePluginCandidate(declared, manifest, entry.Config); err != nil {
+					return err
+				}
+				for _, identity := range identities {
+					if fromStart {
+						if err := handlers.ResetCursor(ws, identity); err != nil {
+							return err
+						}
+						continue
+					}
+					if err := handlers.SeedCursorAtEndLocked(ws, identity); err != nil {
+						return err
+					}
+				}
+				data, err := workspace.SerializeDeclaredConfig(declared)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Publish(data)
+				return err
+			})
+		})
+	})
 }
 
+// Disable removes a plugin declaration. It is an opt-out, not a recovery
+// operation: plugin cursors are retained but nothing transfers their progress
+// to legacy handlers. Use Handoff with Direction Reverse for recovery without
+// replay.
 func Disable(workspacePath, name string) error {
 	root, err := workspace.FindRootAt(workspacePath)
 	if err != nil {

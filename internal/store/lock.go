@@ -49,3 +49,21 @@ func TryWithLock(lockPath string, fn func() error) (acquired bool, err error) {
 	defer fl.Unlock()
 	return true, fn()
 }
+
+// WithReadLockContext holds a shared flock on lockPath while fn runs. Readers
+// that need a consistent view of a file mutated under WithLock (such as the
+// machine registry during an ownership handoff) use this so they neither block
+// each other nor observe a half-applied exclusive mutation.
+func WithReadLockContext(parent context.Context, lockPath string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return err
+	}
+	fl := flock.New(lockPath)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	if _, err := fl.TryRLockContext(ctx, 25*time.Millisecond); err != nil {
+		return err
+	}
+	defer fl.Unlock()
+	return fn()
+}

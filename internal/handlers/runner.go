@@ -14,7 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -320,7 +322,17 @@ func Cursor(ws *workspace.Workspace, name string) int {
 
 // SeedCursorAtEnd creates a missing handler cursor at the current log end.
 // Existing cursors are preserved so enablement and hot reload never replay.
+// The existence check and write happen under the handler's own lock so a
+// concurrent ownership handoff that has just prepared this identity's
+// checkpoint cannot be overwritten by a delayed seed.
 func SeedCursorAtEnd(ws *workspace.Workspace, name string) error {
+	return store.WithLock(LockPath(ws, name), func() error { return SeedCursorAtEndLocked(ws, name) })
+}
+
+// SeedCursorAtEndLocked is SeedCursorAtEnd for callers that already hold the
+// handler lock, such as plugin enablement that acquires handler locks before
+// the declared-config lock.
+func SeedCursorAtEndLocked(ws *workspace.Workspace, name string) error {
 	path := handlerCursorFile(ws, name)
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -340,50 +352,207 @@ func SeedCursorAtEnd(ws *workspace.Workspace, name string) error {
 
 // ResetCursor writes an explicit zero checkpoint so the next drain replays
 // from the beginning while service hot-reload seeding can distinguish this
-// opt-in from an accidentally missing new-handler cursor.
+// opt-in from an accidentally missing new-handler cursor. Callers that may
+// race a delivery must hold the handler lock.
 func ResetCursor(ws *workspace.Workspace, name string) error {
 	return writeCursor(handlerCursorFile(ws, name), 0, "")
 }
 
+// LockPath returns the per-identity delivery lock. Holding it quiesces that
+// handler: no drain executes or advances the identity while it is held.
+func LockPath(ws *workspace.Workspace, name string) string {
+	return filepath.Join(ws.HandlerStateDir(), name+".lock")
+}
+
 // WithHandlerLocks quiesces the named handlers in stable order while fn runs.
-// Cursor adoption uses it to capture final legacy checkpoints and publish the
-// replacement config without a legacy delivery crossing that boundary.
+// Ownership handoffs use it to capture final source checkpoints and publish
+// the replacement config without a delivery crossing that boundary. Names are
+// deduplicated so an identity appearing on both sides is locked once.
 func WithHandlerLocks(ctx context.Context, ws *workspace.Workspace, names []string, fn func() error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	names = append([]string(nil), names...)
-	sort.Strings(names)
+	unique := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, name := range names {
+		if !seen[name] {
+			seen[name] = true
+			unique = append(unique, name)
+		}
+	}
+	sort.Strings(unique)
 	var acquire func(int) error
 	acquire = func(index int) error {
-		if index == len(names) {
+		if index == len(unique) {
 			return fn()
 		}
-		lockPath := filepath.Join(ws.HandlerStateDir(), names[index]+".lock")
-		return store.WithLockContext(ctx, lockPath, func() error { return acquire(index + 1) })
+		return store.WithLockContext(ctx, LockPath(ws, unique[index]), func() error { return acquire(index + 1) })
 	}
 	return acquire(0)
 }
 
-// AdoptCursor copies a legacy handler checkpoint to a namespaced identity. The
-// source is deliberately retained for atomic rollback to legacy wiring.
-func AdoptCursor(ws *workspace.Workspace, legacy, identity string) error {
-	source := handlerCursorFile(ws, legacy)
-	data, err := os.ReadFile(source)
-	if err != nil {
-		return fmt.Errorf("read legacy handler %q cursor: %w", legacy, err)
+// Checkpoint is a strictly validated delivery position: the handler has
+// acknowledged exactly the first Position non-empty log lines whose SHA-256
+// prefix hash is PrefixHash. Unlike Cursor, nothing here degrades to zero; an
+// invalid file is an error. Raw preserves the exact bytes read for receipts.
+type Checkpoint struct {
+	Position   int    `json:"position"`
+	PrefixHash string `json:"prefix_hash"`
+	Raw        []byte `json:"-"`
+}
+
+// ErrCheckpointMissing reports that an identity has no cursor file at all.
+var ErrCheckpointMissing = errors.New("checkpoint file is missing")
+
+var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// ParseCheckpoint strictly decodes checkpoint bytes without consulting the
+// event log. Plain integers (v0.2 cursors), non-integer or negative positions,
+// missing fields and malformed hashes are rejected rather than treated as zero.
+func ParseCheckpoint(data []byte) (Checkpoint, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return Checkpoint{}, errors.New("not a checkpointed JSON object")
 	}
-	var state cursorState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("legacy handler %q cursor is not checkpointed JSON", legacy)
-	}
-	if state.Position > 0 {
-		hash, found, err := events.PrefixHash(ws, state.Position)
-		if err != nil || found < state.Position || hash != state.PrefixHash {
-			return fmt.Errorf("legacy handler %q cursor does not match the current event log", legacy)
+	raw := map[string]any{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return Checkpoint{}, err
 		}
+		key, ok := token.(string)
+		if !ok || (key != "position" && key != "prefix_hash") {
+			return Checkpoint{}, errors.New("unknown checkpoint field")
+		}
+		if _, exists := raw[key]; exists {
+			return Checkpoint{}, errors.New("duplicate checkpoint field")
+		}
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return Checkpoint{}, err
+		}
+		raw[key] = value
 	}
-	return store.WriteAtomic(handlerCursorFile(ws, identity), data, 0o644)
+	if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
+		return Checkpoint{}, errors.New("unterminated checkpoint object")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return Checkpoint{}, errors.New("trailing content after checkpoint object")
+	}
+	number, ok := raw["position"].(json.Number)
+	if !ok {
+		return Checkpoint{}, errors.New("position must be an integer")
+	}
+	position, err := strconv.Atoi(number.String())
+	if err != nil {
+		return Checkpoint{}, errors.New("position must be an integer")
+	}
+	if position < 0 {
+		return Checkpoint{}, errors.New("position must not be negative")
+	}
+	hash, ok := raw["prefix_hash"].(string)
+	if !ok {
+		return Checkpoint{}, errors.New("prefix_hash must be a string")
+	}
+	if position == 0 && hash != "" {
+		return Checkpoint{}, errors.New("zero position must carry an empty prefix_hash")
+	}
+	if position > 0 && !sha256HexPattern.MatchString(hash) {
+		return Checkpoint{}, errors.New("prefix_hash must be a lowercase hex SHA-256")
+	}
+	return Checkpoint{Position: position, PrefixHash: hash, Raw: append([]byte(nil), data...)}, nil
+}
+
+// ValidateCheckpoint proves a parsed checkpoint against the current event log:
+// the log must contain at least Position non-empty lines and their prefix hash
+// must match. Append-only growth beyond Position is allowed.
+func ValidateCheckpoint(ws *workspace.Workspace, checkpoint Checkpoint) error {
+	if checkpoint.Position < 0 || (checkpoint.Position == 0 && checkpoint.PrefixHash != "") || (checkpoint.Position > 0 && !sha256HexPattern.MatchString(checkpoint.PrefixHash)) {
+		return errors.New("invalid checkpoint position or prefix_hash")
+	}
+	if checkpoint.Position == 0 {
+		return nil
+	}
+	hash, found, err := events.PrefixHash(ws, checkpoint.Position)
+	if err != nil {
+		return err
+	}
+	if found < checkpoint.Position {
+		return fmt.Errorf("event log has %d lines, checkpoint position is %d", found, checkpoint.Position)
+	}
+	if hash != checkpoint.PrefixHash {
+		return errors.New("prefix hash does not match the current event log")
+	}
+	return nil
+}
+
+// ReadCheckpoint reads and validates one identity's checkpoint strictly. It
+// wraps ErrCheckpointMissing when no cursor file exists. Callers that need a
+// quiescent value must hold the identity's lock.
+func ReadCheckpoint(ws *workspace.Workspace, name string) (Checkpoint, error) {
+	data, err := os.ReadFile(handlerCursorFile(ws, name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Checkpoint{}, fmt.Errorf("handler %q: %w", name, ErrCheckpointMissing)
+		}
+		return Checkpoint{}, fmt.Errorf("read handler %q checkpoint: %w", name, err)
+	}
+	checkpoint, err := ParseCheckpoint(data)
+	if err != nil {
+		return Checkpoint{}, fmt.Errorf("handler %q checkpoint: %w", name, err)
+	}
+	if err := ValidateCheckpoint(ws, checkpoint); err != nil {
+		return Checkpoint{}, fmt.Errorf("handler %q checkpoint: %w", name, err)
+	}
+	return checkpoint, nil
+}
+
+// WriteCheckpointLocked publishes a validated checkpoint for an identity. The
+// caller must hold the identity's lock and must already have established that
+// the identity is inactive or that the value is not behind its progress.
+func WriteCheckpointLocked(ws *workspace.Workspace, name string, checkpoint Checkpoint) error {
+	if err := ValidateCheckpoint(ws, checkpoint); err != nil {
+		return fmt.Errorf("handler %q: refusing to write an invalid checkpoint: %w", name, err)
+	}
+	data, err := json.Marshal(cursorState{Position: checkpoint.Position, PrefixHash: checkpoint.PrefixHash})
+	if err != nil {
+		return err
+	}
+	path := handlerCursorFile(ws, name)
+	report, err := store.WriteAtomicReport(path, data, 0o644)
+	if err != nil {
+		return err
+	}
+	if !report.DirSynced {
+		return fmt.Errorf("checkpoint renamed but directory sync failed: %s", report.DirSyncErr)
+	}
+	return nil
+}
+
+// TransferCheckpointLocked copies the source identity's validated checkpoint to
+// the destination. The caller must hold both locks and have verified that the
+// destination is inactive and not ahead. The source is never modified.
+func TransferCheckpointLocked(ws *workspace.Workspace, source, destination string) (Checkpoint, error) {
+	checkpoint, err := ReadCheckpoint(ws, source)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if err := WriteCheckpointLocked(ws, destination, checkpoint); err != nil {
+		return Checkpoint{}, err
+	}
+	return checkpoint, nil
+}
+
+// AdoptCursor copies a legacy handler checkpoint to a namespaced identity
+// after strict validation. The source is retained as evidence, not as a
+// rollback mechanism: once the destination advances, restoring legacy wiring
+// against the retained source replays its suffix. Use the plugin handoff
+// transition for recovery in either direction.
+func AdoptCursor(ws *workspace.Workspace, legacy, identity string) error {
+	_, err := TransferCheckpointLocked(ws, legacy, identity)
+	return err
 }
 
 func advanceCursor(ws *workspace.Workspace, name string, position int, expectedHash string) error {
