@@ -68,3 +68,49 @@ Writes use these endpoints with an `application/json` body shaped as
 The server merges supplied keys into the existing scope, validates the complete
 candidate, and atomically writes the owning registry or workspace config. A
 validation failure leaves the prior config active.
+
+### Open the generated forms
+
+The React board's **Plugin settings** header link opens `/settings/plugins`.
+**Board settings** opens `/workspaces/{workspace}/settings/plugins`; the lane
+selector includes every composed status, including hidden and empty lanes.
+Each configured lane's header also links directly to
+`/workspaces/{workspace}/settings/plugins/statuses/{status}`. Unknown task-status
+fallback columns are not configurable lanes. Instance settings do not require a
+working board stream or any registered workspace.
+
+Forms render supported manifest schemas regardless of plugin version. Strings,
+numbers, booleans and typed enums use labelled controls; lists and maps use JSON
+editors and replace the entire field value. Required means present, so an empty
+string is valid. False, zero, `[]` and `{}` are values, not deletion. An absent
+local field has a **Set value** action. **Discard changes** only removes unsaved
+edits; there is no reset/delete endpoint or implied multi-scope transaction.
+
+Instance reads contain default-resolved values. The UI labels them "stored or
+default" because the API provides no raw-instance provenance. Workspace and lane
+reads contain stored keys only. Each scope applies its own defaults and required
+checks; resolved workspace keys (including workspace defaults) override same-key
+instance values. An instance value does not satisfy a required workspace field.
+Lane defaults apply independently and do not cascade from instance/board config.
+
+Saving sends only edited non-secret keys after refetching the catalogue and
+rechecking the owning board/lane. Observable schema, version or baseline changes
+require review without overwriting drafts. The API has no CAS token, so a
+same-field concurrent write can still race that check. A confirmed save refetches
+canonical values; if that read fails, retry is read-only. Lost/malformed save
+responses report an uncertain outcome and require read-back before retrying.
+
+Secret fields are environment instructions, not inputs. Their values/defaults
+are never displayed or written by these forms. The editable **Acting as** value
+is attribution, not access control; these endpoints do not create task audit
+events. Existing same-origin safeguards remain unchanged. Saving configuration
+does not verify optional plugin-service health, and lane forms never edit a
+Dispatch pipeline file.
+
+A missing/invalid plugin, malformed catalogue or unavailable board is not an
+empty list. Cached drafts remain read-only until the operator repairs the
+configuration and reloads it. Unsupported schema shapes block the affected form.
+
+For an isolated real-API preview, tests and fixture screenshots, see
+[UI checks](../web/tests/README.md#plugin-settings-real-api-checks) and the
+[requirements coverage map](plugin-settings-validation.md).

@@ -1,0 +1,108 @@
+# Harmless fixture plugin for the generated settings screens (JOB-0094).
+#
+# It declares every supported config field kind at every scope, with required,
+# default, enum and secret cases, same-key instance/workspace precedence and
+# independent lane defaults. It has no handlers, CLI or UI modules. The service
+# URL points at the TCP discard port so nothing listens: saving configuration
+# must not depend on plugin service health.
+name: settings-fixture
+version: 1.2.0
+description: Exercises every Docket plugin config field kind at every scope.
+service:
+  url: http://127.0.0.1:9
+config:
+  instance:
+    api_base:
+      type: string
+      required: true
+      default: https://example.invalid
+      description: Base URL used by every board that enables this plugin.
+    api_token:
+      type: string
+      secret: true
+      description: Supplied through SETTINGS_FIXTURE_TOKEN in the plugin service environment. Docket never stores or displays it.
+    max_parallel:
+      type: number
+      default: 2
+      description: Instance-wide concurrency ceiling. A board default with the same key overrides it.
+    telemetry:
+      type: boolean
+      description: Not set by default; false is a real stored value.
+    log_level:
+      type: string
+      enum: [debug, info, warn]
+      default: info
+      description: Enum on a string field.
+    retry_backoff:
+      type: number
+      enum: [1, 2, 5]
+      description: Enum on a number field with typed option values.
+    allowed_hosts:
+      type: list
+      default: ["127.0.0.1"]
+      description: JSON array; nested values are preserved exactly.
+    headers:
+      type: map
+      description: JSON object of extra request headers.
+    greeting:
+      type: string
+      description: Optional text with no default, so it starts unset.
+  workspace:
+    board_label:
+      type: string
+      required: true
+      description: Required with no default, so every enabling board must store it.
+    max_parallel:
+      type: number
+      default: 4
+      description: Same key as the instance field. The board default overrides the instance value.
+    telemetry:
+      type: boolean
+      description: Same key as the instance field with no board default, so the instance value applies until the board stores one.
+    auto_assign:
+      type: boolean
+      default: false
+      description: Boolean with a false default.
+    review_mode:
+      type: string
+      enum: [light, strict]
+      description: Enum with no default.
+    priority:
+      type: number
+      enum: [1, 2, 3]
+      default: 2
+      description: Number enum with a default.
+    reviewers:
+      type: list
+      description: JSON array without a default.
+    routing:
+      type: map
+      default: {default: triage}
+      description: JSON object with a default.
+  status:
+    agent:
+      type: string
+      default: worker
+      description: Lane default applied independently to every composed lane.
+    wip_limit:
+      type: number
+      description: Optional number without a default.
+    autostart:
+      type: boolean
+      default: true
+      description: Boolean lane default.
+    mode:
+      type: string
+      enum: [manual, auto]
+      description: Enum without a default.
+    channels:
+      type: list
+      enum: [["email"], ["email", "slack"]]
+      default: ["email"]
+      description: Enum whose options are compound JSON values.
+    watchers:
+      type: list
+      description: JSON array without a default.
+    env:
+      type: map
+      description: JSON object without a default.
