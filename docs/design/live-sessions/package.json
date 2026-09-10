@@ -1,0 +1,18 @@
+{
+  "name": "job-0092-live-sessions-design",
+  "private": true,
+  "description": "Design documentation and fixture-only prototype for JOB-0092. Not a package; no runtime dependencies.",
+  "type": "module",
+  "scripts": {
+    "serve": "bun prototype/serve.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test tests/publisher.test.ts tests/contrast.test.ts",
+    "check:browser": "bun tests/browser.test.ts",
+    "screenshots": "bun tests/screenshots.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.6",
+    "playwright": "1.63.0",
+    "typescript": "5.9.3"
+  }
+}
