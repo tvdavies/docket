@@ -1,0 +1,66 @@
+.app-shell.settings-shell { grid-template-rows: auto minmax(0, 1fr) auto; }
+.settings-shell .topbar { min-height: 52px; flex-wrap: wrap; padding-block: 8px; }
+.settings-shell .statusbar { display: flex; min-height: 32px; flex-wrap: wrap; }
+.topbar .plugin-settings-link, .toolbar .plugin-settings-link { display: inline; }
+.settings-page { position: relative; min-height: 0; overflow: auto; padding: 32px max(20px, calc((100% - 1060px) / 2)); scroll-padding-top: 20px; }
+.settings-page :is(h1, h2, p, dd, code, label) { overflow-wrap: anywhere; }
+.settings-page-head, .settings-plugin-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+.settings-page-head h1 { font-size: 26px; font-weight: 650; letter-spacing: -.035em; margin: 2px 0 10px; outline: none; }
+.settings-page-head p, .settings-plugin-description, .settings-footnote { color: var(--muted); line-height: 1.6; }
+.settings-eyebrow { text-transform: uppercase; letter-spacing: .09em; font-size: 11px; }
+.settings-page-head > button { flex-shrink: 0; }
+.settings-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 20px 0; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.settings-nav a { color: var(--muted); text-decoration: none; }
+.settings-nav a[aria-current] { color: var(--accent-strong); font-weight: 650; }
+.settings-nav label { display: flex; align-items: center; gap: 10px; }
+.settings-plugin { margin: 24px 0; padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.settings-plugin h2 { font-size: 19px; font-weight: 650; margin: 0 0 8px; }
+.settings-plugin h2 small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.settings-plugin-head > div { flex: 1; min-width: 0; }
+.settings-plugin-description { margin: 0; }
+.settings-storage { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 12px; max-width: 46%; font-size: 12px; line-height: 1.5; margin: 0; }
+.settings-storage dt { color: var(--muted); }
+.settings-storage dd { margin: 0; }
+.settings-scope-note { background: var(--accent-soft); color: var(--text); padding: 12px 14px; border-radius: 7px; line-height: 1.6; margin: 20px 0; font-size: 13px; }
+.settings-fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
+.settings-field { padding: 20px 0; border-top: 1px solid var(--line); }
+.settings-field-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.settings-field-label { font-weight: 650; margin-right: 8px; }
+.settings-field-key, .settings-field-type { font-size: 11px; color: var(--muted); }
+.settings-field-type em { font-style: normal; color: var(--accent-strong); }
+.settings-required, .settings-secret-badge { display: inline-block; font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; margin-left: 8px; }
+.settings-field-description { font-size: 13px; line-height: 1.5; margin: 8px 0; }
+.settings-provenance, .settings-secret-note, .settings-json-hint { font-size: 12px; line-height: 1.6; color: var(--muted); margin: 8px 0 12px; }
+.settings-default { display: block; }
+.settings-control { max-width: 100%; }
+.settings-control :is(input, textarea, select) { width: 100%; max-width: 100%; }
+.settings-json { font-family: ui-monospace, monospace; resize: vertical; min-height: 90px; }
+.settings-boolean { position: relative; display: inline-flex; gap: 10px; align-items: center; }
+.settings-field-actions, .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.settings-field-actions { margin-top: 8px; }
+.settings-actions { border-top: 1px solid var(--line); padding-top: 20px; }
+.settings-banner, .settings-error-summary { padding: 14px; border: 1px solid var(--line); border-radius: 7px; line-height: 1.6; margin: 14px 0; overflow-wrap: anywhere; }
+.settings-stale { display: flex; flex-wrap: wrap; gap: 12px; background: var(--accent-soft); }
+.settings-error-summary, .settings-field-error { color: var(--danger); }
+.settings-error-summary ul { padding-left: 20px; }
+.settings-field.invalid :is(input, textarea, select) { border-color: var(--danger); }
+.settings-status { min-height: 1.6em; margin: 12px 0 0; line-height: 1.6; }
+.settings-status-saved { color: var(--success); }
+.settings-status-failed, .settings-status-uncertain, .settings-status-saved-reload-failed { color: var(--danger); }
+.settings-dirty { color: var(--muted); font-size: 12px; }
+.settings-footnote { font-size: 12px; margin-bottom: 24px; }
+@media (max-width: 680px) {
+  .settings-page { padding: 20px 12px; }
+  .settings-page-head, .settings-plugin-head { flex-direction: column; gap: 14px; }
+  .settings-page-head h1 { font-size: 23px; }
+  .settings-plugin { padding: 16px; }
+  .settings-storage { max-width: 100%; }
+  .settings-nav { align-items: flex-start; flex-direction: column; }
+  .settings-shell .topbar { gap: 10px; padding: 10px 12px; }
+  .settings-shell .topbar .quiet-link { display: inline; }
+  .settings-shell .connection { display: none; }
+  .settings-shell .command-button { min-width: 0; }
+  .settings-shell .topbar-spacer { display: none; }
+  .settings-shell .workspace-select { max-width: 150px; }
+  .settings-shell .statusbar { padding: 6px 12px; gap: 8px; }
+}

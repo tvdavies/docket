@@ -1,6 +1,9 @@
 package workspace
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,10 +50,17 @@ func DisablePlugin(config *Config, name string) bool {
 // ValidatePluginCandidate checks every contribution and config value using a
 // staged manifest without changing the active machine registry.
 func ValidatePluginCandidate(config *Config, manifest *plugin.Manifest, instanceConfig map[string]any) error {
-	_, _, err := composePluginsWithOverrides(config, map[string]plugin.Installed{
+	_, _, err := ComposeWithCandidate(config, manifest, instanceConfig)
+	return err
+}
+
+// ComposeWithCandidate composes the effective config exactly as OpenRoot
+// would, except that the named manifest overrides its registry entry. Handoff
+// validation uses it to compare effective before/after configs under lock.
+func ComposeWithCandidate(config *Config, manifest *plugin.Manifest, instanceConfig map[string]any) (*Config, []LoadedPlugin, error) {
+	return composePluginsWithOverrides(config, map[string]plugin.Installed{
 		manifest.Name: {Name: manifest.Name, Path: manifest.Root, Version: manifest.Version, Config: instanceConfig},
 	})
-	return err
 }
 
 // MutateDeclaredConfig serialises a complete read/validate/write transaction on
@@ -68,6 +78,87 @@ func MutateDeclaredConfig(root string, mutate func(*Config) error) error {
 		}
 		return writeDeclaredConfig(path, config)
 	})
+}
+
+// DeclaredConfigLockPath is the lock serialising every declared config.yaml
+// read/modify/write transaction for the workspace rooted at root.
+func DeclaredConfigLockPath(root string) string {
+	return filepath.Join(root, "config.yaml.lock")
+}
+
+// ConfigTransaction exposes the exact declared config bytes captured under the
+// config lock so a caller can validate, prepare inert state and then publish
+// one exact replacement in the same critical section.
+type ConfigTransaction struct {
+	Path string
+	// Bytes are the exact current file contents; Hash is their SHA-256 hex.
+	Bytes []byte
+	Hash  string
+	// Config is the parsed, validated declared config.
+	Config    *Config
+	published bool
+}
+
+// Publication describes one config publication outcome.
+type Publication struct {
+	Hash   string            `json:"hash"`
+	Report store.WriteReport `json:"report"`
+}
+
+// ConfigHash hashes exact declared config bytes.
+func ConfigHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// SerializeDeclaredConfig validates composition and renders the exact bytes
+// that a publication would write, without touching the filesystem.
+func SerializeDeclaredConfig(config *Config) ([]byte, error) {
+	if _, _, err := composePlugins(config); err != nil {
+		return nil, err
+	}
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	header := []byte("# docket workspace config. Statuses double as board lanes, in order.\n")
+	return append(header, data...), nil
+}
+
+// WithDeclaredConfigTransaction holds the workspace config lock while fn runs
+// with the exact current bytes. fn may call tx.Publish at most once to replace
+// config.yaml atomically; returning without publishing leaves the file
+// untouched. Callers that also need handler locks must acquire them before
+// entering, matching the handler-before-config order used by plugin enable.
+func WithDeclaredConfigTransaction(ctx context.Context, root string, fn func(tx *ConfigTransaction) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	path := filepath.Join(root, "config.yaml")
+	return store.WithLockContext(ctx, DeclaredConfigLockPath(root), func() error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read config: %w", err)
+		}
+		cfg, err := ParseDeclaredConfig(data)
+		if err != nil {
+			return err
+		}
+		return fn(&ConfigTransaction{Path: path, Bytes: data, Hash: ConfigHash(data), Config: cfg})
+	})
+}
+
+// Publish atomically replaces config.yaml with exact, already validated bytes
+// and reports the rename/directory-sync outcome. It is the single ownership
+// publication point for a handler handoff: readers see either the old or the
+// new complete file.
+func (tx *ConfigTransaction) Publish(data []byte, observers ...func(string)) (Publication, error) {
+	if tx.published {
+		return Publication{}, fmt.Errorf("config transaction has already published")
+	}
+	tx.published = true
+	report, err := store.WriteAtomicReport(tx.Path, data, 0o644, observers...)
+	return Publication{Hash: ConfigHash(data), Report: report}, err
 }
 
 // WithDeclaredConfigLocks holds every named workspace config lock in stable
@@ -128,15 +219,11 @@ func WriteDeclaredConfig(root string, config *Config) error {
 }
 
 func writeDeclaredConfig(path string, config *Config) error {
-	if _, _, err := composePlugins(config); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(config)
+	data, err := SerializeDeclaredConfig(config)
 	if err != nil {
 		return err
 	}
-	header := []byte("# docket workspace config. Statuses double as board lanes, in order.\n")
-	return store.WriteAtomic(path, append(header, data...), 0o644)
+	return store.WriteAtomic(path, data, 0o644)
 }
 
 // CloneDeclared returns an independently mutable copy of a workspace's source

@@ -28,6 +28,7 @@ export function BoardView(props: {
   live: LivePayload[];
   onSelect(task: string): void;
   onMove(task: BoardTask, status: string): void;
+  onSettings?(status: string): void;
 }) {
   const [dragging, setDragging] = useState('');
   const grouped = new Map(allStatuses(props.config, props.tasks).map((status) => [status, [] as BoardTask[]]));
@@ -39,15 +40,15 @@ export function BoardView(props: {
   return (
     <div className="board-scroll" aria-label="Task board">
       <div className="board-grid" style={{ gridTemplateColumns: `repeat(${Math.max(1, statuses.length)}, var(--lane-width))` }}>
-        {statuses.map((status) => <Lane key={status} dragging={dragging} setDragging={setDragging} workspace={props.workspace} status={status} tasks={grouped.get(status)!} config={props.config} preferences={props.preferences} selected={props.selected} live={props.live} onSelect={props.onSelect} onMove={props.onMove} />)}
+        {statuses.map((status) => <Lane key={status} dragging={dragging} setDragging={setDragging} workspace={props.workspace} status={status} tasks={grouped.get(status)!} config={props.config} preferences={props.preferences} selected={props.selected} live={props.live} onSelect={props.onSelect} onMove={props.onMove} onSettings={props.onSettings} />)}
       </div>
     </div>
   );
 }
 
-function Lane({ workspace, status, tasks, dragging, setDragging, config, preferences, selected, live, onSelect, onMove }: {
+function Lane({ workspace, status, tasks, dragging, setDragging, config, preferences, selected, live, onSelect, onMove, onSettings }: {
   workspace: string; status: string; tasks: BoardTask[]; dragging: string; setDragging(task: string): void; config: StreamConfig; preferences: Preferences; selected: string; live: LivePayload[];
-  onSelect(task: string): void; onMove(task: BoardTask, status: string): void;
+  onSelect(task: string): void; onMove(task: BoardTask, status: string): void; onSettings?(status: string): void;
 }) {
   const parent = useRef<HTMLDivElement>(null);
   const draggedIndex = tasks.findIndex((task) => task.id === dragging);
@@ -56,7 +57,7 @@ function Lane({ workspace, status, tasks, dragging, setDragging, config, prefere
   });
   return (
     <section className={`lane ${config.terminal.includes(status) ? 'terminal' : ''}`} data-status={status}>
-      <header className="lane-header"><span className="status-dot" /><h2>{humanize(status)}</h2><span className="lane-count">{tasks.length}</span></header>
+      <header className="lane-header"><span className="status-dot" /><h2>{humanize(status)}</h2><span className="lane-count">{tasks.length}</span>{onSettings && config.statuses.includes(status) && <Button size="icon" variant="ghost" aria-label={`Plugin settings for ${humanize(status)}`} onClick={() => onSettings(status)}>⚙</Button>}</header>
       <div className="lane-list" ref={parent}>
         {!tasks.length && <div className="lane-empty">No tasks</div>}
         <div className="virtual-stack" style={{ height: virtualizer.getTotalSize() }}>

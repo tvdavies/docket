@@ -75,7 +75,7 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		}
 		path := request.URL.Path
 		classic := path == "/classic" || path == "/classic/" || strings.HasPrefix(path, "/classic/workspaces/")
-		next := path == "/" || path == "/next" || path == "/next/" || strings.HasPrefix(path, "/next/workspaces/") || strings.HasPrefix(path, "/workspaces/")
+		next := path == "/" || path == "/next" || path == "/next/" || strings.HasPrefix(path, "/next/workspaces/") || strings.HasPrefix(path, "/workspaces/") || isSettingsRoute(path)
 		if !classic && !next {
 			http.NotFound(writer, request)
 			return
@@ -107,6 +107,14 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		}
 		mux.ServeHTTP(writer, request)
 	})
+}
+
+// isSettingsRoute accepts only the exact instance plugin settings SPA route.
+// Workspace-scoped settings already live under /workspaces/. The static
+// fallback deliberately stays an allowlist rather than serving any path.
+func isSettingsRoute(path string) bool {
+	path = strings.TrimPrefix(path, "/next")
+	return path == "/settings/plugins"
 }
 
 func cacheAssets(next http.Handler, immutable bool) http.Handler {

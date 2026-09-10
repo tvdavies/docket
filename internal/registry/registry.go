@@ -3,6 +3,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -395,4 +396,22 @@ func availableName(base string, entries []WorkspaceEntry) string {
 
 func samePath(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// WithReadLock loads the registry under a shared lock and keeps that lock held
+// while fn runs, so no Update can change plugin paths or workspace entries
+// underneath a caller that has already validated them. Callers must acquire it
+// after any workspace declared-config lock to match Update's lock order.
+func WithReadLock(ctx context.Context, fn func(*Config) error) error {
+	configPath, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	return store.WithReadLockContext(ctx, configPath+".lock", func() error {
+		config, err := loadPath(configPath)
+		if err != nil {
+			return err
+		}
+		return fn(config)
+	})
 }

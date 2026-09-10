@@ -40,9 +40,18 @@ docket plugin disable dispatch
 
 A normal enable seeds each missing plugin-handler cursor at the current event
 log end, so historical events do not replay. `--from-start` explicitly opts into
-replay. `--adopt-cursors` copies checkpointed same-named legacy cursors, removes
-matching legacy handler declarations and contributed status pins, then publishes
-one atomic config change. Legacy cursor files remain for rollback.
+replay. `--adopt-cursors` transfers strictly validated same-named legacy
+checkpoints under both identity sets' locks, removes matching legacy handler
+declarations, preserves effective status ordering, and publishes one config
+change. It refuses an already active destination and retains source cursors and
+private attempt receipts.
+
+Retained source cursors are **not a rollback mechanism**: once plugin delivery
+advances, restoring legacy config replays its acknowledged suffix. Ordinary
+`plugin disable` only removes the declaration; it does not transfer progress.
+For opt-in reverse handoff, inspection-only retries, runtime requirements and
+side-effect limits, see [Plugin handler recovery](plugin-recovery.md). No binary
+or whole-config restoration is a safe automatic fallback.
 
 An enabled but missing/invalid plugin makes that workspace unavailable. This is
 intentional: silently losing a status or wake handler is less safe than a
