@@ -1,0 +1,62 @@
+{
+  "passed": [
+    "unexpanded activity streams without navigation or task refresh",
+    "zero detail connections before expansion",
+    "custom Web Component renders a real SVG with accessible value table",
+    "focused shadow body is held while attention notice updates",
+    "streaming does not move the page reading position",
+    "explicit New activity applies the held snapshot",
+    "expansion acquires one view-owned detail lease",
+    "selecting another widget revokes the old transport",
+    "reselected widget collapses",
+    "theme and reduced motion update without remount",
+    "custom disclosure state survives theme change",
+    "390px task page has no horizontal overflow",
+    "320px task page has no horizontal overflow",
+    "phone controls retain 44px targets at 200% zoom",
+    "keyboard disclosure works inside Shadow DOM",
+    "TTL expiry releases selected transport",
+    "expiry retains the expanded reading view",
+    "fresh publication does not silently reacquire detail",
+    "unknown display version retires custom body",
+    "finalisation updates the same activity identity",
+    "disable tears down every authored body",
+    "saved outcome remains after plugin disable",
+    "fresh browser recovers terminal history with no module execution",
+    "plugin-less board stays plain",
+    "same task and instance in another workspace only mounts its enabled plugin",
+    "100-task board retains a bounded visible virtualized window",
+    "board cards open no detailed streams",
+    "measured host work p95 <=16ms, maximum <=50ms at 1Hz",
+    "one shared preview connection for the active workspace",
+    "all browser traffic remains on the isolated loopback server",
+    "no browser runtime errors: "
+  ],
+  "machine": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+    "browser": "152.0.7977.82"
+  },
+  "performance": {
+    "samples": 324,
+    "p95": 0.3999999761581421,
+    "max": 1.5999999940395355,
+    "nodes": 296,
+    "counters": {
+      "mounts": 13,
+      "destroys": 3,
+      "active": 10,
+      "detail": 0,
+      "maximumDetail": 0,
+      "updates": 63,
+      "aborted": 3
+    }
+  },
+  "connections": {
+    "active": 1,
+    "totalOpened": 5
+  },
+  "taskReads": 5,
+  "manualScreenReader": "NOT RUN: explicit outstanding human gate"
+}

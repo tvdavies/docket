@@ -1,0 +1,7 @@
+{
+  "name": "@docket/plugin-ui",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./contracts": "./src/contracts.ts", "./legacy": "./src/legacy.ts", "./kit": "./src/kit.ts", "./custom-element": "./src/custom-element.ts", "./tokens.css": "./src/tokens.css" }
+}

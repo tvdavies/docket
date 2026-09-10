@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import type { BoardTask, CreateTaskInput, TaskDetail, TaskPatch, WorkspaceStatus } from '../types';
-import { createTask, getActor, listWorkspaces, patchTask, setActor } from '../api/client';
+import { createTask, getActor, getTask, listWorkspaces, patchTask, setActor } from '../api/client';
 import { connectWorkspaceStream } from '../stream/connect';
-import { getBoardStore, useBoardStore, type PendingMutation } from '../store/board-store';
+import { getBoardStore, releaseBoardStore, useBoardStore, type PendingMutation } from '../store/board-store';
 import { activeFilterCount, allStatuses, filterAndSort, loadPreferences, savePreferences, type Preferences } from '../store/preferences';
 import { classicPath, explorerPath, parseRoute, resolveRoute, taskRoutePath } from './router';
 import { BoardView } from '../views/board/BoardView';
@@ -13,10 +13,11 @@ import { TaskDetail as TaskDetailPanel } from '../views/task/TaskDetail';
 import { CreateTaskDialog } from '../views/task/CreateTaskDialog';
 import { CommandPalette, type PaletteAction } from '../views/palette/CommandPalette';
 import { useBoardKeys } from '../keys/useBoardKeys';
+import { PluginScope } from '../registry/scope';
 
 const toBoardTask = (value: TaskDetail): BoardTask => ({
   id: value.id, title: value.title, status: value.status, project: value.project?.id, labels: value.labels || [], assignee: value.assignee,
-  wait: value.wait, references: value.references || [], active_sessions: [], created_at: value.created_at, updated_at: value.updated_at,
+  wait: value.wait, references: value.references || [], active_sessions: value.active_sessions || [], sessions: value.sessions, widget_summaries: value.widgets, widget_revision: value.widget_revision, created_at: value.created_at, updated_at: value.updated_at,
   resource_count: (value.references?.length || 0) + (value.attachments?.length || 0),
 });
 
@@ -50,7 +51,7 @@ export function App() {
   }, [workspace]);
 
   useEffect(() => { void refreshWorkspaces(); const timer = window.setInterval(() => void refreshWorkspaces(), 15_000); return () => window.clearInterval(timer); }, [refreshWorkspaces]);
-  useEffect(() => { if (!workspace || workspace === '__pending__') return; try { localStorage.setItem('docket.workspace', workspace); } catch { /* optional */ } return connectWorkspaceStream(workspace, store); }, [workspace, store]);
+  useEffect(() => { if (!workspace || workspace === '__pending__') return; try { localStorage.setItem('docket.workspace', workspace); } catch { /* optional */ } const disconnect = connectWorkspaceStream(workspace, store); return () => { disconnect(); releaseBoardStore(workspace, store); }; }, [workspace, store]);
   useEffect(() => {
     const pop = () => {
       if (taskDraft && routeTask && !window.confirm('Discard unsaved task input?')) { history.pushState(null, '', taskRoutePath(workspace, routeTask)); return; }
@@ -123,7 +124,7 @@ export function App() {
   if (!workspace) return <div className="boot-screen"><span className="brand-mark">D</span><p>{notice || 'Loading Docket…'}</p></div>;
   if (!preferences) return <div className="boot-screen"><span className="brand-mark">D</span><p>Opening {workspace}…</p></div>;
 
-  return <div className={`app-shell ${routeTask ? 'task-route' : ''}`}>
+  return <PluginScope workspace={workspace} config={snapshot.config} router={store.widgets} connection={snapshot.connection} theme={preferences.theme} density={preferences.density} refreshTask={id => { void getTask(workspace, id).then(value => { if (store.getSnapshot().connection !== 'closed') store.acceptTask(toBoardTask(value)); }).catch(() => undefined); }}><div className={`app-shell ${routeTask ? 'task-route' : ''}`}>
     <header className="topbar"><a className="brand" href={explorerPath(workspace)} onClick={(event) => { event.preventDefault(); closeTask(); }}><span className="brand-mark">D</span><b>Docket</b></a>
       <select className="workspace-select" aria-label="Workspace" value={workspace} onChange={(event) => switchWorkspace(event.target.value)}>{workspaces.map((item) => <option key={item.name} value={item.name}>{item.name}{item.state !== 'watching' ? ` · ${item.state}` : ''}</option>)}</select>
       <div className={`connection ${snapshot.connection}`}><i />{snapshot.connection === 'open' ? 'Live' : snapshot.connection}</div>
@@ -138,11 +139,11 @@ export function App() {
     </div></section>}
     <div className="notices">{(notice || activeWorkspace?.last_error) && <div className="notice error-banner">{notice || activeWorkspace?.last_error}</div>}
       {snapshot.pending.filter((item) => item.failed).map((mutation) => <div className="notice error-banner" key={mutation.id}>Mutation failed · {mutation.failed}<span><button onClick={() => retryMutation(mutation)}>Retry</button><button onClick={() => store.dismiss(mutation.id)}>Dismiss</button></span></div>)}</div>
-    <main className={routeTask ? 'task-page-container' : 'explorer'}>{routeTask ? <TaskDetailPanel key={`${workspace}/${routeTask}`} workspace={workspace} taskId={routeTask} open config={snapshot.config} live={snapshot.live} summaryUpdatedAt={snapshot.tasks.find((task) => task.id === routeTask)?.updated_at} onClose={closeTask} onPatch={performPatch} onCursor={() => undefined} onDraftChange={setTaskDraft} /> : visibleTasks.length ? (preferences.view === 'board' ? <BoardView workspace={workspace} tasks={visibleTasks} config={snapshot.config} preferences={preferences} selected={selected} live={snapshot.live} onSelect={navigateTask} onMove={moveTask} /> : <ListView tasks={visibleTasks} statuses={statuses} showEmpty={preferences.showEmpty} hiddenStatuses={preferences.hiddenStatuses} selected={selected} onSelect={navigateTask} />) : <div className="empty-state"><h2>No tasks match this view</h2><p>Clear filters or create a task.</p><button onClick={() => updatePreferences((value) => ({ ...value, filters: { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }, hiddenStatuses: [] }))}>Clear filters</button></div>}</main>
+    <main className={routeTask ? 'task-page-container' : 'explorer'}>{routeTask ? <TaskDetailPanel key={`${workspace}/${routeTask}`} workspace={workspace} taskId={routeTask} open config={snapshot.config} live={snapshot.live} summaryUpdatedAt={snapshot.tasks.find((task) => task.id === routeTask)?.updated_at} widgetRevision={snapshot.tasks.find((task) => task.id === routeTask)?.widget_revision} onClose={closeTask} onPatch={performPatch} onCursor={() => undefined} onDraftChange={setTaskDraft} /> : visibleTasks.length ? (preferences.view === 'board' ? <BoardView workspace={workspace} tasks={visibleTasks} config={snapshot.config} preferences={preferences} selected={selected} live={snapshot.live} onSelect={navigateTask} onMove={moveTask} /> : <ListView tasks={visibleTasks} statuses={statuses} showEmpty={preferences.showEmpty} hiddenStatuses={preferences.hiddenStatuses} selected={selected} onSelect={navigateTask} />) : <div className="empty-state"><h2>No tasks match this view</h2><p>Clear filters or create a task.</p><button onClick={() => updatePreferences((value) => ({ ...value, filters: { query: '', statuses: [], assignees: [], labels: [], projects: [], states: [] }, hiddenStatuses: [] }))}>Clear filters</button></div>}</main>
     <footer className="statusbar"><label>Acting as <input maxLength={100} value={actor} onChange={(event) => { setActorState(event.target.value); setActor(event.target.value); }} /></label><span>{activeFilterCount(preferences.filters)} active filters</span><span>{routeTask ? 'Task details' : 'J/K navigate · Enter open · M + lane move'}</span></footer>
     <CreateTaskDialog open={createOpen} config={snapshot.config} onOpenChange={setCreateOpen} onCreate={performCreate} />
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
-  </div>;
+  </div></PluginScope>;
 }
 
 function ViewMenu({ statuses, preferences, update }: { statuses: string[]; preferences: Preferences; update(change: (value: Preferences) => Preferences): void }) {
@@ -151,6 +152,7 @@ function ViewMenu({ statuses, preferences, update }: { statuses: string[]; prefe
     {statuses.map((status) => <DropdownMenu.CheckboxItem className="menu-item" key={status} checked={!preferences.hiddenStatuses.includes(status)} onCheckedChange={(checked) => update((value) => ({ ...value, hiddenStatuses: checked ? value.hiddenStatuses.filter((item) => item !== status) : [...new Set([...value.hiddenStatuses, status])] }))}>Lane · {humanize(status)}</DropdownMenu.CheckboxItem>)}
     <DropdownMenu.Separator className="menu-separator" />
     {Object.keys(preferences.fields).map((field) => <DropdownMenu.CheckboxItem className="menu-item" key={field} checked={(preferences.fields as any)[field]} onCheckedChange={(checked) => update((value) => ({ ...value, fields: { ...value.fields, [field]: Boolean(checked) } }))}>Show {humanize(field)}</DropdownMenu.CheckboxItem>)}
+    <DropdownMenu.CheckboxItem className="menu-item" checked={preferences.density === 'compact'} onCheckedChange={(checked) => update(value => ({ ...value, density: checked ? 'compact' : 'comfortable' }))}>Compact widgets</DropdownMenu.CheckboxItem>
     <DropdownMenu.Separator className="menu-separator" /><DropdownMenu.Label className="menu-label">Theme</DropdownMenu.Label><DropdownMenu.RadioGroup value={preferences.theme} onValueChange={(next) => update((value) => ({ ...value, theme: next as Preferences['theme'] }))}>{(['system', 'light', 'dark'] as const).map((theme) => <DropdownMenu.RadioItem key={theme} className="menu-item" value={theme}><DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator>{humanize(theme)}</DropdownMenu.RadioItem>)}</DropdownMenu.RadioGroup>
     <DropdownMenu.Separator className="menu-separator" /><DropdownMenu.Item className="menu-item" onSelect={() => { const name = prompt('Saved view name'); if (name) update((value) => ({ ...value, savedViews: [...value.savedViews, { name, filters: value.filters, order: value.order, view: value.view }].slice(-20) })); }}>Save current view…</DropdownMenu.Item>
     {preferences.savedViews.map((saved) => <DropdownMenu.Item className="menu-item" key={saved.name} onSelect={() => update((value) => ({ ...value, filters: saved.filters, order: saved.order, view: saved.view }))}>{saved.name}</DropdownMenu.Item>)}

@@ -21,6 +21,7 @@ import (
 	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/widget"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
@@ -30,17 +31,19 @@ const (
 )
 
 type boardResponse struct {
-	Workspace string        `json:"workspace"`
-	Path      string        `json:"path"`
-	Statuses  []string      `json:"statuses"`
-	Terminal  []string      `json:"terminal"`
-	Labels    []string      `json:"labels"`
-	Plugins   []boardPlugin `json:"plugins"`
-	Tasks     []boardTask   `json:"tasks"`
-	UpdatedAt string        `json:"updated_at"`
+	Workspace          string        `json:"workspace"`
+	Path               string        `json:"path"`
+	Statuses           []string      `json:"statuses"`
+	Terminal           []string      `json:"terminal"`
+	Labels             []string      `json:"labels"`
+	Plugins            []boardPlugin `json:"plugins"`
+	Tasks              []boardTask   `json:"tasks"`
+	UpdatedAt          string        `json:"updated_at"`
+	ResolverGeneration string        `json:"resolver_generation"`
 }
 
 type boardPlugin struct {
+	APIVersion         int                        `json:"api_version"`
 	Name               string                     `json:"name"`
 	Version            string                     `json:"version"`
 	Cards              []plugin.Card              `json:"cards"`
@@ -78,10 +81,12 @@ type boardTask struct {
 	References []task.Reference `json:"references"`
 	// ActiveSessions is a deprecated compatibility placeholder. Docket no
 	// longer infers external process liveness from command-context pointers.
-	ActiveSessions []session.Entry `json:"active_sessions"`
-	CreatedAt      string          `json:"created_at"`
-	UpdatedAt      string          `json:"updated_at"`
-	ResourceCount  int             `json:"resource_count"`
+	ActiveSessions  []session.Entry `json:"active_sessions"`
+	CreatedAt       string          `json:"created_at"`
+	UpdatedAt       string          `json:"updated_at"`
+	ResourceCount   int             `json:"resource_count"`
+	WidgetSummaries []widget.Record `json:"widget_summaries"`
+	WidgetRevision  string          `json:"widget_revision"`
 }
 
 type activityResponse struct {
@@ -136,6 +141,7 @@ type addReferenceRequest struct {
 
 func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 	registerStreamAPI(mux, manager, allowRemoteHost)
+	registerWidgetAPI(mux, manager, allowRemoteHost)
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "workspaces": len(manager.Statuses())})
 	})
@@ -232,12 +238,19 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
 		result.Plugins = pluginsForBoard(ws)
+		result.ResolverGeneration = resolverGeneration(ws)
+		widgets, err := widget.Load(ws)
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
 		for _, value := range tasks {
 			summary, err := summariseTask(value)
 			if err != nil {
 				writeAPIError(writer, err)
 				return
 			}
+			projectBoardTask(ws, &summary, widgets)
 			result.Tasks = append(result.Tasks, summary)
 		}
 		writeJSON(writer, http.StatusOK, result)
@@ -539,8 +552,13 @@ func registerAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
 func pluginsForBoard(ws *workspace.Workspace) []boardPlugin {
 	result := make([]boardPlugin, 0, len(ws.Plugins))
 	for _, loaded := range ws.Plugins {
+		apiVersion := loaded.Manifest.UI.APIVersion
+		if apiVersion == 0 {
+			apiVersion = 1
+		}
 		metadata := boardPlugin{
-			Name: loaded.Manifest.Name, Version: loaded.Manifest.Version,
+			APIVersion: apiVersion,
+			Name:       loaded.Manifest.Name, Version: loaded.Manifest.Version,
 			Cards:              append([]plugin.Card{}, loaded.Manifest.UI.Cards...),
 			ReferenceResolvers: append([]plugin.ReferenceResolver{}, loaded.Manifest.UI.ReferenceResolvers...),
 		}
@@ -722,6 +740,17 @@ func writeTaskBundleWithCursor(writer http.ResponseWriter, status int, ws *works
 	if err != nil {
 		writeAPIError(writer, err)
 		return
+	}
+	result.References = annotateReferences(ws, result.References)
+	for i := range result.Activity {
+		entry := &result.Activity[i]
+		if raw, ok := entry.Data["reference"]; ok {
+			encoded, _ := json.Marshal(raw)
+			var ref task.Reference
+			if json.Unmarshal(encoded, &ref) == nil {
+				entry.Data["reference"] = annotateReferences(ws, []task.Reference{ref})[0]
+			}
+		}
 	}
 	descriptionHTML, err := renderMarkdown(result.Description)
 	if err != nil {

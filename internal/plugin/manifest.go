@@ -85,13 +85,15 @@ type CLI struct {
 }
 
 type UI struct {
+	APIVersion         int                 `yaml:"api_version,omitempty" json:"api_version,omitempty"`
 	Cards              []Card              `yaml:"cards,omitempty" json:"cards,omitempty"`
 	ReferenceResolvers []ReferenceResolver `yaml:"reference_resolvers,omitempty" json:"reference_resolvers,omitempty"`
 }
 
 type Card struct {
-	Type  string `yaml:"type" json:"type"`
-	Title string `yaml:"title" json:"title"`
+	Locations []string `yaml:"locations,omitempty" json:"locations,omitempty"`
+	Type      string   `yaml:"type" json:"type"`
+	Title     string   `yaml:"title" json:"title"`
 }
 
 type ReferenceResolver struct {
@@ -213,6 +215,9 @@ func (m *Manifest) Validate(engineVersion string) error {
 			return err
 		}
 	}
+	if m.UI.APIVersion < 0 {
+		return errors.New("ui.api_version must be positive")
+	}
 	seenCards := map[string]bool{}
 	for _, card := range m.UI.Cards {
 		if card.Type == "" || !strings.HasPrefix(card.Type, m.Name+"/") {
@@ -222,6 +227,16 @@ func (m *Manifest) Validate(engineVersion string) error {
 			return fmt.Errorf("ui card type %q is duplicated", card.Type)
 		}
 		seenCards[card.Type] = true
+		if m.UI.APIVersion >= 2 && len(card.Locations) == 0 {
+			return fmt.Errorf("ui card %q requires locations", card.Type)
+		}
+		seenLocations := map[string]bool{}
+		for _, location := range card.Locations {
+			if (location != "board" && location != "activity") || seenLocations[location] {
+				return fmt.Errorf("ui card %q has invalid/duplicate location %q", card.Type, location)
+			}
+			seenLocations[location] = true
+		}
 	}
 	seenResolvers := map[string]bool{}
 	for _, resolver := range m.UI.ReferenceResolvers {

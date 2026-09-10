@@ -8,7 +8,7 @@ import type { BoardTask, LivePayload, StreamConfig } from '../../types';
 import type { Preferences } from '../../store/preferences';
 import { allStatuses } from '../../store/preferences';
 import { ResolvedReference } from '../../registry/ResolvedReference';
-import { PluginCardHost } from '../../registry/PluginCardHost';
+import { BoardWidgets, PluginCardHost } from '../../registry/PluginCardHost';
 
 const humanize = (value: string) => value.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 const relative = (value: string) => {
@@ -75,7 +75,6 @@ export function TaskCard({ workspace, task, selected, config, preferences, live,
   onSelect(task: string): void; onMove(task: BoardTask, status: string): void; onDragging?(active: boolean): void;
 }) {
   const drag = useCardDrag(onDragging, (status) => { if (status !== task.status) onMove(task, status); });
-  const liveForTask = live.filter((item) => item.task === task.id);
   return (
     <article className={`task-card ${selected ? 'selected' : ''}`} role="link" aria-current={selected ? 'true' : undefined} tabIndex={0} data-task={task.id}
       onPointerDown={drag.onPointerDown} onDragStart={(event) => event.preventDefault()}
@@ -90,9 +89,9 @@ export function TaskCard({ workspace, task, selected, config, preferences, live,
         </DropdownMenu.Root>
       </div>
       <h3>{task.title}</h3>
-      {liveForTask.length > 0 && <span className="live-pill">● {liveForTask[0].kind}</span>}
-      <PluginCardHost workspace={workspace} task={task} />
-      {preferences.fields.references && task.references[0] && <ResolvedReference reference={task.references[0]} compact />}
+      <PluginCardHost workspace={workspace} task={task} config={config.plugins} />
+      <BoardWidgets workspace={workspace} task={task} config={config.plugins || []} />
+      {preferences.fields.references && task.references[0] && <ResolvedReference reference={task.references[0]} taskId={task.id} compact />}
       <footer className="card-meta">
         {preferences.fields.labels && task.labels.slice(0, 3).map((label) => <Badge variant="secondary" className="label" key={label}>{label}</Badge>)}
         {preferences.fields.project && task.project && <span>{task.project}</span>}

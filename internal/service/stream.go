@@ -16,6 +16,7 @@ import (
 
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/widget"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
@@ -31,10 +32,11 @@ var streamWriteTimeout = 10 * time.Second
 var errWorkspaceStreamUnavailable = errors.New("workspace stream is unavailable")
 
 type streamConfig struct {
-	Statuses []string      `json:"statuses"`
-	Terminal []string      `json:"terminal"`
-	Labels   []string      `json:"labels"`
-	Plugins  []boardPlugin `json:"plugins"`
+	Statuses           []string      `json:"statuses"`
+	Terminal           []string      `json:"terminal"`
+	Labels             []string      `json:"labels"`
+	Plugins            []boardPlugin `json:"plugins"`
+	ResolverGeneration string        `json:"resolver_generation"`
 }
 
 type streamInit struct {
@@ -88,6 +90,7 @@ type workspaceStream struct {
 	configValue string
 	subscribers map[chan streamNotification]struct{}
 	live        map[string]liveItem
+	widgets     map[string]widgetWatermark
 	liveVersion uint64
 	closed      bool
 }
@@ -97,6 +100,7 @@ func newWorkspaceStream() *workspaceStream {
 		generation:  newStreamGeneration(),
 		subscribers: map[chan streamNotification]struct{}{},
 		live:        map[string]liveItem{},
+		widgets:     map[string]widgetWatermark{},
 	}
 }
 
@@ -217,6 +221,13 @@ func (stream *workspaceStream) setConfig(config streamConfig) {
 		stream.mu.Unlock()
 		return
 	}
+	if stream.configValue != "" {
+		// Configuration changes revoke live presentation, not durable history or
+		// revision watermarks. Owners republish after the new declaration is active.
+		for key := range stream.widgets {
+			delete(stream.live, key)
+		}
+	}
 	stream.config = config
 	stream.configValue = value
 	stream.mu.Unlock()
@@ -247,6 +258,16 @@ func (stream *workspaceStream) ingestLive(payload livePayload, ttl time.Duration
 	if _, exists := stream.live[key]; !exists && len(stream.live) >= maxLiveEntries {
 		stream.mu.Unlock()
 		return time.Time{}, fmt.Errorf("live item limit reached")
+	}
+	total := len(payload.Payload)
+	for existingKey, item := range stream.live {
+		if existingKey != key {
+			total += len(item.payload.Payload)
+		}
+	}
+	if total > 32<<20 {
+		stream.mu.Unlock()
+		return time.Time{}, fmt.Errorf("live byte limit reached")
 	}
 	stream.liveVersion++
 	version := stream.liveVersion
@@ -305,10 +326,11 @@ func (stream *workspaceStream) close() {
 
 func configForStream(ws *workspace.Workspace) streamConfig {
 	return streamConfig{
-		Statuses: nonNilStrings(ws.Config.Statuses),
-		Terminal: nonNilStrings(ws.Config.Terminal),
-		Labels:   nonNilStrings(ws.Config.Labels),
-		Plugins:  pluginsForBoard(ws),
+		Statuses:           nonNilStrings(ws.Config.Statuses),
+		Terminal:           nonNilStrings(ws.Config.Terminal),
+		Labels:             nonNilStrings(ws.Config.Labels),
+		Plugins:            pluginsForBoard(ws),
+		ResolverGeneration: resolverGeneration(ws),
 	}
 }
 
@@ -351,6 +373,11 @@ func (manager *Manager) publishTaskEvent(running *runtime, record events.LogReco
 	if err != nil {
 		return err
 	}
+	widgets, err := widget.Load(ws)
+	if err != nil {
+		return err
+	}
+	projectBoardTask(ws, &summary, widgets)
 	running.stream.publishPatch(record, &summary)
 	return nil
 }
@@ -391,12 +418,26 @@ func registerStreamAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost boo
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "payload must be valid JSON no larger than 64 KiB"})
 			return
 		}
-		running, err := manager.streamRuntime(request.PathValue("workspace"))
-		if err != nil {
-			writeAPIError(writer, err)
+		ws, release, ok := leaseAPIWorkspace(writer, manager, request.PathValue("workspace"))
+		if !ok {
 			return
 		}
-		expiresAt, err := running.stream.ingestLive(input, time.Duration(input.TTLMS)*time.Millisecond)
+		defer release()
+		running := manager.runtimes[request.PathValue("workspace")]
+		var marker map[string]json.RawMessage
+		_ = json.Unmarshal(input.Payload, &marker)
+		_, widgetEnvelope := marker["widget_version"]
+		var expiresAt time.Time
+		var err error
+		if widgetEnvelope || declaredWidget(ws, input.Kind) {
+			expiresAt, err = running.stream.ingestWidget(ws, input)
+			if err != nil {
+				writeWidgetError(writer, err)
+				return
+			}
+		} else {
+			expiresAt, err = running.stream.ingestLive(input, time.Duration(input.TTLMS)*time.Millisecond)
+		}
 		if err != nil {
 			status := http.StatusTooManyRequests
 			if errors.Is(err, errWorkspaceStreamUnavailable) {
@@ -580,11 +621,16 @@ func buildStreamInit(ws *workspace.Workspace, workspaceName, cursor string) (str
 		Tasks:     make([]boardTask, 0, len(values)),
 		Cursor:    cursor,
 	}
+	widgets, err := widget.Load(ws)
+	if err != nil {
+		return streamInit{}, err
+	}
 	for _, value := range values {
 		summary, err := summariseTask(value)
 		if err != nil {
 			return streamInit{}, err
 		}
+		projectBoardTask(ws, &summary, widgets)
 		result.Tasks = append(result.Tasks, summary)
 	}
 	return result, nil
@@ -601,6 +647,11 @@ func writeReplayPatch(writer http.ResponseWriter, ws *workspace.Workspace, gener
 		if err != nil {
 			return err
 		}
+		widgets, err := widget.Load(ws)
+		if err != nil {
+			return err
+		}
+		projectBoardTask(ws, &card, widgets)
 		summary = &card
 	}
 	return writeSSE(writer, "patch", encodeStreamCursor(generation, events.LogCursor{Offset: record.Offset, PrefixHash: record.PrefixHash}), streamPatch{Event: record.Event, Task: summary})
