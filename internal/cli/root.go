@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -140,6 +141,9 @@ func Execute() int {
 }
 
 func executeRoot(root *cobra.Command, errorOutput io.Writer) int {
+	if root.Context() == nil {
+		root.SetContext(context.Background())
+	}
 	command, err := root.ExecuteC()
 	if err == nil {
 		return 0

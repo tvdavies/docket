@@ -222,6 +222,12 @@ func loadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	return ParseDeclaredConfig(data)
+}
+
+// ParseDeclaredConfig applies the same defaults/validation to private receipt
+// snapshots as to on-disk declared configuration, without composing plugins.
+func ParseDeclaredConfig(data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)

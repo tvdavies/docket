@@ -32,6 +32,12 @@ statuses:
 	if err := os.WriteFile(filepath.Join(pluginRoot, plugin.ManifestFile), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "hooks", "notify"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	entry, err := pluginmgr.Add(pluginRoot, "", "dev")
 	if err != nil || entry.Source.Type != "local" {
 		t.Fatalf("add = %#v, %v", entry, err)
@@ -39,6 +45,12 @@ statuses:
 	project := t.TempDir()
 	ws, err := workspace.Init(project)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "hooks", "notify"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	ws.Config.Statuses = []string{"todo", "review", "merge", "done"}
