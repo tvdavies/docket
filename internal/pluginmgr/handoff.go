@@ -413,6 +413,20 @@ func runLocked(ctx context.Context, request HandoffRequest, ws *workspace.Worksp
 	fail := func(format string, args ...any) (HandoffResult, error) {
 		return reject(result, fmt.Sprintf(format, args...))
 	}
+	// Once observed drift breaks the cooperative-lock assumptions, the
+	// captured config cannot establish current ownership. Report only a fresh
+	// point-in-time hash (if safely readable), never a repair or publication.
+	drift := func(err error) (HandoffResult, error) {
+		result.Status = StatusNeedsInspection
+		result.CurrentConfigHash = ""
+		if plainPath(tx.Path) == nil {
+			if current, readErr := os.ReadFile(tx.Path); readErr == nil {
+				result.CurrentConfigHash = workspace.ConfigHash(current)
+			}
+		}
+		result.Diagnosis = append(result.Diagnosis, safeHandoffDiagnosis(err.Error()), "observed drift invalidates the captured ownership evidence; keep current wiring and inspect the receipt before a new attempt")
+		return result, err
+	}
 	if request.ExpectConfigHash != "" && !strings.EqualFold(request.ExpectConfigHash, tx.Hash) {
 		return fail("declared config hash %s does not match expected %s", tx.Hash, request.ExpectConfigHash)
 	}
@@ -759,9 +773,7 @@ func runLocked(ctx context.Context, request HandoffRequest, ws *workspace.Worksp
 	for _, transfer := range transfers {
 		current, err := handlers.ReadCheckpoint(ws, transfer.Source)
 		if err != nil || current.Position != transfer.Position || current.PrefixHash != transfer.PrefixHash {
-			result.Status = StatusSourceActive
-			result.Diagnosis = append(result.Diagnosis, fmt.Sprintf("source %q changed before publication (%v); source remains active", transfer.Source, err))
-			return result, fmt.Errorf("source %q changed before publication", transfer.Source)
+			return drift(fmt.Errorf("source %q changed before publication (%v)", transfer.Source, err))
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -772,14 +784,10 @@ func runLocked(ctx context.Context, request HandoffRequest, ws *workspace.Worksp
 
 	crashPoint("before_publish")
 	if err := validateStatePaths(ws, mapping); err != nil {
-		result.Status = StatusSourceActive
-		result.Diagnosis = append(result.Diagnosis, err.Error())
-		return result, err
+		return drift(err)
 	}
 	if err := verifyCapturedFiles(tx, receipt); err != nil {
-		result.Status = StatusSourceActive
-		result.Diagnosis = append(result.Diagnosis, err.Error())
-		return result, err
+		return drift(err)
 	}
 	publication, err := tx.Publish(targetBytes, func(stage string) { crashPoint("config:" + stage) })
 	if err != nil {
