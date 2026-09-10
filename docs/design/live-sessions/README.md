@@ -14,7 +14,7 @@ This directory is **design documentation and a fixture-only prototype**. It chan
 | [`contracts.proposed.ts`](contracts.proposed.ts) | **Proposed** context/snapshot/publisher/detail types. Illustrative names; JOB-0093 owns the production API. Type-checked with the prototype so examples cannot drift. |
 | [`requirements-to-fixtures.md`](requirements-to-fixtures.md) | Every acceptance requirement mapped to a named fixture, an automated check and the downstream owner. |
 | [`prototype/`](prototype/) | Isolated Bun-served demo: illustrative wrapper, kit roles, standard body and `<demo-session-body>` custom element, fixture host, deterministic scenarios. |
-| [`tests/`](tests/) | `publisher.test.ts` (bounds/filtering), `contrast.test.ts` (token contrast), `browser.test.ts` (158 headless checks), `screenshots.ts`. |
+| [`tests/`](tests/) | `publisher.test.ts` (bounds/filtering), `contrast.test.ts` (token contrast), `browser.test.ts` (176 headless checks), `screenshots.ts`. |
 | [`screenshots/`](screenshots/) | Evidence captured from pinned fixture frames at 1440px and 390px, light and dark. |
 
 ## Ownership split (unchanged by this task)
@@ -59,10 +59,11 @@ One-shot query parameters (stripped after load so refresh keeps state): `scenari
 8. Select some preview text, then Advance to the end of the live scenario. The body stays visible with your selection intact; the badge says *Completed* and a **Session finished · show summary** button appears. Deselect and click it: the card collapses to a durable summary with *Summary saved · No approval implied*, known duration and the plan link. Click **Expand completed activity** to reopen it. (Without a selection, completion collapses on its own.)
 9. Use the **Scenario** selector for: *Pending → running*, *Awaiting input → running*, *Running → tool failure → failed*, *Running → cancelled*, *Disconnected → stale → rehydrated*, *Missing service*, *Plugin removed*, *Unknown data version*, *Duplicate and older snapshots*, *Detail gap and reset*, *Body error*, *Context and snapshot updates*. Use **Advance** to step. Watch the callouts, the freshness label (separate from the execution badge), the fallback record and the strip counters (`bodyErrors`, `instancesRetired`, `lateResultsIgnored`, `duplicatesIgnored`, `olderIgnored`, `leasesRevoked`, `leasesDeclined`, `metadataApplied`, `ledgerAppends` — the last only ever counts creation and finalisation).
    - *Multiple sessions*: expand all three cards. Only the last stays expanded (`activeLeases` 1, `leasesRevoked` 2); the others collapse with a one-line note.
-   - *Unknown data version* and *Missing service*: expand first, then Advance. The detail closes, `activeLeases` returns to 0, the saved summary stays, and (missing service) **Expand** is disabled until the service returns.
+   - *Unknown data version*: expand first, then Advance. The body is released, `activeLeases` returns to 0 and the saved summary stays.
+   - *Missing service*: expand, open a tool and select some output, then Advance. `activeLeases` returns to 0 without hiding the last-known detail or clearing the selection. The notice explains the outage. Collapse remains usable; after collapsing, Expand is disabled until the service returns. Collapse and expand explicitly to reconnect detail after recovery.
    - *Duplicate and older snapshots*: Advance twice (5, 5, 3), then switch **Body**. The tool row is still there: the remount used the accepted revision 5, not the rejected revision 3.
    - *Context and snapshot updates*: the first Advance renames the page heading without remounting; after the identity switch, click **Deliver late result**: `lateResultsIgnored` increments and nothing on the page changes.
-10. *Long session and long output*: open the session page. It shows *entries 7–206 of 206 (200 at a time)*. **Show earlier** reaches *Entry 1* and offers **Show later**; Advance while pinned and the window does not move. Open the *Run · bounded output* tool: 2,000 characters and **Show more · 3,000 characters remaining**; two clicks reveal the rest and *End of result*.
+10. *Long session and long output*: open the session page. It shows *entries 7–206 of 206 (200 at a time)*. **Show earlier** reaches *Entry 1* and offers **Show later**; Advance while pinned and the window does not move. Open the *Run · bounded output* tool: 2,000 characters and **Show more · 3,000 characters remaining**; two clicks reveal the rest and *End of result*. Select the leading row in the latest window, or scroll up, then Advance: the window stays pinned. Selected growing text and focused Show more controls also stay intact. **Jump to latest** deliberately applies withheld content and resumes following.
 11. Open the browser network panel: only `app.js`, CSS and demo HTML routes. Open `/plugins/dispatch/sessions/does-not-exist`: a not-found page with a workspace link and no guessed task.
 
 ## Automated checks
@@ -73,7 +74,7 @@ From `docs/design/live-sessions/`:
 bun install                 # playwright + typescript, local to this directory only
 bun run typecheck           # contracts.proposed.ts + prototype + tests
 bun run test                # publisher bounds/filtering + token contrast
-CHROMIUM_PATH=/usr/bin/chromium bun run check:browser   # 158 headless checks
+CHROMIUM_PATH=/usr/bin/chromium bun run check:browser   # 176 headless checks
 CHROMIUM_PATH=/usr/bin/chromium bun run screenshots     # regenerates screenshots/
 ```
 
@@ -102,4 +103,4 @@ Captured by `tests/screenshots.ts` from pinned frames. Static v1 planning mockup
 | ![](screenshots/board-desktop.png) | ![](screenshots/board-phone.png) |
 | ![](screenshots/session-failed-desktop.png) | ![](screenshots/session-running-phone.png) |
 
-More: `task-expanded-desktop`, `task-held-completed-desktop` (selected preview through finalisation with the explicit summary control), `task-multi-session-*`, `task-multi-session-reselected-desktop` (one detail selection per view), `session-long-window-desktop` (pinned earlier window and Show more), `state-stale`, `state-cancelled`, `state-missing-service`, `state-plugin-removed`, `state-unknown-version`, `state-body-error`, `not-found`.
+More: `task-expanded-desktop`, `task-held-completed-desktop` (selected preview through finalisation with the explicit summary control), `task-outage-held-phone-dark` (selected custom-body detail retained after its transport lease is released), `task-multi-session-*`, `task-multi-session-reselected-desktop` (one detail selection per view), `session-long-window-desktop` (pinned earlier window and Show more), `state-stale`, `state-cancelled`, `state-missing-service`, `state-plugin-removed`, `state-unknown-version`, `state-body-error`, `not-found`.

@@ -266,14 +266,20 @@ function renderSession(sessionId: string): { kind: string; cleanup(): void } {
   const CHUNK = PROPOSED_BUDGETS.fullSessionOutputChunkChars;
   let following = true; let windowStart: number | "latest" = "latest"; let total = 0;
   const revealed = new Map<string, number>(); // toolCallId -> revealed output characters (reader-owned)
-  const measure = () => { following = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120; jump.hidden = following && windowStart === "latest"; };
+  let renderedStart = 0;
+  let pendingTranscript = false;
+  const measure = () => { following = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120; jump.hidden = following && windowStart === "latest" && !pendingTranscript; };
+  const focusFirst = () => {
+    const first = transcript.firstElementChild as HTMLElement | null;
+    if (first) { first.tabIndex = -1; first.focus({ preventScroll: true }); first.scrollIntoView({ block: "start", behavior: "auto" }); }
+  };
   viewport.addEventListener("scroll", measure);
-  jump.addEventListener("click", () => { windowStart = "latest"; update(); viewport.scrollTo({ top: viewport.scrollHeight, behavior: host.preferences.reducedMotion ? "auto" : "smooth" }); following = true; jump.hidden = true; });
+  jump.addEventListener("click", () => { windowStart = "latest"; following = true; update(true); viewport.focus({ preventScroll: true }); viewport.scrollTo({ top: viewport.scrollHeight, behavior: host.preferences.reducedMotion ? "auto" : "smooth" }); following = true; jump.hidden = true; });
   const startOf = () => windowStart === "latest" ? Math.max(0, total - SIZE) : windowStart;
-  earlier.addEventListener("click", () => { windowStart = Math.max(0, startOf() - SIZE); following = false; update(); transcript.firstElementChild?.scrollIntoView({ block: "start", behavior: "auto" }); (transcript.firstElementChild as HTMLElement | null)?.focus?.(); });
-  later.addEventListener("click", () => { const next = startOf() + SIZE; windowStart = next + SIZE >= total ? "latest" : next; update(); transcript.firstElementChild?.scrollIntoView({ block: "start", behavior: "auto" }); });
+  earlier.addEventListener("click", () => { windowStart = Math.max(0, startOf() - SIZE); following = false; update(true); focusFirst(); });
+  later.addEventListener("click", () => { const next = startOf() + SIZE; windowStart = next + SIZE >= total ? "latest" : next; update(true); focusFirst(); });
 
-  const update = () => {
+  const update = (byReader = false) => {
     const frame = state.fixture.frames[state.frameIndex];
     const snapshot = host.snapshotFor(sessionId);
     const preview = snapshot?.data?.value;
@@ -291,8 +297,18 @@ function renderSession(sessionId: string): { kind: string; cleanup(): void } {
     const all = fullTranscript(state.fixture.source, state.accepted?.through ?? 0);
     const engaged = containsFocus(transcript) || containsSelection(viewport);
     const wasFollowing = following;
+    // Pin the currently rendered start before adopting a new total. Otherwise
+    // a latest-window eviction removes selected/focused rows even without a scroll.
+    if (!byReader && windowStart === "latest" && (!following || engaged)) windowStart = renderedStart;
     total = all.length;
+    if (engaged && !byReader) {
+      pendingTranscript = true;
+      jump.hidden = false;
+      return; // preserve text nodes/output as well as row identity while reading
+    }
+    pendingTranscript = false;
     const start = startOf();
+    renderedStart = start;
     const end = Math.min(total, start + SIZE);
     earlier.hidden = start === 0;
     later.hidden = end >= total;
@@ -307,11 +323,11 @@ function renderSession(sessionId: string): { kind: string; cleanup(): void } {
       return entry.type === "user" ? ({ id: entry.id, seq: entry.seq, type: "user", text: entry.text ?? "" }) : ({ id: entry.id, seq: entry.seq, type: "assistant", text: entry.text ?? "" });
     });
     // User messages are permitted in the full session only; they are rendered in order here.
-    renderEntries(transcript, entries, { detail: true, failedOpen: true, idPrefix: `full-${sessionId}`, showMore: (toolCallId) => { revealed.set(toolCallId, Math.max(CHUNK, revealed.get(toolCallId) ?? 0) + CHUNK); update(); transcript.querySelector<HTMLElement>(`.wk-show-more[data-tool-call="${CSS.escape(toolCallId)}"]`)?.focus(); } });
+    renderEntries(transcript, entries, { detail: true, failedOpen: true, idPrefix: `full-${sessionId}`, showMore: (toolCallId) => { revealed.set(toolCallId, Math.max(CHUNK, revealed.get(toolCallId) ?? 0) + CHUNK); update(true); const row = transcript.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(toolCallId)}"]`); (row?.querySelector<HTMLElement>(".wk-show-more") ?? row?.querySelector<HTMLElement>(".wk-tool-row"))?.focus(); } });
     if (wasFollowing && !engaged && windowStart === "latest") { viewport.scrollTop = viewport.scrollHeight; }
     measure();
   };
-  const unsubscribe = host.onChange(update);
+  const unsubscribe = host.onChange(() => update());
   app.replaceChildren(
     crumb([{ text: "Demo workspace", href: `/workspaces/${WORKSPACE}` }, { text: state.taskId, href: taskPath }, { text: `Session ${sessionId}` }]),
     h("div", { class: "session-layout" }, header, notices, windowLabel, viewport, h("div", { class: "session-footer" }, jump, h("a", { class: "wk-reference back-to-task", href: taskPath, text: `Back to ${state.taskId}` }))),

@@ -45,6 +45,12 @@ const shots: Shot[] = [
   { name: "state-stale-desktop", path: `${task}?scenario=stale&frame=2&paused=1`, width: 1440, height: 800 },
   { name: "state-cancelled-desktop", path: `${task}?scenario=cancelled&frame=2&paused=1`, width: 1440, height: 800 },
   { name: "state-missing-service-desktop", path: `${task}?scenario=missing-service&frame=1&paused=1`, width: 1440, height: 800 },
+  { name: "task-outage-held-phone-dark", path: `${task}?scenario=missing-service&frame=0&paused=1&theme=dark&body=custom-element`, width: 390, height: 1100, before: async (page) => {
+    await page.locator(".widget-expand").click();
+    await page.locator(".wk-tool-row").first().click();
+    await page.locator(".wk-code").first().evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); const s = window.getSelection()!; s.removeAllRanges(); s.addRange(r); });
+    await page.evaluate(() => window.__demo.advance());
+  } },
   { name: "state-plugin-removed-desktop", path: `${task}?scenario=plugin-removed&frame=1&paused=1`, width: 1440, height: 800 },
   { name: "state-unknown-version-desktop", path: `${task}?scenario=unknown-version&frame=1&paused=1`, width: 1440, height: 800 },
   { name: "state-body-error-desktop", path: `${task}?scenario=body-error&frame=1&paused=1`, width: 1440, height: 800 },

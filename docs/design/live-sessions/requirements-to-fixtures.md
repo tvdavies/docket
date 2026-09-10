@@ -36,7 +36,7 @@ Fixtures: `live` (frame 10+ exceeds the preview window), raw events carrying `SE
 | Collapse returns focus to its toggle | browser `collapse returns focus to its toggle` |
 | Detail selection is view-scoped: expanding three cards keeps one; reselection collapses the previous card with a note | browser `expanding three cards keeps one detail selection per task view`, `reselection collapses the previously selected cards`, `revoked cards explain why their detail closed`, `selecting back moves the single selection` (fixture `multi-session`) |
 | Unsupported version releases the body and its selection without a body failure | browser `unsupported version releases the body and its detail selection`, `unsupported data is a release, not a body failure` (fixture `unknown-version`, expanded before the unsupported frame) |
-| Missing service revokes the selection, disables Expand, keeps the summary; return re-enables without auto-reacquire | browser `missing service revokes the detail selection and disables Expand`, `saved summary and availability notice remain while unavailable`, `service return re-enables Expand without re-acquiring detail on its own`, `detail can be reselected after the service returns` (fixture `missing-service`, expanded before the outage) |
+| Missing service releases transport without hiding an expanded last-known view; Collapse stays usable and recovery never auto-reacquires | browser `missing service releases transport but retains last-known expanded detail and usable Collapse`, `last-known detail and availability notice remain while unavailable`, `explicit Collapse keeps the saved summary and cannot reopen unavailable detail`, `service return re-enables Expand without re-acquiring detail on its own`, `detail can be reselected after the service returns` (fixture `missing-service`, expanded before the outage) |
 
 Owner: JOB-0050 shared filtered projection; JOB-0093 enforced budgets and view-scoped selection.
 
@@ -55,6 +55,11 @@ Fixture: `live`.
 | Selected preview survives finalisation: body stays visible, selection intact, explicit summary control | `selected preview text survives finalisation (no hidden body, no cleared selection)`, `status updates and an explicit control offers the summary`, `deliberate control collapses to the durable summary` | 8 |
 | Explicit expansion freezes the reading window; New activity applies detail | `explicit expansion freezes the reading window; New activity offered`, `New activity applies the withheld detail and stays expanded` | 6 |
 | Selected tool detail and focused links inside the body (light DOM and shadow root) survive streaming | `selected tool detail inside the body survives streaming`, `focused link inside the body survives streaming` | 6 |
+
+Additional regressions from review of `918de9f`, in both standard and custom-element bodies:
+
+- `contiguous detail stays held without false gap recovery or lease churn`, `latest held detail is reachable after several contiguous frames`: receipt sequence is independent of the shown window.
+- `outage releases the lease without clearing selected detail`, `service return preserves selection without silently reacquiring detail`, `explicit reselection reconnects after an outage`: transport cleanup preserves the reading window.
 
 Owner: JOB-0093 kit/conformance; JOB-0050 integration.
 
@@ -126,8 +131,10 @@ Fixture: `live`; routes `/workspaces/demo`, `/workspaces/demo/tasks/DEMO-0042`, 
 | Refresh restores context; direct navigation focuses heading once | `refresh on the session URL restores task context and transcript`, `fresh navigation focuses the destination heading once` | 7 |
 | Back restores route, expanded card, focus, scroll | `browser Back returns to the task route`, `Back restores the expanded card`, `Back restores focus to the Open session link`, `Back restores scroll position` | 7 |
 | Canonical anchors; honest not-found | `Back to task anchor works`, `breadcrumb anchor navigates to the board`, `unknown session ID is an honest not-found…` | 11 |
-| Full session mounts one explicit ≤ 200-entry window; earlier entries reachable; pinned window stays bounded during streaming | `long transcript mounts one 200-entry window ending at the latest entry`, `Show earlier offered, Show later hidden at the latest window`, `Show earlier reaches Entry 1 and offers Show later`, `an earlier window stays pinned and bounded while new entries stream`, `Show later returns to the latest window including the streamed entry`, `the latest window follows growth without exceeding 200 mounted entries` (fixture `long-session`; unit `the long-session fixture exceeds the full-session window…`) | 12 |
-| Long tool output is revealed in bounded Show more chunks that survive streaming | `long tool output starts at one 2,000-character chunk with Show more`, `Show more reveals the next bounded chunk`, `revealed output survives streaming`, `the final chunk reveals the whole result and ends the Show more path` | 12 |
+| Full session mounts one explicit ≤ 200-entry window; earlier entries reachable; pinned window stays bounded during streaming | `long transcript mounts one 200-entry window ending at the latest entry`, `Show earlier offered, Show later hidden at the latest window`, `Show earlier reaches Entry 1 and offers Show later`, `an earlier window stays pinned and bounded while new entries stream`, `Show later returns to the latest window including the streamed entry`, `the latest window follows growth without exceeding 200 mounted entries` (fixture `long-session`; unit `the long-session fixture exceeds the full-session window…`) | 10 |
+| Long tool output is revealed in bounded Show more chunks that survive streaming | `long tool output starts at one 2,000-character chunk with Show more`, `Show more reveals the next bounded chunk`, `revealed output survives streaming`, `the final chunk reveals the whole result and ends the Show more path` | 10 |
+| Streaming protects selected/focused full-session content and pins a scrolled-up window | `latest-window growth never evicts a selected leading row`, `Jump to latest explicitly releases the held window`, `scrolling up pins the latest window before streaming can evict earlier rows`, `growing assistant text preserves the full-session selection`, `Jump to latest applies the withheld assistant text` | 10 |
+| Changing long output does not rebuild the focused Show more button until explicitly requested | `updating long output preserves the focused Show more button until a reader action`, `Show more explicitly applies newer output in a bounded chunk` | 10 |
 
 Owner: JOB-0050, retaining the plugin-prefix routing work.
 

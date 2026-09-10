@@ -381,8 +381,10 @@ try {
   await expand.click();
   check(await counter("activeLeases") === 1 && await expand.getAttribute("aria-expanded") === "true", "preview-bounds: completed card can be expanded while the service is available");
   await advance();
-  check(await counter("activeLeases") === 0 && await expand.getAttribute("aria-expanded") === "false" && await expand.isDisabled(), "preview-bounds: missing service revokes the detail selection and disables Expand");
-  check(await widget().locator(".widget-summary").textContent().then((t) => t?.includes("Documented the route behavior")) && await widget().locator(".wk-notice").filter({ hasText: "Plugin service unavailable" }).isVisible(), "preview-bounds: saved summary and availability notice remain while unavailable");
+  check(await counter("activeLeases") === 0 && await expand.getAttribute("aria-expanded") === "true" && await expand.isEnabled(), "preview-bounds: missing service releases transport but retains last-known expanded detail and usable Collapse");
+  check(await widget().locator(".widget-body-slot").isVisible() && await widget().locator(".wk-notice").filter({ hasText: "Plugin service unavailable" }).isVisible(), "preview-bounds: last-known detail and availability notice remain while unavailable");
+  await expand.click();
+  check(await expand.isDisabled() && await widget().locator(".widget-summary").textContent().then((t) => t?.includes("Documented the route behavior")), "preview-bounds: explicit Collapse keeps the saved summary and cannot reopen unavailable detail");
   await advance();
   check(await expand.isEnabled() && await counter("activeLeases") === 0, "preview-bounds: service return re-enables Expand without re-acquiring detail on its own");
   await expand.click();
@@ -400,6 +402,7 @@ try {
   check(await rows() <= 200 && await firstRow().then((t) => t?.startsWith("Entry 1")), "history: an earlier window stays pinned and bounded while new entries stream");
   await page.getByRole("button", { name: "Show later", exact: true }).click();
   check(await rows() === 200 && await page.locator(".transcript > li").last().textContent().then((t) => t?.includes("Entry 206")), "history: Show later returns to the latest window including the streamed entry");
+  await page.locator(".transcript-viewport").focus(); // leave the earlier/later destination row before following
   await advance();
   check(await rows() === 200 && await page.locator(".transcript > li").last().textContent().then((t) => t?.includes("Entry 207")), "history: the latest window follows growth without exceeding 200 mounted entries");
   await page.locator('.transcript [data-tool-call="t-long"] .wk-tool-row').click();
@@ -411,6 +414,61 @@ try {
   check(await codeLength() === 4000, "history: revealed output survives streaming");
   await page.locator(".wk-show-more").click();
   check(await codeLength() === 5000 && await page.locator(".wk-show-more").count() === 0 && await page.locator(".wk-output-end").isVisible(), "history: the final chunk reveals the whole result and ends the Show more path");
+
+  // --- review follow-up: continuity is independent of the held reading window ---
+  for (const body of ["standard", "custom-element"] as const) {
+    await page.goto(`${task}?scenario=live&frame=4&paused=1&body=${body}`); await widget().waitFor();
+    await expand.click();
+    const heldRows = await entryTexts();
+    const acquired = await counter("leasesAcquired");
+    await advance(); await advance(); await advance();
+    check(await counter("leasesAcquired") === acquired && await counter("activeLeases") === 1 && JSON.stringify(await entryTexts()) === JSON.stringify(heldRows), `reader-intent[${body}]: contiguous detail stays held without false gap recovery or lease churn`);
+    await widget().locator(".widget-new-activity").click();
+    check(JSON.stringify(await entryTexts()) !== JSON.stringify(heldRows), `reader-intent[${body}]: latest held detail is reachable after several contiguous frames`);
+
+    await page.goto(`${task}?scenario=missing-service&frame=0&paused=1&body=${body}`); await widget().waitFor();
+    await expand.click(); await widget().locator(".wk-tool-row").first().click();
+    await widget().locator(".wk-code").first().evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); const s = window.getSelection()!; s.removeAllRanges(); s.addRange(r); });
+    const selected = await selectedText();
+    await advance();
+    check(selected.length > 0 && await selectedText() === selected && await widget().locator(".widget-body-slot").isVisible() && await counter("activeLeases") === 0, `reader-intent[${body}]: outage releases the lease without clearing selected detail`);
+    await advance();
+    check(await selectedText() === selected && await counter("activeLeases") === 0, `reader-intent[${body}]: service return preserves selection without silently reacquiring detail`);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await expand.click(); await expand.click();
+    check(await counter("activeLeases") === 1, `reader-intent[${body}]: explicit reselection reconnects after an outage`);
+  }
+
+  // Full-session engagement protects both the window's keys and its text nodes.
+  await page.goto(`${base}/plugins/dispatch/sessions/demo-s01?scenario=long-session&frame=0&paused=1`);
+  await page.locator(".transcript > li").first().waitFor();
+  await page.locator(".transcript > li").first().evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); const s = window.getSelection()!; s.removeAllRanges(); s.addRange(r); });
+  const firstSelected = await selectedText();
+  await advance();
+  check(firstSelected === "Entry 7" && await selectedText() === firstSelected && await firstRow() === firstSelected && await rows() === 200, "history: latest-window growth never evicts a selected leading row");
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await page.locator(".jump-latest").click();
+  check(await firstRow() === "Entry 8" && await rows() === 200, "history: Jump to latest explicitly releases the held window");
+  await page.locator(".transcript-viewport").evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event("scroll")); });
+  await advance();
+  check(await firstRow() === "Entry 8" && await rows() === 200 && await page.locator(".jump-latest").isVisible(), "history: scrolling up pins the latest window before streaming can evict earlier rows");
+
+  await page.goto(`${base}/plugins/dispatch/sessions/demo-s01?scenario=live&frame=1&paused=1`);
+  await page.locator('.transcript [data-type="assistant"]').first().waitFor();
+  await page.locator('.transcript [data-type="assistant"]').first().evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); const s = window.getSelection()!; s.removeAllRanges(); s.addRange(r); });
+  const assistantSelected = await selectedText();
+  await advance();
+  check(assistantSelected.length > 0 && await selectedText() === assistantSelected, "history: growing assistant text preserves the full-session selection");
+  await page.evaluate(() => window.getSelection()?.removeAllRanges()); await page.locator(".jump-latest").click();
+  check((await page.locator('.transcript [data-type="assistant"]').first().textContent())!.length > assistantSelected.length, "history: Jump to latest applies the withheld assistant text");
+
+  await page.goto(`${base}/plugins/dispatch/sessions/demo-s01?scenario=long-session&frame=0&paused=1`);
+  await page.locator('.transcript [data-tool-call="t-long"] .wk-tool-row').click();
+  await page.locator(".wk-show-more").focus();
+  await page.evaluate(() => { const host = window.__demo.host; const s = host.sessions.get("demo-s01")!; const seq = s.fixture.source.events.length + 1; s.fixture.source.events.push({ seq, type: "tool.updated", toolCallId: "t-long", status: "completed", output: "X".repeat(6500) }); s.fixture.frames[s.frameIndex + 1] = { through: seq, execution: "running" }; host.advance(); });
+  check(await page.locator(".wk-show-more").evaluate((el) => el === document.activeElement) && await codeLength() === 2000, "history: updating long output preserves the focused Show more button until a reader action");
+  await page.locator(".wk-show-more").click();
+  check(await codeLength() === 4000 && await page.locator(".wk-show-more").textContent().then((t) => t?.includes("2,500")), "history: Show more explicitly applies newer output in a bounded chunk");
 
   // --- no-live-network ---------------------------------------------------------
   check(violations.length === 0, `no-live-network: ${requests.length} requests, ${violations.length} violations ${violations.join("; ")}`);

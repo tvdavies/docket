@@ -155,6 +155,8 @@ export function mountWrapper(
   let pending: WidgetPresentation | null = null; // withheld body content
   let pendingDetail: DetailSnapshot | null = null;
   let detailPaused = false;
+  // Transport continuity follows receipt, not the reader's deliberately older window.
+  let receivedThroughSeq = 0;
   let releaseDetail: (() => void) | null = null;
   let lastAttentionId: string | null = null;
   let destroyed = false;
@@ -206,13 +208,14 @@ export function mountWrapper(
   // --- Detail selection (view-scoped lease owned by the host) ----------------
   function onDetail(incoming: DetailSnapshot): void {
     if (destroyed || !expanded()) return; // late/irrelevant
-    if (!incoming.reset && shownDetail && incoming.baseSeq !== shownDetail.throughSeq) {
+    if (!incoming.reset && incoming.baseSeq !== receivedThroughSeq) {
       detailPaused = true; // gap: pause and ask the owner for a snapshot
       renderBody();
       releaseLease();
       acquireLease();
       return;
     }
+    receivedThroughSeq = incoming.throughSeq;
     detailPaused = false;
     if (shownDetail === null) { shownDetail = incoming; renderBody(); return; } // the reader asked for this
     if (detailSignature(incoming) === detailSignature(shownDetail)) { shownDetail = incoming; renderBody(); return; }
@@ -224,6 +227,13 @@ export function mountWrapper(
 
   function onRevoked(reason: DetailRevocation): void {
     releaseDetail = null;
+    if (reason === "unavailable") {
+      // Releasing transport must not discard the selected/expanded reading window.
+      // It stays read-only; reconnecting detail requires a new explicit selection.
+      setNote("Detail updates paused; showing last known details. When the service returns, collapse and expand to reconnect.");
+      announce(`${shown?.label ?? "Session"}: detail updates paused.`);
+      return;
+    }
     shownDetail = null; pendingDetail = null; detailPaused = false;
     if (expanded()) {
       const hadFocus = containsFocus(bodySlot);
@@ -233,13 +243,13 @@ export function mountWrapper(
       if (hadFocus) expandButton.focus();
     }
     if (reason === "reselected") setNote("Detail is shown for one session at a time; it moved to the session you expanded.");
-    else if (reason === "unavailable") setNote("Details are unavailable right now; the preview is the last known state.");
     if (reason !== "retired") announce(`${shown?.label ?? "Session"}: detail closed (${reason}).`);
     renderBody();
   }
 
   function acquireLease(): boolean {
     if (releaseDetail || location === "board" || !currentContext.helpers.requestDetail) return Boolean(releaseDetail);
+    receivedThroughSeq = 0;
     const release = currentContext.helpers.requestDetail(onDetail, onRevoked);
     if (!release) { setNote("Details are unavailable right now; the preview is the last known state."); return false; }
     releaseDetail = release;
@@ -280,6 +290,7 @@ export function mountWrapper(
       // The reader closed the detail; bring the preview up to date unless text is still selected.
       if (pending && !containsSelection(root)) applyPending();
     }
+    expandButton.disabled = accepted?.availability !== "available" && !expanded();
     renderBody();
   }
 
@@ -416,9 +427,10 @@ export function mountWrapper(
       if (bodyFailed) { showFallback("Widget body failed; showing the saved record."); return; }
       controls.hidden = false;
       const unavailable = snapshot.availability !== "available";
-      expandButton.disabled = unavailable; // missing service: no detail selection can be acquired or retained
-      if (unavailable && expanded()) onRevoked("unavailable");
-      else if (unavailable) releaseLease();
+      // Outages release the lease, not the reader's last-known detail. Collapse
+      // remains usable, but a collapsed card cannot acquire unavailable detail.
+      expandButton.disabled = unavailable && !expanded();
+      if (unavailable) releaseLease();
       // Reader-owned window: withhold changed body content, and the collapse to
       // a summary, while the reader is inside the body or has explicitly
       // expanded it. Unchanged content (for example a terminal status with the
