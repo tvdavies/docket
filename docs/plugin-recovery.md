@@ -108,8 +108,11 @@ Cooperative writers must honor the locks. Registry and supported config writers
 serialize with publication. Linked-package edits, out-of-band replacements,
 symlink races and ledger rewrites are prohibited during an operational window.
 Observed config, manifest, script, source-prefix or ledger-prefix drift fails
-closed before publication. These checks do not defend against a hostile writer
-racing filesystem checks.
+closed before publication with `needs_inspection`, not a claim that the source
+is still active. The summary reports a freshly observed config hash, or omits
+it if the config cannot be safely read. It does not repair the drift or infer
+that this command published an externally changed target. These checks do not
+defend against a hostile writer racing filesystem checks.
 
 ## State and failure matrix
 

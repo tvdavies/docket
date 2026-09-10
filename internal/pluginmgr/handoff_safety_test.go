@@ -115,11 +115,77 @@ func TestHandoffDetectsObservedOutOfBandDrift(t *testing.T) {
 			})
 			defer pluginmgr.SetCrashHook(nil)
 			result, err := f.forward(f.receiptDir(kind))
-			if err == nil || result.Status != pluginmgr.StatusSourceActive {
-				t.Fatalf("drift accepted: %+v %v", result, err)
+			if err == nil || result.Status != pluginmgr.StatusNeedsInspection {
+				t.Fatalf("drift accepted or misclassified: %+v %v", result, err)
 			}
 			f.assertLegacyActive()
 		})
+	}
+}
+
+// Even though out-of-band writers are prohibited, observed ownership drift
+// must not be reported as the captured source still being active.
+func TestHandoffDoesNotClaimSourceActiveAfterOwnershipDrift(t *testing.T) {
+	f := newFixture(t)
+	f.appendMove("done")
+	if failures := f.drain(); len(failures) != 0 {
+		t.Fatal(failures)
+	}
+	dir := f.receiptDir("ownership-drift")
+	var observedHash string
+	pluginmgr.SetCrashHook(func(stage string) {
+		if stage != "before_publish" {
+			return
+		}
+		// All destinations are prepared. Simulate a prohibited writer
+		// publishing the target before this command's final drift check.
+		data, err := os.ReadFile(filepath.Join(dir, "config-target.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.root(), "config.yaml"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		observedHash = workspace.ConfigHash(data)
+	})
+	defer pluginmgr.SetCrashHook(nil)
+	result, err := f.forward(dir)
+	if err == nil || result.Status != pluginmgr.StatusNeedsInspection {
+		t.Fatalf("ownership drift was misclassified: %+v %v", result, err)
+	}
+	if result.CurrentConfigHash != observedHash || result.CurrentConfigHash == result.BeforeConfigHash {
+		t.Fatalf("reported a stale config hash: %+v", result)
+	}
+	if result.Publication != nil {
+		t.Fatal("handoff claimed its own publication after detecting drift")
+	}
+	f.assertPluginActive()
+	if _, err := os.Stat(filepath.Join(dir, "committed.json")); !os.IsNotExist(err) {
+		t.Fatalf("drift wrote a committed receipt: %v", err)
+	}
+}
+
+func TestHandoffOmitsCurrentHashWhenDriftRemovesConfig(t *testing.T) {
+	f := newFixture(t)
+	f.appendMove("done")
+	if failures := f.drain(); len(failures) != 0 {
+		t.Fatal(failures)
+	}
+	config := filepath.Join(f.root(), "config.yaml")
+	pluginmgr.SetCrashHook(func(stage string) {
+		if stage == "before_publish" {
+			if err := os.Remove(config); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	defer pluginmgr.SetCrashHook(nil)
+	result, err := f.forward(f.receiptDir("missing-config"))
+	if err == nil || result.Status != pluginmgr.StatusNeedsInspection || result.CurrentConfigHash != "" || result.Publication != nil {
+		t.Fatalf("missing config was misclassified: %+v %v", result, err)
+	}
+	if _, err := os.Stat(config); !os.IsNotExist(err) {
+		t.Fatalf("handoff repaired the missing config: %v", err)
 	}
 }
 
