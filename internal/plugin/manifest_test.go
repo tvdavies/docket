@@ -147,3 +147,48 @@ config:
 		t.Fatal("expected unknown status")
 	}
 }
+
+func TestServiceCommandAndWatchValidation(t *testing.T) {
+	manifest, err := plugin.Load(writeManifest(t, "name: example\nversion: 1.0.0\nservice:\n  url: http://127.0.0.1:7464\n  command: [bin/serve, --port, '7464']\n  watch: ['server/**/*.js', package.json]\n"), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Service.Command) != 3 || len(manifest.Service.Watch) != 2 {
+		t.Fatalf("service = %#v", manifest.Service)
+	}
+	for name, body := range map[string]struct{ body, want string }{
+		"escaping command": {"service: {url: http://127.0.0.1:1, command: [../bin/serve]}", "inside the plugin"},
+		"empty argument":   {"service: {url: http://127.0.0.1:1, command: [node, '']}", "service.command[1] is empty"},
+		"watch no command": {"service: {url: http://127.0.0.1:1, watch: ['*.js']}", "requires service.command"},
+		"absolute watch":   {"service: {url: http://127.0.0.1:1, command: [node], watch: [/etc/*]}", "plugin-relative"},
+		"parent watch":     {"service: {url: http://127.0.0.1:1, command: [node], watch: ['../*.js']}", "plugin-relative"},
+		"bad glob":         {"service: {url: http://127.0.0.1:1, command: [node], watch: ['[']}", "service.watch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := plugin.Load(writeManifest(t, "name: example\nversion: 1.0.0\n"+body.body+"\n"), "dev")
+			if err == nil || !strings.Contains(err.Error(), body.want) {
+				t.Fatalf("error = %v, want substring %q", err, body.want)
+			}
+		})
+	}
+}
+
+func TestMatchWatch(t *testing.T) {
+	for _, test := range []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"server/**/*.js", "server/a.js", true},
+		{"server/**/*.js", "server/lib/deep/a.js", true},
+		{"server/**/*.js", "server/a.ts", false},
+		{"server/**/*.js", "other/a.js", false},
+		{"*.go", "main.go", true},
+		{"*.go", "pkg/main.go", false},
+		{"**", "anything/at/all", true},
+		{"package.json", "package.json", true},
+	} {
+		if got := plugin.MatchWatch(test.pattern, test.name); got != test.want {
+			t.Errorf("MatchWatch(%q, %q) = %v, want %v", test.pattern, test.name, got, test.want)
+		}
+	}
+}

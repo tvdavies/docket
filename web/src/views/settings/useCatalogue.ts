@@ -11,10 +11,13 @@ export type CatalogueState = {
 };
 
 /**
- * Loads GET /api/plugins on entry, window focus and explicit reload. Settings
+ * Loads GET /api/plugins on entry, on explicit reload, when the instance
+ * stream (GET /api/stream) reports a changed plugin manifest, and on window
+ * focus (config values edited from the CLI do not change a manifest). Settings
  * values are not carried by the task stream, so this is the only source of
- * truth for the forms. A failed read keeps the previous entries but flags them
- * as stale; it never presents an empty catalogue as success.
+ * truth for the forms. A failed read keeps the previous
+ * entries but flags them as stale; it never presents an empty catalogue as
+ * success.
  */
 export function useCatalogue(): CatalogueState {
   const [entries, setEntries] = useState<PluginCatalogueEntry[] | null>(null);
@@ -40,12 +43,37 @@ export function useCatalogue(): CatalogueState {
   }, []);
 
   useEffect(() => {
-    void reload().catch(() => undefined);
-    const onFocus = () => { if (document.visibilityState === 'visible') void reload().catch(() => undefined); };
+    const refresh = () => void reload().catch(() => undefined);
+    refresh();
+    const onFocus = () => { if (document.visibilityState === 'visible') refresh(); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
-    return () => { window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus); };
+    const unsubscribe = subscribePluginManifests(refresh);
+    return () => {
+      unsubscribe();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
   }, [reload]);
 
   return { entries, error, loading, loadedAt, reload };
+}
+
+type PluginsEvent = { plugins: { name: string; manifest_hash: string }[] };
+
+/** Calls onChange when any installed plugin's manifest hash changes. */
+function subscribePluginManifests(onChange: () => void): () => void {
+  if (typeof EventSource === 'undefined') return () => undefined;
+  const source = new EventSource('/api/stream');
+  let known: string | null = null;
+  source.addEventListener('plugins', (raw) => {
+    let value: PluginsEvent;
+    try { value = JSON.parse((raw as MessageEvent<string>).data) as PluginsEvent; } catch { return; }
+    const signature = value.plugins.map(p => `${p.name}:${p.manifest_hash}`).join('|');
+    if (known !== null && known !== signature) onChange();
+    known = signature;
+  });
+  // Each (re)connect starts with a full snapshot, so edits made while the stream
+  // was down still differ from `known`. The first snapshot matches the initial load.
+  return () => source.close();
 }

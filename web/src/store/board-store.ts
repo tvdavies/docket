@@ -92,7 +92,9 @@ export class BoardStore {
   }
 
   applyConfig(config: StreamConfig) {
-    if (JSON.stringify(config.plugins) !== JSON.stringify(this.config.plugins)) this.widgets.reset();
+    // A new UI asset generation alone keeps live previews; declaration changes revoke them.
+    const declarations = (plugins: StreamConfig['plugins']) => JSON.stringify((plugins || []).map(({ ui_base: _, ...rest }) => rest));
+    if (declarations(config.plugins) !== declarations(this.config.plugins)) this.widgets.reset();
     this.config = config;
     this.emit();
   }

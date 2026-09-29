@@ -91,6 +91,8 @@ service:
   url: http://127.0.0.1:9000
   healthz: /healthz
   auth: none
+  command: [bin/example-server, --port, "9000"]
+  watch: ["server/**", "bin/example-server"]
 
 cli:
   run: bin/docket-example
@@ -164,6 +166,38 @@ headers cannot be spoofed. `service.auth` is reserved and must be absent or
 Authentication for remote board access remains a board-edge concern; plugin
 services should continue binding loopback and trust only the local proxy.
 
+### Supervised services
+
+Without `service.command`, the plugin runs its service itself (for example as a
+systemd unit) and Docket only proxies it. With `service.command`, `docket serve`
+runs it while the plugin is enabled in at least one registered workspace:
+
+- `command[0]` containing `/` is plugin-relative; otherwise it is looked up on
+  `PATH`. The working directory is the plugin root, and the environment adds
+  `DOCKET_PLUGIN`, `DOCKET_PLUGIN_ROOT`, `DOCKET_PLUGIN_CONFIG` (JSON with the
+  resolved instance `config`), `DOCKET_PLUGIN_SERVICE_URL` and, when
+  `service.url` has a port, `PORT`.
+- The process runs in its own process group. Stopping sends `SIGTERM` to the
+  group and `SIGKILL` five seconds later.
+- A crash restarts it with exponential backoff (1 s doubling to 30 s, reset
+  after ten seconds of uptime).
+- With `service.healthz`, Docket probes `service.url + healthz` every ten
+  seconds; three consecutive failures (connection errors or non-2xx) restart it.
+- `service.watch` globs are plugin-relative; `*` stays within a path segment
+  and `**` spans directories. A matching create, write, rename or delete
+  restarts the process immediately. Dot-directories and `node_modules` are not
+  watched.
+- The process is replaced when the service section, the plugin path or its
+  instance config changes, and stopped when the plugin is disabled everywhere,
+  removed, or the Docket service exits.
+
+Output goes to `${XDG_STATE_HOME:-~/.local/state}/docket/plugins/<name>/service.log`
+(rotated to `.1` at 5 MiB; `DOCKET_STATE_DIR` overrides the base). Read it with
+`docket plugin logs <name> [-f] [-n LINES]`. Each plugin on `GET /api/stream`
+carries a `service` object with `state` (`starting`, `running`, `healthy`,
+`unhealthy`, `backoff`), `pid`, `restarts`, `started_at`, `last_error` and
+`log`.
+
 ### CLI passthrough
 
 `docket <name> <args...>` executes an installed plugin's `cli.run`. Builtin
@@ -174,15 +208,27 @@ injected when available.
 
 ## Hot reload
 
-The service fingerprints the machine registry and installed manifest files.
-Registry or manifest changes restart only the in-process workspace runtimes,
-recompose contributions, and are visible to the dynamic proxy/API without a
-service process restart. Handler identities do not include a generation, so
-existing cursor checkpoints carry across reloads and events do not replay.
-Plugin UI is never part of the Docket build. Files under `ui.dir` are served by
-content hash, so an edit produces a new `ui_base`; reload the page to pick it
-up. Frames that receive a new `ui_base` from the workspace stream swap in place
-and keep their saved state.
+The service watches each installed plugin's manifest and `ui.dir` with
+fsnotify, and still polls the registry every two seconds as a fallback. What a
+change does depends on what changed:
+
+| Change | Effect |
+|---|---|
+| Files under `ui.dir` | New `ui_base`; open frames swap in place and keep their saved state |
+| Only the manifest's `ui` section | Board config is republished; runtimes keep running |
+| Anything else in the manifest, or the registry entry | Workspace runtimes restart and recompose contributions |
+
+None of these restart the Docket service, and the proxy/API see the change
+immediately. A supervised plugin service restarts only for its own `service`
+section or `service.watch` matches (see [Supervised services](#supervised-services)). Handler identities do not include a generation, so cursor
+checkpoints carry across runtime restarts and events do not replay. Plugin UI
+is never part of the Docket build.
+
+`GET /api/stream` is an instance-level SSE stream. Each `plugins` event carries
+the full installed set — `name`, `version`, `manifest_hash`, `ui_hash`,
+`ui_base`, `service` for supervised services and, for a manifest that fails to
+load, `error` — first on connect and
+again after every change. The settings page uses it to reload plugin schemas.
 
 See [Plugin UI reference](plugins/ui.md) for frames and the bridge, and
 [Plugin widgets](plugin-ui.md) for the widget ledger, resolvers and

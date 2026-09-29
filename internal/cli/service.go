@@ -53,6 +53,7 @@ user service.`,
 				}
 				root := filepath.Dir(ws.Root)
 				manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: filepath.Base(root), Path: root}})
+				go manager.WatchPlugins(ctx, 2*time.Second)
 			}
 			return docketservice.Serve(ctx, listen, manager, os.Stderr)
 		},

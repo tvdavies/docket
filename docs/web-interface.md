@@ -165,6 +165,7 @@ does not require a transport redesign.
 | `GET` | `/healthz` | Service health |
 | `GET` | `/api/workspaces` | Runtime status for registered workspaces |
 | `GET` | `/api/plugins` | Installed plugin schemas and current scoped values |
+| `GET` | `/api/stream` | Instance SSE: `plugins` events with manifest and UI hashes |
 | `PATCH` | `/api/plugins/{plugin}/config` | Validate and update instance plugin config |
 | `GET` | `/api/workspaces/{name}/board` | Compatibility board snapshot with plugin metadata |
 | `GET` | `/api/workspaces/{name}/stream` | SSE snapshot + resumable live tail, including plugin metadata |
