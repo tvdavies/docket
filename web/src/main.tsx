@@ -1,10 +1,8 @@
 import { StrictMode, Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
-import { loadBuiltinPluginUI } from './registry/registry';
 import './styles.css';
-
-loadBuiltinPluginUI();
+import './registry/widgets.css';
 
 class AppBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };

@@ -27,7 +27,14 @@ export const workspacePath = (workspace: string) => `/api/workspaces/${encodeURI
 export const taskPath = (workspace: string, task: string, suffix = '') => `${workspacePath(workspace)}/tasks/${encodeURIComponent(task)}${suffix}`;
 
 export const listWorkspaces = () => api<WorkspaceStatus[]>('/api/workspaces');
-export const getTask = (workspace: string, task: string, signal?: AbortSignal) => api<TaskDetail>(taskPath(workspace, task), { signal });
+const taskReads = new Map<string, Promise<TaskDetail>>();
+export const getTask = (workspace: string, task: string, signal?: AbortSignal) => {
+  const path = taskPath(workspace, task);
+  if (signal) return api<TaskDetail>(path, { signal });
+  const existing = taskReads.get(path); if (existing) return existing;
+  const pending = api<TaskDetail>(path).finally(() => { if (taskReads.get(path) === pending) taskReads.delete(path); });
+  taskReads.set(path, pending); return pending;
+};
 export const createTask = (workspace: string, input: CreateTaskInput) => api<TaskDetail>(`${workspacePath(workspace)}/tasks`, { method: 'POST', body: JSON.stringify(input) });
 export const patchTask = (workspace: string, task: string, patch: TaskPatch) => api<TaskDetail>(taskPath(workspace, task), { method: 'PATCH', body: JSON.stringify(patch) });
 export const addComment = (workspace: string, task: string, text: string) => api<TaskDetail>(taskPath(workspace, task, '/comments'), { method: 'POST', body: JSON.stringify({ text }) });

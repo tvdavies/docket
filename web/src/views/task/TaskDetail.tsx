@@ -5,13 +5,15 @@ import { Textarea } from '../../components/ui/textarea';
 import type { LivePayload, StreamConfig, TaskDetail as TaskDetailValue, TaskPatch } from '../../types';
 import { addComment, addReference, getActor, getTask, removeReference, resolveWait, taskPath, uploadAttachment } from '../../api/client';
 import { ResolvedReference } from '../../registry/ResolvedReference';
-import { PluginCardHost } from '../../registry/PluginCardHost';
+import { WidgetCard } from '../../plugin-host/WidgetCard';
+import { TaskPanels } from '../../plugin-host/PluginViews';
+import type { WidgetRecordV1, BoardTask } from '@docket/plugin-sdk';
 
 const humanize = (value: string) => value.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 const formatDate = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 
-export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdatedAt, onClose, onPatch, onCursor, onDraftChange }: {
-  workspace: string; taskId: string; open: boolean; config: StreamConfig; live: LivePayload[]; summaryUpdatedAt?: string;
+export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdatedAt, widgetRevision, summaryTask, onClose, onPatch, onCursor, onDraftChange }: {
+  workspace: string; taskId: string; open: boolean; config: StreamConfig; live: LivePayload[]; summaryUpdatedAt?: string; widgetRevision?: string; summaryTask?: BoardTask;
   onClose(): void; onPatch(task: string, patch: TaskPatch): Promise<TaskDetailValue>; onCursor(cursor?: string): void; onDraftChange?(dirty: boolean): void;
 }) {
   const [detail, setDetail] = useState<TaskDetailValue | null>(null);
@@ -27,6 +29,7 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
   const [busy, setBusy] = useState(false);
   const request = useRef(0);
   const hasDraft = editing || propertyDraft || waitDraft || resourceDraft || Boolean(comment.trim());
+  const draftRef = useRef(false); draftRef.current = hasDraft;
   const acceptDetail = (value: TaskDetailValue) => { request.current += 1; setDetail(value); onCursor(value.cursor); };
   useEffect(() => { onDraftChange?.(hasDraft); return () => onDraftChange?.(false); }, [hasDraft, onDraftChange]);
   useEffect(() => { const beforeUnload = (event: BeforeUnloadEvent) => { if (hasDraft) event.preventDefault(); }; window.addEventListener('beforeunload', beforeUnload); return () => window.removeEventListener('beforeunload', beforeUnload); }, [hasDraft]);
@@ -35,7 +38,7 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
     const token = ++request.current;
     try {
       const value = await getTask(workspace, taskId);
-      if (token !== request.current || (background && hasDraft)) return;
+      if (token !== request.current || (background && draftRef.current)) return;
       setDetail(value); setTitle(value.title); setDescription(value.description); setError(''); onCursor(value.cursor);
     } catch (cause) { if (token === request.current) setError(cause instanceof Error ? cause.message : String(cause)); }
   };
@@ -49,6 +52,21 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
   useEffect(() => {
     if (open && detail && summaryUpdatedAt && summaryUpdatedAt !== detail.updated_at && !hasDraft) void load(true);
   }, [summaryUpdatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!open || !detail) return;
+    const abort = new AbortController();
+    // Lifecycle metadata updates independently of unsaved task input.
+    void getTask(workspace, taskId, abort.signal).then(value => {
+      if (abort.signal.aborted) return;
+      setDetail(current => current ? { ...current, widgets: value.widgets, widget_revision: value.widget_revision, references: value.references,
+        activity: [...current.activity.filter(entry => entry.kind !== 'widget').map(entry => {
+          const latest = value.activity.find(candidate => candidate.at === entry.at && candidate.type === entry.type);
+          return latest?.data?.reference ? { ...entry, data: { ...entry.data, reference: latest.data.reference } } : entry;
+        }), ...value.activity.filter(entry => entry.kind === 'widget')] } : current);
+    }).catch(() => undefined);
+    return () => abort.abort();
+  }, [widgetRevision, config.resolver_generation]);
 
   const patch = async (value: TaskPatch) => {
     request.current += 1;
@@ -64,7 +82,6 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
 
   const close = onClose;
 
-  const liveForTask = live.filter((item) => item.task === taskId);
 
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (open) heading.current?.focus(); }, [open, taskId]);
@@ -83,8 +100,6 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
           {!detail && !error && <div className="detail-loading">Loading task…</div>}
           {detail && <div className="detail-layout">
             <div className="detail-document">
-              {liveForTask.length > 0 && <div className="live-detail">Live · {liveForTask.map((item) => item.kind).join(', ')}</div>}
-              <PluginCardHost workspace={workspace} task={detailToBoard(detail)} refresh={() => void load(true)} />
               {editing ? <section className="edit-stack">
                 <label>Title<Input value={title} onChange={(event) => setTitle(event.target.value)} disabled={busy} /></label>
                 <label>Description<Textarea rows={12} value={description} onChange={(event) => setDescription(event.target.value)} disabled={busy} /></label>
@@ -97,7 +112,8 @@ export function TaskDetail({ workspace, taskId, open, config, live, summaryUpdat
               {detail.wait && <WaitPanel detail={detail} workspace={workspace} setDetail={acceptDetail} onCursor={onCursor} onDraftChange={setWaitDraft} />}
               <Resources detail={detail} workspace={workspace} setDetail={acceptDetail} onCursor={onCursor} onDraftChange={setResourceDraft} />
               <Relationships detail={detail} />
-              <Activity detail={detail} />
+              <TaskPanels task={summaryTask ? { ...detailToBoard(detail), ...summaryTask } : detailToBoard(detail)} />
+              <Activity detail={detail} workspace={workspace} config={config} summaryTask={summaryTask} />
               <section className="comment-composer"><label className="sr-only" htmlFor="task-comment">Comment</label><Textarea id="task-comment" className="comment-box" rows={3} placeholder="Leave a comment…" value={comment} onChange={(event) => setComment(event.target.value)} />
                 <div className="button-row"><Button disabled={busy || !comment.trim()} onClick={async () => {
                   const text = comment.trim(); if (!text) return; setBusy(true); setComment('');
@@ -158,20 +174,29 @@ function Relationships({ detail }: { detail: TaskDetailValue }) {
   return <section><h2>Relationships</h2><div className="relationship-list">{entries.flatMap(([kind, tasks]) => tasks.map((task) => <span key={`${kind}-${task.id}`}>{humanize(kind)} · {task.id}{task.title ? ` · ${task.title}` : ''}</span>))}</div></section>;
 }
 
-export function Activity({ detail }: { detail: TaskDetailValue }) {
+export function Activity({ detail, workspace = '', config, summaryTask }: { detail: TaskDetailValue; summaryTask?: BoardTask; workspace?: string; config?: StreamConfig }) {
+  const [limit, setLimit] = useState(20);
   const entries = useMemo(() => [...detail.activity].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)), [detail.activity]);
-  return <section className="activity-section"><h2>Activity <span className="activity-count">{entries.length}</span></h2>{!entries.length && <p className="muted">No activity yet.</p>}<ol className="activity-list">{entries.map((entry, index) => {
+  let mounted = 0;
+  const widgetTask = summaryTask ? { ...detailToBoard(detail), ...summaryTask, sessions: detail.sessions || summaryTask.sessions } : undefined;
+  return <section id="activity" className="activity-section"><h2>Activity <span className="activity-count">{entries.length}</span></h2>{!entries.length && <p className="muted">No activity yet.</p>}<ol className="activity-list">{entries.map((entry, index) => {
     const reference = entry.data?.reference as any;
+    if (entry.kind === 'widget') {
+      const record = entry.data?.record as WidgetRecordV1;
+      if (!record) return null;
+      const rich = mounted++ < limit;
+      return <li className="activity-entry" key={`widget-${record.widget_type}-${record.instance_id}`}><span className="activity-marker" aria-hidden="true">◇</span><article><header className="activity-meta"><span>{record.widget_type.split('/')[0]}</span><time dateTime={entry.at}>{formatDate(entry.at)}</time></header>{rich ? <WidgetCard workspace={workspace} task={widgetTask || detailToBoard(detail)} record={record} location="activity" config={config?.plugins} /> : <p>{record.fallback.label} · {record.fallback.status_label} · {record.fallback.summary}</p>}</article></li>;
+    }
     const isComment = entry.kind === 'comment' || entry.type === 'comment';
-    return <li key={`${entry.at}-${index}`} className={`activity-entry ${isComment ? 'comment-entry' : ''}`}>
+    return <li key={`${entry.kind}-${entry.type}-${entry.at}-${entry.session || ''}`} className={`activity-entry ${isComment ? 'comment-entry' : ''}`}>
       <span className="activity-marker" aria-hidden="true">{isComment ? (entry.actor || 'D').slice(0, 1).toUpperCase() : '·'}</span>
       <article><header className="activity-meta"><span><b>{entry.actor || 'Docket'}</b> {activityTitle(entry)}</span><time dateTime={entry.at}>{formatDate(entry.at)}</time></header>
       {entry.body_html ? <div className="markdown activity-body" dangerouslySetInnerHTML={{ __html: entry.body_html }} /> : entry.body ? <p className="activity-body">{entry.body}</p> : null}{reference?.url && <ResolvedReference reference={reference} />}</article>
     </li>;
-  })}</ol></section>;
+  })}</ol>{mounted > limit && <button onClick={() => setLimit(value => value + 20)}>Show more widgets</button>}</section>;
 }
 function detailToBoard(detail: TaskDetailValue) {
-  return { id: detail.id, title: detail.title, status: detail.status, project: detail.project?.id, labels: detail.labels, assignee: detail.assignee, wait: detail.wait, references: detail.references, active_sessions: [], created_at: detail.created_at, updated_at: detail.updated_at, resource_count: detail.references.length + detail.attachments.length };
+  return { id: detail.id, title: detail.title, status: detail.status, project: detail.project?.id, labels: detail.labels, assignee: detail.assignee, wait: detail.wait, references: detail.references, active_sessions: detail.active_sessions || [], sessions: detail.sessions, widget_summaries: detail.widgets, widget_revision: detail.widget_revision, created_at: detail.created_at, updated_at: detail.updated_at, resource_count: detail.references.length + detail.attachments.length };
 }
 
 function safeURL(value: string) { try { const parsed = new URL(value); return ['http:', 'https:', 'file:'].includes(parsed.protocol) ? parsed.href : ''; } catch { return ''; } }

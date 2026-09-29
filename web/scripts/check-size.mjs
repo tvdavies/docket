@@ -7,7 +7,7 @@ const files = [];
 const walk = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) walk(path);
+    if (entry.isDirectory()) { if (entry.name !== 'plugin-sdk') walk(path); }
     else if (/\.(html|css|js)$/.test(entry.name)) files.push(path);
   }
 };

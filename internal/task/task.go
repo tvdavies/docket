@@ -37,12 +37,14 @@ type Wait struct {
 
 // Reference is a durable typed link to an external artifact or system.
 type Reference struct {
-	ID      string    `yaml:"id" json:"id"`
-	Kind    string    `yaml:"kind" json:"kind"`
-	URL     string    `yaml:"url" json:"url"`
-	Title   string    `yaml:"title,omitempty" json:"title,omitempty"`
-	AddedAt time.Time `yaml:"added_at" json:"added_at"`
-	AddedBy string    `yaml:"added_by,omitempty" json:"added_by,omitempty"`
+	ResolverID         string    `yaml:"-" json:"resolver_id,omitempty"`
+	ResolverGeneration string    `yaml:"-" json:"resolver_generation,omitempty"`
+	ID                 string    `yaml:"id" json:"id"`
+	Kind               string    `yaml:"kind" json:"kind"`
+	URL                string    `yaml:"url" json:"url"`
+	Title              string    `yaml:"title,omitempty" json:"title,omitempty"`
+	AddedAt            time.Time `yaml:"added_at" json:"added_at"`
+	AddedBy            string    `yaml:"added_by,omitempty" json:"added_by,omitempty"`
 }
 
 type Task struct {

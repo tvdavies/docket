@@ -6,7 +6,7 @@
 **Docket base:** `30ec1b1c3503843933f97462ee5dd327547545ed`
 **Dispatch prior art:** `5bf8aa95eb7b0da03a32c2b8ed001b4ce0d09df4` (`web/src/sessionProjection.ts`, `components/SessionView.tsx`, `hooks/useFollowAtEnd.ts`)
 
-This directory is **design documentation and a fixture-only prototype**. It changes no production Docket or Dispatch code, no plugin manifest, and not `docs/plugin-ui.d.ts`. It is not an SDK, loader, kit package or second session projection.
+This directory is **design documentation and a fixture-only prototype**. It changes no production Docket or Dispatch code, no plugin manifest, and not `docs/plugin-sdk.d.ts`. It is not an SDK, loader, kit package or second session projection.
 
 | File | What it is |
 | --- | --- |

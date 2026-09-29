@@ -58,7 +58,9 @@ docket show "$ID"       # dossier + waits + references + sessions + activity
 - [Waits, references, and activity](docs/waits-and-references.md) — durable external dependencies and temporal context
 - [Lua hooks and SDK](docs/lua-hooks.md) — runtime, event schema, APIs, and debugging
 - [Plugins](docs/plugins.md) — manifests, installation, extension points, proxying, and config
-- [Plugin UI contract](docs/plugin-ui.md) — card, resolver, and generated-settings interfaces
+- [Authoring plugins](docs/plugins/authoring.md) — build a plugin against a running Docket
+- [Plugin UI reference](docs/plugins/ui.md) — sandboxed frames, bridge API, and theming
+- [Plugin widgets](docs/plugin-ui.md) — widget ledger, live previews, resolvers, and generated settings
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
 
 Run `docket COMMAND --help` for exact local usage and examples, or `docket skill`

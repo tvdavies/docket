@@ -14,6 +14,7 @@ export type Preferences = {
   fields: { assignee: boolean; labels: boolean; project: boolean; references: boolean; updated: boolean };
   savedViews: SavedView[];
   theme: 'system' | 'light' | 'dark';
+  density?: 'compact' | 'comfortable';
 };
 
 const orders = new Set<Order>(['updated-desc', 'updated-asc', 'created-desc', 'created-asc', 'id-asc', 'id-desc', 'title-asc', 'title-desc']);
@@ -36,6 +37,7 @@ export function defaultPreferences(mobile = false): Preferences {
     fields: { assignee: true, labels: true, project: false, references: true, updated: true },
     savedViews: [],
     theme: 'system',
+    density: 'comfortable',
   };
 }
 
@@ -78,6 +80,7 @@ export function loadPreferences(workspace: string, config: StreamConfig, tasks: 
       },
     })) : [],
     theme: ['system', 'light', 'dark'].includes(input.theme) ? input.theme : 'system',
+    density: input.density === 'compact' ? 'compact' : 'comfortable',
   };
 }
 

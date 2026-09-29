@@ -6,12 +6,14 @@ package bundle
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/project"
 	"github.com/tvdavies/docket/internal/session"
 	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/widget"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
@@ -71,6 +73,8 @@ type Bundle struct {
 	// context attachment is not an external execution-liveness signal.
 	ActiveSessions []session.Entry `json:"active_sessions"`
 	Activity       []ActivityView  `json:"activity"`
+	Widgets        []widget.Record `json:"widgets"`
+	WidgetRevision string          `json:"widget_revision"`
 }
 
 // Build assembles the bundle for a task. commentLimit > 0 keeps only the most
@@ -127,6 +131,20 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 		return nil, err
 	}
 
+	b.Widgets = widget.Fold(log).Records(t.ID)
+	b.WidgetRevision = widget.Revision(b.Widgets)
+	for _, record := range b.Widgets {
+		body := record.Fallback.Label + " · " + record.Fallback.StatusLabel
+		if record.Fallback.Summary != "" {
+			body += "\n" + record.Fallback.Summary
+		}
+		for _, ref := range record.Fallback.References {
+			label := strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]").Replace(ref.Title)
+			href := strings.NewReplacer("<", "%3C", ">", "%3E").Replace(ref.URL)
+			body += "\n\n[" + label + "](<" + href + ">)"
+		}
+		b.Activity = append(b.Activity, ActivityView{At: record.CreatedAt, Kind: "widget", Type: record.WidgetType, Body: body, Data: map[string]any{"record": record}, sortTime: parseActivityTime(record.CreatedAt), order: len(b.Activity)})
+	}
 	comments, err := t.Comments()
 	if err != nil {
 		return nil, err
@@ -182,7 +200,7 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 	}
 
 	for _, event := range log {
-		if event.Task != t.ID || event.Type == events.TaskCommented || event.Type == events.TaskAttached || event.Type == events.TaskDetached {
+		if event.Task != t.ID || event.Type == events.TaskCommented || event.Type == events.TaskAttached || event.Type == events.TaskDetached || event.Type == widget.Created || event.Type == widget.Finalised {
 			continue
 		}
 		b.Activity = append(b.Activity, ActivityView{

@@ -1,0 +1,19 @@
+/* Theme tokens arrive from the host as CSS variables on :root. */
+:root { color-scheme: light dark; }
+body {
+  margin: 0;
+  padding: var(--docket-widget-pad, 12px);
+  font: var(--docket-widget-text-size, 14px) / var(--docket-widget-line-height, 1.5) var(--docket-widget-font, system-ui, sans-serif);
+  color: var(--docket-widget-text);
+  background: var(--docket-widget-surface);
+}
+button {
+  font: inherit;
+  color: var(--docket-widget-accent);
+  background: var(--docket-widget-raised);
+  border: 1px solid var(--docket-widget-border);
+  border-radius: var(--docket-widget-radius, 7px);
+  padding: 4px 10px;
+}
+.muted { color: var(--docket-widget-muted); }
+pre { font-family: var(--docket-widget-mono); white-space: pre-wrap; background: var(--docket-widget-sunken); padding: 8px; border-radius: 6px; }

@@ -57,6 +57,7 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 	mux := http.NewServeMux()
 	registerAPI(mux, manager, allowRemoteHost)
 	mux.Handle("/plugins/{plugin}/{path...}", pluginProxy(manager, allowRemoteHost))
+	mux.Handle("GET /plugin-ui/{plugin}/{hash}/{path...}", pluginUIAssets())
 
 	nextAssets, err := fs.Sub(webassets.Dist, "dist")
 	if err != nil {
@@ -67,6 +68,14 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		panic(err)
 	}
 	mux.Handle("GET /assets/", cacheAssets(http.FileServer(http.FS(nextAssets)), true))
+	// The in-frame SDK client, for plugin UIs without a build step. Frames
+	// have an opaque origin, so module loads are CORS requests.
+	mux.Handle("GET /plugin-sdk/", cacheAssets(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		writer.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		http.FileServer(http.FS(nextAssets)).ServeHTTP(writer, request)
+	}), false))
 	mux.Handle("GET /classic-assets/", http.StripPrefix("/classic-assets/", cacheAssets(http.FileServer(http.FS(classicAssets)), false)))
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
@@ -93,7 +102,7 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		writer.Header().Set("Cache-Control", "no-cache")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 		_, _ = writer.Write(index)
 	})
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
