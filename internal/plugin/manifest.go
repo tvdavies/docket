@@ -10,8 +10,10 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -84,10 +86,38 @@ type CLI struct {
 	Run string `yaml:"run" json:"run"`
 }
 
+// UI declares a plugin's browser contributions. Plugin code never runs in the
+// Docket page: Docket renders declarative widget presentations itself and
+// loads entries from Dir into opaque-origin sandboxed iframes.
 type UI struct {
-	APIVersion         int                 `yaml:"api_version,omitempty" json:"api_version,omitempty"`
-	Cards              []Card              `yaml:"cards,omitempty" json:"cards,omitempty"`
+	// Dir holds static UI assets served at /plugin-ui/<name>/<hash>/.
+	Dir                string              `yaml:"dir,omitempty" json:"dir,omitempty"`
+	Capabilities       []string            `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Widgets            []Widget            `yaml:"widgets,omitempty" json:"widgets,omitempty"`
+	Panels             []View              `yaml:"panels,omitempty" json:"panels,omitempty"`
+	Pages              []View              `yaml:"pages,omitempty" json:"pages,omitempty"`
 	ReferenceResolvers []ReferenceResolver `yaml:"reference_resolvers,omitempty" json:"reference_resolvers,omitempty"`
+
+	// Deprecated: api_version and cards describe the retired build-time UI.
+	// Cards with api_version >= 2 still declare presentation-only widgets.
+	APIVersion int    `yaml:"api_version,omitempty" json:"api_version,omitempty"`
+	Cards      []Card `yaml:"cards,omitempty" json:"cards,omitempty"`
+}
+
+// Widget is a task-ledger widget type. Slots choose where its presentation
+// appears; Entry, when set, is the iframe opened from the activity timeline.
+type Widget struct {
+	Type  string   `yaml:"type" json:"type"`
+	Title string   `yaml:"title" json:"title"`
+	Entry string   `yaml:"entry,omitempty" json:"entry,omitempty"`
+	Slots []string `yaml:"slots,omitempty" json:"slots"`
+}
+
+// View is an iframe contribution: a task detail panel or a workspace page.
+type View struct {
+	ID    string `yaml:"id" json:"id"`
+	Title string `yaml:"title" json:"title"`
+	Entry string `yaml:"entry" json:"entry"`
 }
 
 type Card struct {
@@ -100,6 +130,43 @@ type ReferenceResolver struct {
 	ID      string   `yaml:"id" json:"id"`
 	Pattern string   `yaml:"pattern" json:"pattern"`
 	Kinds   []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
+	// Endpoint is a service path that receives the reference as JSON and
+	// returns {label, icon?, meta?, href?}. Without it references show as-is.
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+}
+
+// UI capabilities a sandboxed frame may request through the host bridge.
+var Capabilities = []string{"task.read", "task.comment", "task.move", "service.fetch", "service.stream", "open.external"}
+
+// WidgetSlots are the placements a widget presentation may use.
+var WidgetSlots = []string{"board", "activity"}
+
+// DeclaredWidgets returns every ledger widget type, including deprecated v2
+// cards, with default slots applied.
+func (ui UI) DeclaredWidgets() []Widget {
+	result := make([]Widget, 0, len(ui.Widgets)+len(ui.Cards))
+	for _, declared := range ui.Widgets {
+		if len(declared.Slots) == 0 {
+			declared.Slots = append([]string{}, WidgetSlots...)
+		}
+		result = append(result, declared)
+	}
+	if ui.APIVersion >= 2 {
+		for _, card := range ui.Cards {
+			result = append(result, Widget{Type: card.Type, Title: card.Title, Slots: append([]string{}, card.Locations...)})
+		}
+	}
+	return result
+}
+
+// DeclaresWidget reports whether kind is a ledger widget type of this plugin.
+func (ui UI) DeclaresWidget(kind string) bool {
+	for _, declared := range ui.DeclaredWidgets() {
+		if declared.Type == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // EffectiveConfig is the validated configuration delivered to a plugin.
@@ -249,7 +316,99 @@ func (m *Manifest) Validate(engineVersion string) error {
 		if _, err := regexp.Compile(resolver.Pattern); err != nil {
 			return fmt.Errorf("reference resolver %q pattern: %w", resolver.ID, err)
 		}
+		if resolver.Endpoint != "" {
+			if m.Service == nil {
+				return fmt.Errorf("reference resolver %q endpoint requires a service", resolver.ID)
+			}
+			if err := validateServicePath("reference resolver "+resolver.ID+" endpoint", resolver.Endpoint); err != nil {
+				return err
+			}
+		}
 		seenResolvers[resolver.ID] = true
+	}
+	return m.validateFrames(seenCards)
+}
+
+func (m *Manifest) validateFrames(seenTypes map[string]bool) error {
+	if m.UI.Dir != "" {
+		if err := validateRelativePath("ui.dir", m.UI.Dir); err != nil {
+			return err
+		}
+	}
+	seenCapabilities := map[string]bool{}
+	for _, capability := range m.UI.Capabilities {
+		if !slices.Contains(Capabilities, capability) || seenCapabilities[capability] {
+			return fmt.Errorf("ui capability %q is unknown or duplicated (allowed: %s)", capability, strings.Join(Capabilities, ", "))
+		}
+		if strings.HasPrefix(capability, "service.") && m.Service == nil {
+			return fmt.Errorf("ui capability %q requires a service", capability)
+		}
+		seenCapabilities[capability] = true
+	}
+	entry := func(field, value string, required bool) error {
+		if value == "" && !required {
+			return nil
+		}
+		if m.UI.Dir == "" {
+			return fmt.Errorf("%s requires ui.dir", field)
+		}
+		return validateAssetPath(field, value)
+	}
+	for _, declared := range m.UI.Widgets {
+		if declared.Type == "" || !strings.HasPrefix(declared.Type, m.Name+"/") || !widgetTypePattern.MatchString(declared.Type) {
+			return fmt.Errorf("ui widget type %q must be namespaced %s/...", declared.Type, m.Name)
+		}
+		if seenTypes[declared.Type] {
+			return fmt.Errorf("ui widget type %q is duplicated", declared.Type)
+		}
+		seenTypes[declared.Type] = true
+		if strings.TrimSpace(declared.Title) == "" {
+			return fmt.Errorf("ui widget %q requires a title", declared.Type)
+		}
+		seenSlots := map[string]bool{}
+		for _, slot := range declared.Slots {
+			if !slices.Contains(WidgetSlots, slot) || seenSlots[slot] {
+				return fmt.Errorf("ui widget %q has invalid/duplicate slot %q (allowed: %s)", declared.Type, slot, strings.Join(WidgetSlots, ", "))
+			}
+			seenSlots[slot] = true
+		}
+		if err := entry("ui widget "+declared.Type+" entry", declared.Entry, false); err != nil {
+			return err
+		}
+	}
+	for kind, views := range map[string][]View{"panel": m.UI.Panels, "page": m.UI.Pages} {
+		seen := map[string]bool{}
+		for _, view := range views {
+			if !namePattern.MatchString(view.ID) || seen[view.ID] {
+				return fmt.Errorf("ui %s id %q must be unique and match %s", kind, view.ID, namePattern)
+			}
+			seen[view.ID] = true
+			if strings.TrimSpace(view.Title) == "" {
+				return fmt.Errorf("ui %s %q requires a title", kind, view.ID)
+			}
+			if err := entry("ui "+kind+" "+view.ID+" entry", view.Entry, true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+var widgetTypePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*/[a-zA-Z0-9][a-zA-Z0-9_/-]{0,98}$`)
+
+// validateAssetPath accepts a clean, relative URL path such as "widget.html"
+// or "pages/fleet.html". Query strings and fragments are not part of an entry.
+func validateAssetPath(field, value string) error {
+	if value == "" || strings.ContainsAny(value, "\\?#%") || strings.HasPrefix(value, "/") || path.Clean(value) != value || value == ".." || strings.HasPrefix(value, "../") {
+		return fmt.Errorf("%s must be a clean relative path inside ui.dir", field)
+	}
+	return nil
+}
+
+// validateServicePath accepts an absolute service path without traversal.
+func validateServicePath(field, value string) error {
+	if !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") || strings.ContainsAny(value, "\\?#%") || path.Clean(value) != value {
+		return fmt.Errorf("%s must be a clean absolute service path", field)
 	}
 	return nil
 }

@@ -89,14 +89,7 @@ func (stream *workspaceStream) removeWidget(record widget.Record) {
 	delete(stream.widgets, key) // The durable terminal record now owns the fence.
 }
 func declaredWidget(ws *workspace.Workspace, kind string) bool {
-	for _, p := range ws.Plugins {
-		for _, c := range p.Manifest.UI.Cards {
-			if c.Type == kind && p.Manifest.UI.APIVersion >= 2 {
-				return true
-			}
-		}
-	}
-	return false
+	return widget.Enabled(ws, kind)
 }
 func (stream *workspaceStream) ingestWidget(ws *workspace.Workspace, input livePayload) (time.Time, error) {
 	var expires time.Time

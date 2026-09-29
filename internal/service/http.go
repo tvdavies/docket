@@ -57,6 +57,7 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 	mux := http.NewServeMux()
 	registerAPI(mux, manager, allowRemoteHost)
 	mux.Handle("/plugins/{plugin}/{path...}", pluginProxy(manager, allowRemoteHost))
+	mux.Handle("GET /plugin-ui/{plugin}/{hash}/{path...}", pluginUIAssets())
 
 	nextAssets, err := fs.Sub(webassets.Dist, "dist")
 	if err != nil {
@@ -93,7 +94,7 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		writer.Header().Set("Cache-Control", "no-cache")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 		_, _ = writer.Write(index)
 	})
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

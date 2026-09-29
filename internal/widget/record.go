@@ -116,13 +116,8 @@ func Validate(r Record, workspaceName string) error {
 }
 func Enabled(ws *workspace.Workspace, kind string) bool {
 	for _, p := range ws.Plugins {
-		if p.Manifest.UI.APIVersion != 2 {
-			continue
-		}
-		for _, c := range p.Manifest.UI.Cards {
-			if c.Type == kind {
-				return true
-			}
+		if p.Manifest.UI.DeclaresWidget(kind) {
+			return true
 		}
 	}
 	return false

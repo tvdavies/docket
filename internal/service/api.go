@@ -49,6 +49,12 @@ type boardPlugin struct {
 	Cards              []plugin.Card              `json:"cards"`
 	ReferenceResolvers []plugin.ReferenceResolver `json:"reference_resolvers"`
 	ServiceBase        string                     `json:"service_base,omitempty"`
+	Widgets            []plugin.Widget            `json:"widgets"`
+	Panels             []plugin.View              `json:"panels"`
+	Pages              []plugin.View              `json:"pages"`
+	Capabilities       []string                   `json:"capabilities"`
+	// UIBase is /plugin-ui/<name>/<hash>; it changes whenever ui.dir changes.
+	UIBase string `json:"ui_base,omitempty"`
 }
 
 type pluginAPIEntry struct {
@@ -562,8 +568,15 @@ func pluginsForBoard(ws *workspace.Workspace) []boardPlugin {
 			Cards:              append([]plugin.Card{}, loaded.Manifest.UI.Cards...),
 			ReferenceResolvers: append([]plugin.ReferenceResolver{}, loaded.Manifest.UI.ReferenceResolvers...),
 		}
+		metadata.Widgets = loaded.Manifest.UI.DeclaredWidgets()
+		metadata.Panels = append([]plugin.View{}, loaded.Manifest.UI.Panels...)
+		metadata.Pages = append([]plugin.View{}, loaded.Manifest.UI.Pages...)
+		metadata.Capabilities = append([]string{}, loaded.Manifest.UI.Capabilities...)
 		if loaded.Manifest.Service != nil {
 			metadata.ServiceBase = "/plugins/" + loaded.Manifest.Name
+		}
+		if hash, err := loaded.Manifest.UIHash(); err == nil && hash != "" {
+			metadata.UIBase = "/plugin-ui/" + loaded.Manifest.Name + "/" + hash
 		}
 		result = append(result, metadata)
 	}
