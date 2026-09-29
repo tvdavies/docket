@@ -1,14 +1,18 @@
 # docket
 
-A generic file-backed task system with durable context, event hooks, and a local Kanban board.
+A file-backed task CLI for humans and agents, with durable context, event hooks, and an optional headless event runner.
 
 > A **docket** is the slip that travels with a job through the shop, carrying its details; a court docket is a list of cases moving through their stages. Both readings are the product: the task folder is the docket — it carries the work and its context between people, tools, and processes.
 
 Durable tasks are the whole point: plain files in a directory, **no database**, surviving across sessions, machines, and `git clone`. A later human or tool resumes by reading the task's complete context bundle. Harness-neutral workspace handlers decide what runs when events arrive; execution protocols and live run interfaces remain outside Docket.
 
-A single static Go binary, ~8MB, zero runtime dependencies. The CLI works by
-itself; an optional systemd user service watches all registered workspaces and
-serves one local writable Kanban board.
+A single static Go binary with zero runtime dependencies. The CLI works by
+itself; an optional event runner (`docket run`) watches registered workspaces
+and delivers asynchronous hooks. Docket has no web UI or HTTP API: a separate
+UI can drive it through the CLI and its JSON output.
+
+> **Upgrading from a release with the web board?** See
+> [Migrating to the headless CLI](docs/migration-headless.md).
 
 ## Install
 
@@ -53,15 +57,14 @@ docket show "$ID"       # dossier + waits + references + sessions + activity
 ## Documentation
 
 - [CLI guide](docs/cli.md) — workflows, command map, flags, errors, and examples
-- [Configuration reference](docs/configuration.md) — workspace and service config
-- [Web interface](docs/web-interface.md) — board features, security, and HTTP API
+- [Configuration reference](docs/configuration.md) — workspace and runner config
 - [Waits, references, and activity](docs/waits-and-references.md) — durable external dependencies and temporal context
 - [Lua hooks and SDK](docs/lua-hooks.md) — runtime, event schema, APIs, and debugging
-- [Plugins](docs/plugins.md) — manifests, installation, extension points, proxying, and config
-- [Authoring plugins](docs/plugins/authoring.md) — build a plugin against a running Docket
-- [Plugin UI reference](docs/plugins/ui.md) — sandboxed frames, bridge API, and theming
-- [Plugin widgets](docs/plugin-ui.md) — widget ledger, live previews, resolvers, and generated settings
+- [Inbox consumers](docs/inbox.md) — polling, durable acknowledgement, and recovery
+- [Plugins](docs/plugins.md) — manifests, installation, hooks, statuses, and config
+- [Authoring plugins](docs/plugins/authoring.md) — build a headless plugin
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
+- [Migrating to the headless CLI](docs/migration-headless.md) — removed web features and upgrade steps
 
 Run `docket COMMAND --help` for exact local usage and examples, or `docket skill`
 for a self-contained guide suitable for an agent harness.
@@ -77,44 +80,49 @@ Session attachment is optional shorthand that lets later commands omit the task
 ID. It does not assign, claim, lock, or start work; explicit IDs are recommended
 for automation. See [Session attachment](docs/sessions.md).
 
-## Workspaces and the machine-wide service
+## Workspaces and the event runner
 
 A **Docket workspace** is one `.docket/` store, normally rooted in a repository.
 A Docket **project** is a logical grouping inside that store. `docket init` both
-creates and registers the current workspace, and is safe to repeat. One optional
-user service manages any number of registered workspaces:
+creates and registers the current workspace, and is safe to repeat. One
+optional event runner handles any number of registered workspaces:
 
 ```sh
 cd ~/dev/client-a && docket init
 docket workspace add ~/dev/client-b --name client-b  # explicit name for an existing store
 docket workspace list
 
-docket serve --all                         # foreground; http://127.0.0.1:7463
-docket service install                     # write the systemd user unit
-docket service start                       # enable and start it
+docket run --all                           # foreground runner for every workspace
+docket run --once --all                    # deliver pending hooks once and exit
+docket service install                     # optional systemd user unit (runs `run --all`)
+docket service start
 docket service status
 docket service logs                        # journalctl follow
 ```
 
+The runner opens no network listener. It watches each workspace's event log
+and config, drains every handler's durable cursor, and reloads hooks when
+`config.yaml` or an installed plugin manifest changes. `--once` performs one
+bounded drain for a heartbeat or scheduler and exits non-zero if any handler
+failed; failed events stay pending. Containers run `docket run --all` in the
+foreground under their own supervisor.
+
 The machine-local registry is `~/.config/docket/config.yaml` (or
 `$DOCKET_CONFIG`). It contains workspace and installed-plugin registrations,
-instance plugin config, the listen address, and the prune grace; task data stays
-in each workspace. The service notices registry changes within two seconds,
-isolates each workspace runtime, drains handler backlogs, and marks missing
-workspaces unavailable rather than crashing. A registration whose directory
-stays missing beyond `prune_after` (default one hour; `never` disables) is
-unregistered automatically with its task files untouched. Without `--all`,
-`docket serve` watches only the current workspace.
+instance plugin config, and the prune grace; task data stays in each
+workspace. The runner notices registry changes within two seconds, isolates
+each workspace, drains handler backlogs, and marks missing workspaces
+unavailable rather than crashing. A registration whose directory stays missing
+beyond `prune_after` (default one hour; `never` disables) is unregistered
+automatically with its task files untouched. Without `--all`, `docket run`
+watches only the current workspace.
 
-The systemd unit runs once per user/machine — never once per workspace — and
-serves one writable Kanban UI with all registered workspaces. Board mutations
-use the same locks, atomic writes, validation, and events as CLI commands. It
-does not enable login lingering
-automatically; opt in explicitly with `loginctl enable-linger "$USER"` if the
-service must continue outside login sessions. The generated unit captures the
-current `PATH` and optionally loads `~/.config/docket/environment`; use that file
-for variables required by handler scripts. The UI has no authentication and
-refuses non-loopback binds unless `--allow-remote` is passed explicitly.
+The systemd unit runs once per user/machine, never once per workspace. It does
+not enable login lingering automatically; opt in explicitly with
+`loginctl enable-linger "$USER"` if hooks must keep running outside login
+sessions. The generated unit captures the current `PATH` and optionally loads
+`~/.config/docket/environment`; use that file for variables required by
+handler scripts.
 
 ## Coordination (triggering work elsewhere)
 
@@ -125,15 +133,15 @@ react:
   `.docket/config.yaml`. Every handler owns a durable cursor: delivery is
   ordered and at-least-once, failed batches retry, and an offline handler drains
   its backlog. Inline delivery is the default; `delivery: service` leaves
-  execution to `docket.service` so mutations return immediately without
+  execution to the event runner so mutations return immediately without
   sacrificing durable retry.
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
   you, tracked by a per-actor cursor. Durable consumers use `--peek` and
   `docket inbox ack CHECKPOINT` instead (see [docs/inbox.md](docs/inbox.md)).
 - `docket watch` — **stream**: emits each new event as a JSON line for one
   workspace; it remains a diagnostic primitive rather than the daemon.
-- `docket serve [--all]` — **service**: watches registered workspaces and drains
-  handlers for events written outside a synchronous CLI mutation.
+- `docket run [--all] [--once]` — **runner**: watches registered workspaces and
+  drains handlers for events written outside a synchronous CLI mutation.
 - `docket events [--since N]` — the raw log.
 
 Handlers subscribe by event type, may add exact-value `match` predicates, and
@@ -164,11 +172,13 @@ examples, retry semantics, and debugging guide.
 
 ## Develop
 
+Development needs only Go.
+
 ```sh
-make build        # → bin/docket, using the committed web/dist build
+make build        # → bin/docket
 make test
-make web          # rebuild the React/Vite/Tailwind board (requires Bun)
-make web-check    # rebuild and fail if committed dist drifted
+make vet
+make fmt-check
 make snapshot     # cross-platform release build (needs goreleaser)
 ```
 

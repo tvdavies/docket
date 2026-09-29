@@ -99,12 +99,12 @@ func RunJournal() error {
 // BuildSystemdUnit is separated for exact unit tests.
 func BuildSystemdUnit(binary, configPath, pathEnv string) string {
 	return `[Unit]
-Description=Docket multi-workspace task service
+Description=Docket headless event runner
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=` + systemdQuote(binary) + ` serve --all
+ExecStart=` + systemdQuote(binary) + ` run --all
 Environment=` + systemdQuote("DOCKET_CONFIG="+configPath) + `
 Environment=` + systemdQuote("PATH="+pathEnv) + `
 EnvironmentFile=-%h/.config/docket/environment

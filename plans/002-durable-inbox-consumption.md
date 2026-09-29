@@ -10,6 +10,7 @@
 - Category: correctness and CLI contract.
 - Depends on: none; required before using the inbox as Sal's durable intake.
 - Planned at: `0af2dda`, 30 September 2026.
+- **Implementation status: implemented, awaiting review** (not merged).
 
 ## Background and proposed outcome
 
@@ -83,3 +84,13 @@ For low-latency delivery, a configured Docket hook can use the same Sal intake b
 
 Actor filenames currently normalise some characters to underscores. Do not quietly change their naming scheme in this patch and split existing consumers; if the new binding contract needs a storage change, design and test migration explicitly. Stop and report if reliable validation would require destructive event-log migration, conflating handler/inbox checkpoints, or changing existing output without an additive mode. Refactor existing checkpoint helpers rather than inventing a second incompatible interpretation of physical log positions.
 
+
+## Implementation notes
+
+- **Race fix.** `Inbox --mark-read` now advances to the end of the same `ReadSnapshot` scan that produced the returned events, under a per-actor `store.WithLock` (`.cursors/<actor>.cursor.lock`). `afterInboxSnapshot` is the test seam; `TestInboxMarkReadDoesNotAcknowledgeEventAppendedAfterSnapshot` and `TestInboxMarkReadIsSerialisedPerActor` both fail against the old `Count()` behaviour (checked by mutation).
+- **Syntax chosen:** `docket inbox --peek [--all] --json` returns `{actor, all, events, from, to, checkpoint}`; `docket inbox ack [--actor A] [--all] CHECKPOINT` applies it; `docket inbox --reset` is the explicit recovery after a history change. `--peek`, `--mark-read` and `--reset` are mutually exclusive. `inbox --json` still prints the bare array.
+- **Token:** `dkinbox1.` + base64url JSON binding version, resolved workspace root, actor, filter mode, from/to line positions and prefix hashes at both boundaries. Positions are physical non-empty line counts (the existing `Cursor` unit), never `Event.Seq`.
+- **Storage / lazy migration:** the `.cursor` file keeps its plain-integer format so older binaries and `events.Cursor` callers are unaffected. A sidecar `.cursors/<actor>.checkpoint` records `{position, prefix_hash}`; it is trusted only when its position equals the numeric cursor, so an older binary advancing the cursor simply makes it unverified until the next ack. Actor filename sanitisation is unchanged.
+- **Ack rules:** under the actor lock, the `to` prefix must still match; a cursor already at or beyond `to` is a no-op success (`applied: false`); otherwise the cursor must equal `from` (and match `from_hash` when verified) or the ack fails with `ErrInboxCheckpointStale`. Truncation or rewrite beneath a verified cursor makes `--peek` fail with `ErrInboxHistoryChanged` until `--reset`.
+- **Docs:** new `docs/inbox.md` (embedded as `docket docs inbox`) documents the read → durable intake → ack sequence, crash boundaries, at-least-once/no exactly-once, `watch` as diagnostic only, and hook-based low-latency intake.
+- **Deviation:** none from the plan's intent. `--reset` was added because the plan requires explicit recovery after history changes and there was no existing command for it.

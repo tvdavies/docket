@@ -1,0 +1,27 @@
+name: hello-hooks
+version: 0.1.0
+description: Minimal headless plugin — a Lua hook, a contributed status, scoped config and a CLI.
+requires:
+  docket: ">=0.6.0"
+
+handlers:
+  greet:
+    on: [task.moved]
+    match:
+      data.to: in-review
+    lua: hooks/greet.lua
+    delivery: service
+
+statuses:
+  - name: greeted
+    after: in-review
+
+config:
+  workspace:
+    greeting:
+      type: string
+      default: Hello
+      description: Comment text the hook posts when a task enters in-review.
+
+cli:
+  run: bin/hello-hooks

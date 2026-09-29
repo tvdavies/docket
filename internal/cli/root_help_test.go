@@ -23,12 +23,13 @@ func TestRootHelpGroupsCommandsAndDemotesLegacySessionSurface(t *testing.T) {
 		"Optional session shorthand:",
 		"Automation and event diagnostics:",
 		"session     Optional task pointer",
+		"run         Run the headless event runner",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("help missing %q:\n%s", expected, text)
 		}
 	}
-	for _, hidden := range []string{"\n  attach      ", "\n  detach      ", "\n  current     ", "\n  context     "} {
+	for _, hidden := range []string{"\n  attach      ", "\n  detach      ", "\n  current     ", "\n  context     ", "\n  serve       "} {
 		if strings.Contains(text, hidden) {
 			t.Fatalf("legacy command %q remained in root help:\n%s", hidden, text)
 		}

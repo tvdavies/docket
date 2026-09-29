@@ -40,7 +40,7 @@ base, package, coroutine, table, io, os, string, math, debug, channel
 
 Hooks are trusted code running with the Docket user's filesystem and environment permissions. They may use `io.open`, `os.execute`, `io.popen`, `require`, and other normal Lua facilities.
 
-Process isolation prevents `os.exit()` or blocked Lua IO from terminating or permanently blocking the long-lived Docket service. A handler timeout kills the hook process group and ordinary children. A process deliberately detached into a new session is responsible for its own lifecycle.
+Process isolation prevents `os.exit()` or blocked Lua IO from terminating or permanently blocking the long-lived event runner. A handler timeout kills the hook process group and ordinary children. A process deliberately detached into a new session is responsible for its own lifecycle.
 
 ## Event object
 
@@ -130,7 +130,7 @@ docket.log.warn("using fallback")
 docket.log.error("provider unavailable")
 ```
 
-Arguments are joined with spaces. Inline logs go to the invoking command's stderr; service-delivered logs go to `docket service logs`.
+Arguments are joined with spaces. Inline logs go to the invoking command's stderr; runner-delivered logs go to the stderr of `docket run` (or `docket service logs` when the systemd unit runs it).
 
 Lua's normal `print()` is also available, but SDK logging records a clear severity.
 
@@ -278,7 +278,7 @@ Docket stops a chain that does not settle after 32 drain rounds. Design handlers
 
 ## Failures, retries, and idempotency
 
-A Lua error, failed SDK call, non-zero process exit, or timeout fails the event delivery. The handler cursor remains before the event and the service retries it on a later drain.
+A Lua error, failed SDK call, non-zero process exit, or timeout fails the event delivery. The handler cursor remains before the event and the runner retries it on a later drain.
 
 Delivery is at least once. If a hook performs an external side effect and then fails, that side effect may repeat. Use provider idempotency keys, check existing state, or make writes naturally repeatable.
 
@@ -295,7 +295,7 @@ DOCKET_HANDLER=<handler-name>
 DOCKET_HANDLER_STACK=<ancestry>
 ```
 
-Service-delivered hooks inherit variables from the systemd unit and optional `~/.config/docket/environment` file. Restart the service after changing that file.
+Runner-delivered hooks inherit the environment of `docket run`. Under the systemd unit that is the unit environment plus the optional `~/.config/docket/environment` file; restart the service after changing that file.
 
 ## Debugging hooks
 
@@ -314,9 +314,11 @@ Service-delivered hooks inherit variables from the systemd unit and optional `~/
    docket move TASK-0007 done
    ```
 
-4. For service delivery, inspect:
+4. For `delivery: service`, run the runner once and read its stderr, or inspect
+   the systemd unit if it runs `docket run --all`:
 
    ```sh
+   docket run --once
    docket service status
    docket service logs
    docket events --json

@@ -63,13 +63,14 @@ Absolute URI schemes are supported. Use HTTPS for shareable artifacts and `file:
 
 ## Activity timeline
 
-`docket show` and the web task drawer expose one chronological activity stream assembled from existing authoritative records:
+`docket show` exposes one chronological activity stream assembled from existing authoritative records:
 
 - task events and status transitions from `events.jsonl`;
 - immutable comments;
 - session attach/detach records;
-- wait and resume events; and
-- attachment and reference events.
+- wait and resume events;
+- attachment and reference events; and
+- widget summaries recorded by plugins in earlier releases (read-only history).
 
 The timeline is a computed view, not a second source of truth. Existing workspaces require no migration. The JSON context bundle retains the original `comments`, `sessions`, and other collections while also exposing `activity` for agents and interfaces that need temporal context.
 

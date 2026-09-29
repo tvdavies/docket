@@ -199,26 +199,6 @@ func TestOptionsFromValidation(t *testing.T) {
 	}
 }
 
-func TestMatchWatch(t *testing.T) {
-	for _, test := range []struct {
-		pattern, name string
-		want          bool
-	}{
-		{"server/**/*.js", "server/a.js", true},
-		{"server/**/*.js", "server/lib/deep/a.js", true},
-		{"server/**/*.js", "server/a.ts", false},
-		{"server/**/*.js", "other/a.js", false},
-		{"*.go", "main.go", true},
-		{"*.go", "pkg/main.go", false},
-		{"**", "anything/at/all", true},
-		{"package.json", "package.json", true},
-	} {
-		if got := plugin.MatchWatch(test.pattern, test.name); got != test.want {
-			t.Errorf("MatchWatch(%q, %q) = %v, want %v", test.pattern, test.name, got, test.want)
-		}
-	}
-}
-
 func TestProblemsReportMissingFiles(t *testing.T) {
 	root := writeManifest(t, "name: example\nversion: 1.0.0\n"+
 		"handlers:\n  react: {on: [task.created], run: bin/react}\n"+
@@ -241,12 +221,70 @@ func TestProblemsReportMissingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Join(manifest.Problems(), "\n")
-	for _, want := range []string{"cli.run: bin/cli is not executable", "service.command[0]: bin/serve does not exist", "ui.widgets[0].entry: ui/card.html does not exist"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("problems = %q, missing %q", got, want)
+	if !strings.Contains(got, "cli.run: bin/cli is not executable") {
+		t.Fatalf("problems = %q, missing cli.run", got)
+	}
+	// Legacy ui entries and service.command are no longer used, so their
+	// files are not required.
+	if strings.Contains(got, "handlers") || strings.Contains(got, "ui.") || strings.Contains(got, "service.command") {
+		t.Fatalf("problems report files Docket does not need: %q", got)
+	}
+	if problem := manifest.HostingProblem(); !strings.Contains(problem, "bin/serve") || !strings.Contains(problem, "no longer launched") {
+		t.Fatalf("hosting problem = %q", problem)
+	}
+}
+
+// A Dispatch-shaped manifest keeps its hooks, statuses, scoped config and CLI
+// while its legacy ui, service and options_from metadata have nothing behind
+// them: the ui directory is absent and the service is not running.
+func TestLegacyPresentationMetadataLoadsWithoutUIFiles(t *testing.T) {
+	root := writeManifest(t, `
+name: dispatch
+version: 1.4.0
+handlers:
+  wake: {on: [task.moved], lua: hooks/wake.lua, delivery: service}
+statuses:
+  - {name: merge, after: in-review}
+config:
+  workspace:
+    model: {type: string, options_from: /api/models}
+  status:
+    agent: {type: string}
+service: {url: http://127.0.0.1:7464, healthz: /healthz}
+cli: {run: bin/docket-dispatch}
+ui:
+  dir: ui
+  capabilities: [task.read, service.fetch]
+  widgets:
+    - {type: dispatch/session, title: Session, entry: session.html}
+  panels:
+    - {id: sessions, title: Sessions, entry: panel.html}
+  reference_resolvers:
+    - {id: dispatch/session, pattern: "^https?://127\\.0\\.0\\.1:7464/", endpoint: /resolve}
+`)
+	for path, mode := range map[string]os.FileMode{"hooks/wake.lua": 0o644, "bin/docket-dispatch": 0o755} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, path), []byte("x"), mode); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if strings.Contains(got, "handlers") || strings.Contains(got, "page.html") {
-		t.Fatalf("problems report present files: %q", got)
+	manifest, err := plugin.Load(root, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := manifest.Problems(); len(problems) != 0 {
+		t.Fatalf("absent ui dir reported: %v", problems)
+	}
+	if problem := manifest.HostingProblem(); problem != "" {
+		t.Fatalf("service without command needs no hosting: %q", problem)
+	}
+	if !manifest.UI.DeclaresWidget("dispatch/session") {
+		t.Fatal("legacy widget declaration lost")
+	}
+	resolved, err := manifest.ResolveConfig(nil, map[string]any{"model": "large"}, map[string]map[string]any{"merge": {"agent": "merger"}}, []string{"in-review", "merge"})
+	if err != nil || resolved.Values["model"] != "large" || resolved.Statuses["merge"]["agent"] != "merger" {
+		t.Fatalf("resolved = %#v, %v", resolved, err)
 	}
 }

@@ -3,15 +3,14 @@ package plugin
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // Problems reports files a valid manifest references but the plugin directory
 // does not provide. Load only checks the manifest itself; these checks catch a
-// plugin that would install cleanly and then fail at runtime.
+// plugin that would install cleanly and then fail at runtime. Legacy ui and
+// service.command files are not checked because Docket no longer uses them.
 func (m *Manifest) Problems() []string {
 	var problems []string
 	file := func(field, relative string, executable bool) {
@@ -41,34 +40,6 @@ func (m *Manifest) Problems() []string {
 	}
 	if m.CLI != nil {
 		file("cli.run", m.CLI.Run, true)
-	}
-	if m.Service != nil && len(m.Service.Command) > 0 {
-		program := m.Service.Command[0]
-		if strings.Contains(program, "/") {
-			file("service.command[0]", program, true)
-		} else if _, err := exec.LookPath(program); err != nil {
-			problems = append(problems, fmt.Sprintf("service.command[0]: %s is not on PATH", program))
-		}
-	}
-	if m.UI.Dir != "" {
-		if info, err := os.Stat(m.UIDir()); err != nil || !info.IsDir() {
-			problems = append(problems, fmt.Sprintf("ui.dir: %s is not a directory", m.UI.Dir))
-			return problems
-		}
-		entry := func(field, relative string) {
-			if relative != "" {
-				file(field, filepath.ToSlash(filepath.Join(m.UI.Dir, relative)), false)
-			}
-		}
-		for index, widget := range m.UI.Widgets {
-			entry(fmt.Sprintf("ui.widgets[%d].entry", index), widget.Entry)
-		}
-		for index, panel := range m.UI.Panels {
-			entry(fmt.Sprintf("ui.panels[%d].entry", index), panel.Entry)
-		}
-		for index, page := range m.UI.Pages {
-			entry(fmt.Sprintf("ui.pages[%d].entry", index), page.Entry)
-		}
 	}
 	return problems
 }

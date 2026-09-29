@@ -1,7 +1,10 @@
 package bundle_test
 
 import (
+	"bytes"
+	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,5 +113,63 @@ func TestBundleResolvesTitlesAndProject(t *testing.T) {
 	}
 	if len(b.Comments) != 1 || b.Comments[0].Body != "note two" {
 		t.Fatalf("comment limit not applied: %+v", b.Comments)
+	}
+}
+
+// A workspace written by a release that published widget records keeps that
+// evidence readable: nothing produces widgets now, and no plugin needs to be
+// enabled for the recorded summary and references to appear.
+func TestBundleKeepsHistoricalWidgetEvidence(t *testing.T) {
+	ws, err := workspace.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := task.Create(ws, task.CreateOptions{Title: "Old run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := func(phase string, revision int, status, summary string) map[string]any {
+		fallback := map[string]any{"label": "Session", "status_label": status, "priority": "history",
+			"references": []any{map[string]any{"kind": "log", "url": "https://example.com/run/1", "title": "Run log"}}}
+		if summary != "" {
+			fallback["summary"] = summary
+		}
+		return map[string]any{"version": 1, "widget_type": "dispatch/session", "instance_id": "run-1", "task_id": created.ID,
+			"created_at": "2026-09-10T10:00:00Z", "revision": revision, "phase": phase, "fallback": fallback}
+	}
+	for _, event := range []events.Event{
+		{Type: "task.widget_created", Task: created.ID, Actor: "dispatch", Data: map[string]any{"record": record("created", 1, "Running", "")}},
+		{Type: "task.widget_finalised", Task: created.ID, Actor: "dispatch", Data: map[string]any{"record": record("finalised", 4, "Finished", "Merged PR #12")}},
+	} {
+		if err := events.Append(ws, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := os.ReadFile(ws.EventsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := bundle.Build(ws, created.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Widgets) != 1 || result.Widgets[0].Fallback.Summary != "Merged PR #12" || result.WidgetRevision == "" {
+		t.Fatalf("widgets = %#v", result.Widgets)
+	}
+	var widgetActivity []bundle.ActivityView
+	for _, activity := range result.Activity {
+		if activity.Kind == "widget" {
+			widgetActivity = append(widgetActivity, activity)
+		}
+		if activity.Type == "task.widget_created" || activity.Type == "task.widget_finalised" {
+			t.Fatalf("raw widget event duplicated in activity: %#v", activity)
+		}
+	}
+	if len(widgetActivity) != 1 || !strings.Contains(widgetActivity[0].Body, "Merged PR #12") || !strings.Contains(widgetActivity[0].Body, "https://example.com/run/1") {
+		t.Fatalf("widget activity = %#v", widgetActivity)
+	}
+	after, _ := os.ReadFile(ws.EventsFile())
+	if !bytes.Equal(before, after) {
+		t.Fatal("reading history changed event bytes")
 	}
 }

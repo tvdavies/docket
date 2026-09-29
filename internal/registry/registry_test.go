@@ -3,6 +3,7 @@ package registry_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func TestAddLoadRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Listen != registry.DefaultListen || len(config.Workspaces) != 1 {
+	if config.Listen != "" || len(config.Workspaces) != 1 {
 		t.Fatalf("unexpected config: %#v", config)
 	}
 	if _, err := os.Stat(configPath); err != nil {
@@ -252,5 +253,24 @@ func TestPruneMissingUnregistersOnlyAfterContinuousGrace(t *testing.T) {
 	}
 	if len(missing) != 0 {
 		t.Fatalf("disabled pruning kept tracking state: %#v", missing)
+	}
+}
+
+func TestLegacyListenIsPreservedButNotDefaulted(t *testing.T) {
+	configPath, project := setup(t)
+	if _, err := registry.Add(project, ""); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(configPath); strings.Contains(string(data), "listen") {
+		t.Fatalf("new registry wrote a listen address:\n%s", data)
+	}
+	if err := os.WriteFile(configPath, []byte("listen: 127.0.0.1:9999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Add(project, ""); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(configPath); !strings.Contains(string(data), "listen: 127.0.0.1:9999") {
+		t.Fatalf("legacy listen value was dropped:\n%s", data)
 	}
 }

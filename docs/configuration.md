@@ -3,7 +3,7 @@
 Docket has two distinct configuration files:
 
 1. `.docket/config.yaml` defines one workspace's task model and handlers. It belongs with the workspace and may be committed.
-2. `~/.config/docket/config.yaml` is the machine-local service registry. It contains workspace paths, installed plugins and instance plugin config, and the HTTP listen address.
+2. `~/.config/docket/config.yaml` is the machine-local registry. It contains workspace paths, installed plugins and instance plugin config, and the prune grace.
 
 Plugin manifests, scoped config, and composition rules are documented in [Plugins](plugins.md).
 
@@ -15,7 +15,7 @@ docket workspace check /path/to/project
 docket workspace check --json
 ```
 
-Every workspace command also validates config while opening it. The service reloads changed workspace configuration automatically; an invalid workspace is marked unavailable rather than crashing other runtimes.
+Every workspace command also validates config while opening it. The event runner (`docket run`) reloads changed workspace configuration automatically; an invalid workspace is marked unavailable rather than crashing other runtimes.
 
 ## Workspace config
 
@@ -159,7 +159,7 @@ Invalid roots and unsupported nesting fail config validation instead of silently
 
 `delivery: inline` is the default. The mutating CLI command runs the handler after the event is durable and waits for completion.
 
-`delivery: service` leaves the handler cursor pending for the machine service. The CLI returns after appending the event, while the service performs durable asynchronous delivery. If the service is stopped, events remain in the log and drain after it starts.
+`delivery: service` leaves the handler cursor pending for the event runner. The CLI returns after appending the event, while `docket run` performs durable asynchronous delivery. If no runner is running, events remain in the log and drain when `docket run` starts or `docket run --once` is called. The name `service` is kept for compatibility; no network service is involved.
 
 ### Cursors and retries
 
@@ -199,7 +199,7 @@ handlers:
 
 Lua scripts need no execute permission. See [Lua hooks and SDK](lua-hooks.md).
 
-## Machine service registry
+## Machine registry
 
 Default path:
 
@@ -210,7 +210,6 @@ Default path:
 Override for tests or dedicated installations with `DOCKET_CONFIG`.
 
 ```yaml
-listen: 127.0.0.1:7463
 prune_after: 1h
 workspaces:
   - name: dispatch
@@ -233,13 +232,14 @@ docket workspace add /home/user/dev/client-b --name client-b
 docket workspace remove client-b
 docket plugin list
 docket plugin add /home/user/dev/docket-plugin-dispatch
+docket plugin config set dispatch --scope instance endpoint=http://127.0.0.1:7464
 ```
 
-The UI has no authentication. Non-loopback binding is rejected unless `docket serve --allow-remote` is passed explicitly.
+A `listen` key written by earlier releases is still accepted and ignored.
 
 ### Pruning missing workspaces
 
-`docket serve --all` periodically checks each registered workspace's project
+`docket run --all` periodically checks each registered workspace's project
 directory. A registration whose directory has been continuously missing for
 longer than `prune_after` is unregistered automatically, exactly as if
 `docket workspace remove` had been run: task files are never touched, and
@@ -257,7 +257,7 @@ permission errors never unregister anything, and a directory that reappears
 (for example a remounted volume) resets its timer. Pick a generous
 `prune_after` or `never` if workspaces live on removable storage.
 
-## Service environment
+## Runner environment
 
 The systemd unit optionally reads:
 
@@ -265,10 +265,14 @@ The systemd unit optionally reads:
 ~/.config/docket/environment
 ```
 
-Use `KEY=value` lines for credentials or PATH additions required by service-delivered hooks, then restart:
+Use `KEY=value` lines for credentials or PATH additions required by runner-delivered hooks, then restart:
 
 ```sh
 docket service restart
 ```
+
+That file is read only by the systemd unit. When `docket run` runs any other
+way (cron with `--once`, a container, a terminal), set the variables in that
+process's own environment instead.
 
 Do not commit credentials to workspace configuration.

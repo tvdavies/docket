@@ -2,24 +2,26 @@ package cli_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/tvdavies/docket/internal/cli"
 	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
-// runDocket executes the CLI in a child test process so stdout can be
-// captured exactly as a caller sees it.
+// runDocket executes a real docket binary built from this tree, so stdout,
+// stderr, exit status and child processes (such as Lua hooks, which re-exec
+// the running binary) behave exactly as they do for a caller.
 func runDocket(t *testing.T, dir string, args ...string) (string, string, error) {
 	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=^TestDocketHelperProcess$")
+	command := exec.Command(docketBinary(t), args...)
 	command.Dir = dir
-	encoded, _ := json.Marshal(args)
-	command.Env = append(os.Environ(), "DOCKET_TEST_CLI_HELPER="+string(encoded), "DOCKET_HOME=", "DOCKET_CONFIG="+dir+"/no-registry.yaml")
+	command.Env = append(os.Environ(), "DOCKET_HOME=", "DOCKET_CONFIG="+dir+"/no-registry.yaml")
 	var stdout, stderr strings.Builder
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -27,17 +29,38 @@ func runDocket(t *testing.T, dir string, args ...string) (string, string, error)
 	return stdout.String(), stderr.String(), err
 }
 
-func TestDocketHelperProcess(t *testing.T) {
-	raw := os.Getenv("DOCKET_TEST_CLI_HELPER")
-	if raw == "" {
-		return
+var (
+	buildOnce   sync.Once
+	builtDocket string
+	buildErr    error
+)
+
+func docketBinary(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "docket-cli-test-")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		builtDocket = filepath.Join(dir, "docket")
+		output, err := exec.Command("go", "build", "-o", builtDocket, "github.com/tvdavies/docket").CombinedOutput()
+		if err != nil {
+			buildErr = fmt.Errorf("build docket: %v: %s", err, output)
+		}
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-	var args []string
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		os.Exit(2)
+	return builtDocket
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtDocket != "" {
+		_ = os.RemoveAll(filepath.Dir(builtDocket))
 	}
-	os.Args = append([]string{"docket"}, args...)
-	os.Exit(cli.Execute())
+	os.Exit(code)
 }
 
 func TestInboxPeekAckContract(t *testing.T) {
