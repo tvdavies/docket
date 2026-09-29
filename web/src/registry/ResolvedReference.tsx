@@ -3,12 +3,8 @@ import {
   safeHref,
   type ResolvedReference as ResolvedValue,
   type TaskReference,
-} from "@docket/plugin-ui";
-import {
-  fallbackReference,
-  resolveReference,
-  useRegistryVersion,
-} from "./registry";
+} from "@docket/plugin-sdk";
+import { fallbackReference, resolveReference } from "./registry";
 import { usePluginScope } from "./scope";
 export function ResolvedReference({
   reference,
@@ -19,12 +15,10 @@ export function ResolvedReference({
   compact?: boolean;
   taskId?: string;
 }) {
-  const env = usePluginScope(),
-    version = useRegistryVersion();
+  const env = usePluginScope();
   const key = JSON.stringify([
     env.workspace,
     env.config.resolver_generation,
-    version,
     reference,
     taskId,
   ]);

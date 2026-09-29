@@ -1,8 +1,0 @@
-name: fixture-progress
-version: 1.0.0
-ui:
-  api_version: 2
-  cards:
-    - type: fixture-progress/job
-      title: Fixture progress
-      locations: [board, activity]

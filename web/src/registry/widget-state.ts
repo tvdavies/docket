@@ -5,7 +5,7 @@ import {
   type LivePayload,
   type WidgetData,
   type WidgetFreshness,
-} from "@docket/plugin-ui";
+} from "@docket/plugin-sdk";
 export interface AcceptedPreview {
   data: WidgetData;
   freshness: WidgetFreshness;

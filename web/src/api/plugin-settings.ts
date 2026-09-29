@@ -1,4 +1,4 @@
-import type { PluginConfigField, PluginConfigFieldType, PluginConfigSchemas } from '../../../docs/plugin-ui';
+import type { PluginConfigField, PluginConfigFieldType, PluginConfigSchemas } from '@docket/plugin-sdk';
 import { api, workspacePath } from './client';
 
 export type { PluginConfigField, PluginConfigFieldType, PluginConfigSchemas };

@@ -1,116 +1,62 @@
-# Workspace plugin widgets
+# Plugin widgets
 
-Docket hosts trusted, **build-time** plugin modules in compact board contributions
-and stable task-activity entries. An installed manifest does not load JavaScript.
-The production catalogue is empty by default. A plugin-less workspace stays plain;
-saved widget history remains readable when a plugin is disabled or absent.
+A widget is a typed, durable record in a task's ledger — "build job 7 is
+running", "agent session finished" — published by a plugin and rendered by
+Docket on the board and in the task's activity timeline. This page covers the
+record and live-preview contracts. For how plugin UI is loaded, sandboxed and
+talks to Docket, see the [Plugin UI reference](plugins/ui.md); for a walkthrough,
+see [Authoring plugins](plugins/authoring.md).
 
-## Public source and integration
-
-`packages/plugin-ui/src` is the canonical `@docket/plugin-ui` contract. The web
-application imports it directly; `web/src/registry/contracts.ts` only re-exports it.
-[`plugin-ui.d.ts`](plugin-ui.d.ts) is a generated, self-contained declaration for
-readers and external type checks. Do not maintain a second copy of these types.
-
-```sh
-bun web/scripts/generate-plugin-ui.ts
-bun web/scripts/generate-plugin-ui.ts --check
-cd web && bunx tsc -b
-```
-
-Public entry points are `.`, `./contracts`, `./legacy`, `./kit`,
-`./custom-element`, and `./tokens.css`. The package is local/private; this task
-publishes no registry package. JOB-0095 packages these exports and the runnable
-examples without forking their implementation.
-
-An integration author imports a reviewed module into
-`web/src/registry/catalogue.ts`, keyed by manifest plugin name, and rebuilds the
-board. There are no URL-based imports, remote scripts, marketplace or supported
-hot replacement of module definitions. Fixture imports live only in
-`web/tests/fixtures/widgets`; the old demo is a test-only v1 fixture.
+## Declare a widget type
 
 ```yaml
-name: my-plugin
-version: 1.0.0
 ui:
-  api_version: 2
-  cards:
-    - type: my-plugin/job
-      title: Job progress
-      locations: [board, activity]
+  dir: ui
+  widgets:
+    - type: my-plugin/job          # must start with the plugin name
+      title: Build job
+      entry: job.html              # optional expanded view (sandboxed iframe)
+      slots: [board, activity]     # default: both
 ```
 
-`ui.api_version` and `locations` are additive manifest fields introduced by this
-change. A release number has not been assigned. Older strict manifest decoders
-reject these fields; remove them or disable the declaration before a binary
-downgrade. Absent API version means v1. V2 requires explicit nonempty placements.
-Unknown API versions remain metadata, but cannot execute a module.
+Docket renders the card itself; no plugin code runs for the board or a
+collapsed activity entry. The card shows, in order of preference:
 
-Every selection starts with enabled workspace declarations, in workspace order
-and then declaration order. The compiled name, type/ID, API and location must
-match. `service_base` is used exactly when present and valid under the owning
-`/plugins/<name>` prefix; the host never fabricates a missing service. The proxy
-is instance-wide, so workspace UI isolation is **not** an authorization boundary.
+1. `data.value.presentation` from the latest unexpired live preview (or
+   `data.value` itself when it has `label` and `status.text`), unless the record
+   is finalised;
+2. the saved `fallback` from the ledger record.
 
-## Context, snapshot and lifecycle
+A board card shows the highest-priority record per widget type
+(`attention` → `error` → `active` → `history`, then newest), with a link to the
+rest. A record whose plugin is disabled still renders from its saved fallback,
+labelled as such.
 
-`DocketPluginUIV2` exports `apiVersion: 2`, `name`, optional `widgets` and
-`referenceResolvers`. Each `WidgetModule` has a namespaced `type`, supported
-`dataVersions`, a synchronous side-effect-free `present(snapshot, context)`,
-`mount(body, context)`, and an optional read-only `detail` provider.
+### Presentation
 
-`mount` returns `WidgetInstance { update(snapshot, context, view), destroy() }`.
-The first update includes the current accepted preview immediately. A widget
-must not wait for disclosure or navigation to show activity.
+```ts
+interface WidgetPresentation {
+  label: string;
+  status: { text: string; tone: "neutral" | "positive" | "warning" | "danger" | "info" };
+  priority: "attention" | "error" | "active" | "history";
+  terminal: boolean;
+  action?: string;
+  notice?: { text: string; tone: WidgetTone };
+  summary?: string;
+  rows?: { key: string; order: number; role: "text" | "step" | "code" | "reference"; label: string; text?: string }[];
+  references?: { kind: string; url: string; title: string }[];
+  startedAt?: string;   // RFC 3339
+  endedAt?: string;
+}
+```
 
-| Input | Meaning |
-|---|---|
-| `WidgetContext.identity` | `{ workspace, taskId, widgetType, instanceId }`, supplied by the host, never inferred from URLs or DOM |
-| `location` | `board` or `activity`; never arbitrary host placement |
-| `serviceBase` | Optional validated same-origin prefix |
-| `preferences` | Resolved light/dark, compact/comfortable, reduced motion |
-| `signal` | Host aborts before cleanup; authored asynchronous work must honor it |
-| `helpers.refreshTask()` | Instance-bound, coalesced task read; not task mutation |
-| `helpers.hrefFor(reference)` | Safe URL or `null`; use real anchors, not click-only navigation |
-| `helpers.requestDetail(listener, onRevoked)` | Activity-only, view-owned lease; no board detail capability |
-| `WidgetSnapshot.task` | Current task, retaining supplied `active_sessions` and session audit context; attachments do not prove execution |
-| `data` | `{version, revision, value: unknown}`; only supported versions reach authored presentation/body hooks |
-| `freshness` | Connection, monotonic receipt/expiry, stale, awaiting rehydration, optional publisher activity time; separate from execution |
-| `availability` | Available, missing service, disabled, missing module, unsupported, error |
-| `fallback` | The latest durable generic record, not a transcript |
-| `WidgetRenderState` | Reader-owned expansion/hold, displayed presentation/data and pending indication |
-
-Bodies must render `view.displayed` and `view.data` in the reading region, not
-bypass a hold by rendering the current `snapshot.data`. The latter remains
-available for metadata. The wrapper always updates header, persistent notices
-and keyed reference links. Expansion, selection and focus inside light or Shadow
-DOM hold body content; **New activity** deliberately advances it. Terminal
-transitions preserve a held reader until that action or collapse.
-
-Task/data/freshness/preferences update in place. Identity, location, service
-base, module/declaration replacement and disable retire the old body. Host
-teardown aborts first, releases host resources, attempts destroy once and removes
-the body in `finally`. A failed body stays retired until explicit Retry. Newer
-supported data can replace an unsupported body. Late callbacks cannot revive an
-old detail lease. Errors shown to users do not include private plugin payloads.
-
-### V1 compatibility
-
-The existing `DocketPluginUI`, `TaskCardModule`, `CardContext`, `CardInstance`
-and `ReferenceResolverModule` remain exports. `adaptLegacyPluginUI` preserves
-exactly `{workspace, task, pluginBase, refresh}` and **`update(task)`**. Untagged
-modules are v1, never implicitly v2. No live data or detail contract is invented
-for them. A missing service produces `pluginBase: ''`.
-
-V1 cards get one synthetic contribution per task/type, not one per session.
-Omitted placements mean board and activity. The former above-description panel
-moves to a labelled contribution at task creation in activity; the ABI is kept,
-not the accidental former layout. Legacy listeners can only be cleaned up by
-the module's `destroy()`; the host cannot enforce arbitrary authored cleanup.
+The host bounds presentations before rendering (see [Budgets](#budgets)) and
+renders only safe `http(s)` or in-app links.
 
 ## Durable publisher API
 
-Publishers, not widget bodies, call these JSON/origin-checked routes:
+Publishers — a plugin's service, CLI or hook, never its frames — call these
+JSON, origin-checked routes:
 
 - `POST /api/workspaces/:workspace/tasks/:task/widgets/create`
 - `POST /api/workspaces/:workspace/tasks/:task/widgets/finalise`
@@ -141,9 +87,10 @@ creation time. Priorities are generic `attention`, `error`, `active`, `history`,
 not execution-state enums. Unknown times/metrics remain absent. References have
 `kind`, `title`, `url`; there is no opaque body/transcript in a saved record.
 
-The server requires an existing task and matching enabled v2 card declaration.
+The server requires an existing task and a matching `ui.widgets` declaration
+from a plugin enabled in the workspace.
 Under the task lock it folds lifecycle events and appends only the allowed
-transition. The ledger is the sole durable authority: no new task frontmatter,
+transition. The ledger is the sole durable authority: there is no task frontmatter,
 second file, correction API or recovery daemon.
 
 | Operation | Response / effect |
@@ -172,9 +119,8 @@ of `task.updated_at`; lifecycle refreshes do not replace unsaved drafts.
 
 ## Ephemeral previews and owner recovery
 
-Use `widgetLive(identity, payload, ttlMS)` to construct the existing workspace
-live envelope. Its legacy `session` slot carries the generic `instanceId`; it
-does not acquire agent semantics.
+Previews use the workspace live envelope (`widgetLive(identity, payload, ttlMS)`
+in the SDK builds one). Its `session` field carries the widget's `instance_id`.
 
 ```json
 {
@@ -182,7 +128,10 @@ does not acquire agent semantics.
   "ttl_ms": 30000,
   "payload": {
     "widget_version": 1, "revision": 2,
-    "data": {"version": 1, "value": {"text": "Checked the first inputs"}},
+    "data": {"version": 1, "value": {"presentation": {
+      "label": "Build job", "status": {"text": "Checking", "tone": "info"},
+      "priority": "active", "terminal": false,
+      "summary": "Checked the first inputs"}}},
     "last_activity_at": "2026-09-10T10:00:01Z"
   }
 }
@@ -203,125 +152,34 @@ storage. Owners redact private reasoning, raw prompts, secrets and raw tool
 arguments/results before publication; the host cannot infer privacy from opaque
 values.
 
-One workspace SSE connection feeds the router. Accepted data/high-water marks
-are separate from current metadata, reader-held display, and transport receipt
-sequence. TTL uses remaining server TTL and a monotonic browser receipt clock.
-Expired content is last-known, never inferred failure or completion. Init/reset
-and declaration changes invalidate transports and mark retained data stale;
-owner publication restores freshness. Releasing a workspace evicts its cache
-and timers. Terminal summaries recover without any live cache.
-
-## Selected detail
-
-A module can supply `DetailProvider.open({identity,serviceBase,signal}, sink)`.
-It returns idempotent `close()` and `requestReset()`. The provider owns its
-read-only GET/SSE/WebSocket protocol; core imports no Dispatch/ACP types.
-`sink.status` accepts `ready`, `unavailable`, `not_found`, `error` separately.
-
-`DetailFrame` contains `version:1`, identity, `dataVersion`, revision, `baseSeq`,
-`throughSeq`, reset and bounded opaque value. The first connection/reconnect
-requires a reset. Non-reset gaps pause application and request one reset. A
-5-second reset timeout closes the lease. Regressing revision/sequence or wrong
-identity is ignored. Receipt sequence advances even while display is held.
-
-The active task view grants one lease across all widgets; selecting another
-revokes the old one. No board card opens a detail transport. Release, abort,
-reselection, stale data, config/reset, removal and failure fence late callbacks.
-Outage keeps the expanded last-known reading view but releases transport.
-Recovery does not silently reacquire it: collapse and expand explicitly. Full
-history/windowing and domain-specific publishable projection belong to JOB-0050.
-
-## Kit, custom elements and styling
-
-The fixed DOM kit exports `status`, `metadata`, `OrderedActivity`, `disclosure`,
-`safeText`, `formattedText`, `code`, `notice`, `reference`, `summary` and
-`standardWidgetBody`. It is not a JSON layout language. Formatting supports
-paragraphs, emphasis, inline/fenced code and validated links, never raw HTML or
-remote images. Ordered rows have stable keys and remain in owner-supplied order.
-
-`defineWidgetElement` and `customElementWidget` provide a real Shadow DOM adapter.
-Names are injective: `docket-widget-${hex(UTF8(widgetType))}-v2`. Context arrives
-before the first render. Same hooks/build identity registration is a no-op;
-a different definition at an existing name fails with `duplicate_definition`.
-Definitions cannot be unregistered. Disable removes instances; a code-changing
-development reload requires a full page reload. Different API majors need
-separate names/contracts, not replacement of a registered constructor.
-
-Host wrapper CSS belongs to Docket. Module CSS stays in its body shadow root,
-with no portals/global selectors. Import `@docket/plugin-ui/tokens.css` when
-building an independent preview. Supported `--docket-widget-*` roles are:
-
-- `surface`, `raised`, `sunken`, `text`, `muted`, `border`, `accent`, `focus`;
-- positive/warning/danger/info `-fg` and `-bg` pairs;
-- `font`, `mono`, `text-size`, `meta-size`, `line-height`;
-- `space-1..4` (4/8/12/16px), `pad`, `radius`, focus width/offset and `motion`.
-
-Wrapper anatomy is header → persistent notice → body → reader controls → safe
-references/saved fallback. Theme, density and reduced-motion values update in
-place. Phone controls are at least 44px, text wraps at 320px and focus rings
-remain visible. Shadow DOM isolates conventional styles, **not trusted same-origin
-JavaScript**. It cannot sandbox malicious code, stop infinite loops, constrain
-arbitrary network access or guarantee visual compliance. Authored asynchronous
-callbacks must handle their own errors and cancellation.
-
-## Budgets and verification
+## Budgets
 
 | Area | Bound |
 |---|---|
-| Widget preview | 16 KiB UTF-8 JSON; generic live remains 64 KiB |
-| Durable record | 8 KiB, label/status 120 characters, summary 2,000, ≤8 references |
-| Board / preview / expanded | Action 120 characters; 4 rows/600 chars; 12 rows/1,600 chars |
-| Disclosed output | 2,000 characters |
-| Detail | One connection/task view, zero/board; 64 KiB/frame, 5-second reset timeout |
-| Rendering | Coalesced body updates ≤1/second; urgent terminal/notice/availability changes next animation frame |
-| Caches | 2,048 preview identities, 32 MiB encoded payloads; 512 resolver results/workspace |
-| Mounts | Virtualized board, one selected instance/type; first 20 rich activity bodies then explicit Show more |
-| References | 5-second enrichment timeout; 8 string-only metadata keys, 256 chars/value |
-| Bundle | Existing 170 KiB total gzip; ≤30 KiB core increase and ≤30 KiB fixture increment |
-| Performance | Recorded 100-task Chromium fixture at 1 Hz: host p95 ≤16ms and maximum ≤50ms |
+| Widget preview | 16 KiB UTF-8 JSON; generic live payloads remain 64 KiB |
+| Durable record | 8 KiB; label/status 120 characters; summary 2,000; ≤ 8 references |
+| Presentation | Action 120 characters; collapsed 4 rows / 600 characters; expanded 12 rows / 1,600 |
+| Preview cache | 2,048 identities, 32 MiB encoded payloads per browser |
+| References | 5-second resolver timeout; 8 string-only metadata keys, 256 characters each; 512 cached results per workspace |
 
-Service and browser reject over-cap frames before presentation. The router keeps
-one accepted value, while each mounted reader keeps displayed and pending bounded
-values, never a frame queue. Cache capacity fails closed rather than dropping a
-revision watermark and accepting older content. Stream resets/process restarts
-still depend on owner monotonic revisions.
+The service and the browser reject over-cap frames before presentation.
 
-Go/RE2 selects the first enabled resolver and annotates references with
-`resolver_id` and `resolver_generation`. The browser never approximates Go with
-JavaScript regex. Generation changes discard enrichment and coalesce a fresh
-board/task read. Cache keys include workspace, generation, resolver, service base,
-task and full reference including title. Missing/failed/timed-out code falls back
-to the original reference, not a later resolver. Unsafe links render text.
+## Reference resolvers
 
-Run the isolated conformance suite:
+`ui.reference_resolvers` match task references by kind and an RE2 `pattern`.
+Go selects the first enabled resolver and annotates the reference with
+`resolver_id` and `resolver_generation`. When a resolver declares an `endpoint`,
+the browser POSTs `{workspace, task_id, reference}` to
+`/plugins/<name><endpoint>` and expects `{label, icon?, meta?, href?}`. A missing
+endpoint, stale generation, timeout, error or malformed answer falls back to the
+reference's own title. Unsafe links render as text.
 
-```sh
-go test ./...
-cd web && bun test && bun run build
-CHROMIUM_PATH=/usr/bin/chromium bun scripts/verify-widgets.ts
-```
-
-The two independent fixture plugins are a standard-kit progress widget and a
-custom SVG chart with a keyboard-accessible value table. Their entry uses the
-production App, host, store and public API with synthetic loopback APIs only.
-[`plugin-ui-coverage.md`](plugin-ui-coverage.md) maps requirements to tests;
-`widget-evidence/` holds runtime captures and measured results. NVDA/VoiceOver
-is an explicit outstanding manual gate, not proven by browser checks.
-
-## Downstream handoff
-
-- JOB-0050 consumes these durable/live/detail contracts and shared kit; it owns
-  Dispatch's filtered projection and full-session page, not another host.
-- Settings work consumes ordered `plugins`, `api_version`, `locations`,
-  `service_base`, and config-generation invalidation. No settings form rewrite
-  or live service wiring is included here.
-- JOB-0095 packages these exports and the progress/chart starters without a
-  competing contract, loader, kit or element registry.
+## Settings endpoints
 
 Generated settings endpoints remain unchanged: `GET /api/plugins`,
 `PATCH /api/plugins/:plugin/config`, and the existing workspace/status config
-PATCH routes accept `{ "values": { ... } }`. No widget helper grants these
-mutation capabilities. This change authorizes no rollout or service restart.
+PATCH routes accept `{ "values": { ... } }`. Plugin frames cannot call
+them: the bridge exposes no settings methods.
 
 ## Generated settings forms
 

@@ -2,7 +2,7 @@
 
 Reviewed specification for how a Dispatch session appears in Docket at the board, task-activity and full-session levels. Source: plan v2 (approved 10 September 2026) and the JOB-0091 owner architecture decision. Types referenced here are the *proposed* shapes in `contracts.proposed.ts`; production names belong to JOB-0093.
 
-Terminology follows the shipped `docs/plugin-ui.d.ts` where it exists (`mount`/`update`/`destroy`, `workspace`, `task`, `pluginBase` → here `serviceBase`). Everything else is proposed.
+Terminology follows the shipped `docs/plugin-sdk.d.ts` where it exists (`mount`/`update`/`destroy`, `workspace`, `task`, `pluginBase` → here `serviceBase`). Everything else is proposed.
 
 ## 1. Anatomy
 
@@ -140,4 +140,4 @@ Filtered before publication (`prototype/publisher.ts`): no reasoning, credential
 
 ## 9. Non-goals
 
-No steer/stop/reply/wait/permission/approval controls. No production SDK, kit, loader, element registry, second projection, JSON layout engine, arbitrary placement or persistent panels. No change to production code, manifests, `docs/plugin-ui.d.ts`, live workspace state, loading architecture or approval gates. Session completion never implies plan approval or task completion.
+No steer/stop/reply/wait/permission/approval controls. No production SDK, kit, loader, element registry, second projection, JSON layout engine, arbitrary placement or persistent panels. No change to production code, manifests, `docs/plugin-sdk.d.ts`, live workspace state, loading architecture or approval gates. Session completion never implies plan approval or task completion.

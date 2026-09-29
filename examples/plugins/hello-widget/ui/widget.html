@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<p id="status" class="muted">Connecting…</p>
+<p>Clicked <b id="count">0</b> times (kept by the host across reloads).</p>
+<button id="click">Click</button>
+<button id="comment">Comment on task</button>
+<script type="module">
+  import { connect } from "/plugin-sdk/v1/client.js";
+  const docket = await connect();
+  let count = docket.context.state?.count ?? 0;
+  const render = (context) => {
+    document.getElementById("status").textContent =
+      `${context.widget?.presentation.label ?? "Greeting"} · ${context.widget?.presentation.status.text ?? ""}`;
+    document.getElementById("count").textContent = count;
+  };
+  docket.onUpdate(render);
+  render(docket.context);
+  document.getElementById("click").onclick = async () => {
+    count += 1;
+    render(docket.context);
+    await docket.setState({ count });
+  };
+  document.getElementById("comment").onclick = () => docket.comment(`Hello from ${docket.context.plugin} (${count} clicks)`);
+</script>

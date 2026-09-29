@@ -1,10 +1,10 @@
-import type { Wait, TaskReference, BoardTask, PluginMetadata, WidgetRecordV1 } from '@docket/plugin-ui';
-export type { Wait, TaskReference, BoardTask, PluginMetadata, PluginCardDeclaration, PluginReferenceResolverDeclaration } from '@docket/plugin-ui';
+import type { Wait, TaskReference, BoardTask, PluginMetadata, WidgetRecordV1 } from '@docket/plugin-sdk';
+export type { Wait, TaskReference, BoardTask, PluginMetadata, PluginCardDeclaration, PluginReferenceResolverDeclaration } from '@docket/plugin-sdk';
 export type StreamConfig = { statuses: string[]; terminal: string[]; labels: string[]; plugins?: PluginMetadata[]; resolver_generation?: string };
 export type StreamInit = { workspace: string; config: StreamConfig; tasks: BoardTask[]; cursor: string };
 export type LedgerEvent = { seq: number; time: string; type: string; task?: string; title?: string; actor?: string; assignee?: string; data?: Record<string, unknown> };
 export type StreamPatch = { event: LedgerEvent; task?: BoardTask };
-export type { LivePayload } from '@docket/plugin-ui';
+export type { LivePayload } from '@docket/plugin-sdk';
 
 export type WorkspaceStatus = {
   name: string;

@@ -94,6 +94,10 @@ func TestPluginUIAssetsAreSandboxedAndHashAddressed(t *testing.T) {
 	if !strings.Contains(response.Header.Get("Content-Security-Policy"), "frame-src 'self'") {
 		t.Fatalf("board csp = %q", response.Header.Get("Content-Security-Policy"))
 	}
+	response, body = get("/plugin-sdk/v1/client.js")
+	if response.StatusCode != 200 || !strings.Contains(body, "connect") || response.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("sdk client = %d %v", response.StatusCode, response.Header)
+	}
 }
 
 func TestPluginProxyStripsDocketCredentialsAndSandboxesResponses(t *testing.T) {

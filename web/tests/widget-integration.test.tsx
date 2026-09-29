@@ -3,7 +3,7 @@ import { expect, test, vi } from "vitest";
 import { TaskDetail } from "../src/views/task/TaskDetail";
 import type { TaskDetail as Detail } from "../src/types";
 import { BoardStore } from "../src/store/board-store";
-import fixture from "../../packages/plugin-ui/fixtures/wire.json";
+import fixture from "../../packages/plugin-sdk/fixtures/wire.json";
 
 test("lifecycle revision refresh preserves task drafts and one stable activity identity", async () => {
   const base: Detail = {

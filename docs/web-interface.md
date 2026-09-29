@@ -181,9 +181,11 @@ does not require a transport redesign.
 | `POST` | `/api/workspaces/{name}/tasks/{id}/comments` | Append a comment |
 | `POST` | `/api/workspaces/{name}/tasks/{id}/attachments` | Upload a file and optional caption (multipart, 25 MiB max) |
 | `GET` | `/api/workspaces/{name}/tasks/{id}/attachments/{file}` | Download an exact manifest-backed file |
-| any | `/plugins/{plugin}/*` | Same-origin proxy to an enabled plugin's loopback service |
+| any | `/plugins/{plugin}/*` | Same-origin proxy to an enabled plugin's loopback service (cookies and `Authorization` stripped) |
+| `GET` | `/plugin-ui/{plugin}/{hash}/{path}` | Static assets from a plugin's `ui.dir`, served with a sandbox CSP |
+| `GET` | `/plugin-sdk/v1/client.js` | Frame SDK client for plugin UI |
 
-See [Plugin UI registry contract](plugin-ui.md) for the board-facing metadata and settings schemas.
+See [Plugin UI reference](plugins/ui.md) and [Plugin widgets](plugin-ui.md) for the board-facing metadata, frame bridge and settings schemas.
 
 Errors use `{"error":"..."}`. Existing endpoint fields remain compatible;
 mutation bundles only add the optional `cursor` field.

@@ -68,6 +68,14 @@ func handler(manager *Manager, allowRemoteHost bool) http.Handler {
 		panic(err)
 	}
 	mux.Handle("GET /assets/", cacheAssets(http.FileServer(http.FS(nextAssets)), true))
+	// The in-frame SDK client, for plugin UIs without a build step. Frames
+	// have an opaque origin, so module loads are CORS requests.
+	mux.Handle("GET /plugin-sdk/", cacheAssets(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		writer.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		http.FileServer(http.FS(nextAssets)).ServeHTTP(writer, request)
+	}), false))
 	mux.Handle("GET /classic-assets/", http.StripPrefix("/classic-assets/", cacheAssets(http.FileServer(http.FS(classicAssets)), false)))
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {

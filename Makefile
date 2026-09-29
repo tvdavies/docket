@@ -12,7 +12,7 @@ test:
 	bun test internal/service/web/*.test.js
 	cd web && bun run test
 	bun install --frozen-lockfile
-	bun run typecheck:plugin-ui
+	bun run typecheck:plugin-sdk
 
 test-web:
 	bun test internal/service/web/*.test.js
@@ -28,7 +28,7 @@ web-check:
 
 test-types:
 	bun install --frozen-lockfile
-	bun run typecheck:plugin-ui
+	bun run typecheck:plugin-sdk
 
 fmt:
 	gofmt -w .

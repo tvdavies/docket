@@ -8,7 +8,7 @@ import type { BoardTask, LivePayload, StreamConfig } from '../../types';
 import type { Preferences } from '../../store/preferences';
 import { allStatuses } from '../../store/preferences';
 import { ResolvedReference } from '../../registry/ResolvedReference';
-import { BoardWidgets, PluginCardHost } from '../../registry/PluginCardHost';
+import { BoardWidgets } from '../../plugin-host/WidgetCard';
 
 const humanize = (value: string) => value.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 const relative = (value: string) => {
@@ -90,7 +90,6 @@ export function TaskCard({ workspace, task, selected, config, preferences, live,
         </DropdownMenu.Root>
       </div>
       <h3><a href={`/workspaces/${encodeURIComponent(workspace)}/tasks/${encodeURIComponent(task.id)}`} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); onSelect(task.id); } }}>{task.title}</a></h3>
-      <PluginCardHost workspace={workspace} task={task} config={config.plugins} />
       <BoardWidgets workspace={workspace} task={task} config={config.plugins || []} />
       {preferences.fields.references && task.references[0] && <ResolvedReference reference={task.references[0]} taskId={task.id} compact />}
       <footer className="card-meta">

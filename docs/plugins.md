@@ -2,8 +2,11 @@
 
 Docket plugins are trusted local packages that declare extension points in a
 strict `docket-plugin.yaml` manifest. Installing a plugin is equivalent to
-trusting scripts from that directory or repository; v1 has no sandbox,
-marketplace, signature verification, or remote runtime loading.
+trusting its handlers, CLI and service with your user account. Plugin browser
+UI is the exception: it runs in sandboxed iframes with only the capabilities it
+declares (see [Plugin UI reference](plugins/ui.md)). There is no marketplace or
+signature verification. To write one, start with
+[Authoring plugins](plugins/authoring.md).
 
 ## Install and enable
 
@@ -93,8 +96,12 @@ cli:
   run: bin/docket-example
 
 ui:
-  cards:
-    - {type: example/session, title: Live session}
+  dir: ui
+  capabilities: [task.read, service.fetch, service.stream]
+  widgets:
+    - {type: example/session, title: Live session, entry: session.html}
+  pages:
+    - {id: sessions, title: Sessions, entry: sessions.html}
   reference_resolvers:
     - id: example/session
       kinds: [session]
@@ -172,8 +179,11 @@ Registry or manifest changes restart only the in-process workspace runtimes,
 recompose contributions, and are visible to the dynamic proxy/API without a
 service process restart. Handler identities do not include a generation, so
 existing cursor checkpoints carry across reloads and events do not replay.
-Build-time card/resolver implementations still require a Docket board release;
-manifest metadata reloads immediately.
+Plugin UI is never part of the Docket build. Files under `ui.dir` are served by
+content hash, so an edit produces a new `ui_base`; reload the page to pick it
+up. Frames that receive a new `ui_base` from the workspace stream swap in place
+and keep their saved state.
 
-See [Plugin UI registry contract](plugin-ui.md) for the stable card, resolver,
-and generated-settings interfaces.
+See [Plugin UI reference](plugins/ui.md) for frames and the bridge, and
+[Plugin widgets](plugin-ui.md) for the widget ledger, resolvers and
+generated settings.

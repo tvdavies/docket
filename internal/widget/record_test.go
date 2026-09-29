@@ -7,7 +7,7 @@ import (
 )
 
 func TestPublicWireFixture(t *testing.T) {
-	raw, err := os.ReadFile("../../packages/plugin-ui/fixtures/wire.json")
+	raw, err := os.ReadFile("../../packages/plugin-sdk/fixtures/wire.json")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,8 +5,8 @@ import {
   boundedPresentation,
   safeHref,
   WIDGET_BUDGETS,
-} from "@docket/plugin-ui";
-import fixture from "../../packages/plugin-ui/fixtures/wire.json";
+} from "@docket/plugin-sdk";
+import fixture from "../../packages/plugin-sdk/fixtures/wire.json";
 test("public wire fixtures agree with the Go validators", () => {
   expect(validWidgetRecord(fixture.record, fixture.workspace)).toBe(true);
   expect(validWidgetPayload(fixture.preview)).toBe(true);

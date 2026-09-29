@@ -6,9 +6,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { WidgetPreferences } from "@docket/plugin-ui";
+import type { WidgetPreferences } from "@docket/plugin-sdk";
 import type { StreamConfig } from "../types";
-import { ReferenceRegistry, useRegistryVersion } from "./registry";
+import { ReferenceRegistry } from "./registry";
 import type { WidgetRouter } from "./widget-state";
 const defaults: WidgetPreferences = {
   theme: "light",
@@ -50,7 +50,6 @@ export function PluginScope({
   refreshTask?(taskId: string): void;
   children: ReactNode;
 }) {
-  const version = useRegistryVersion();
   const [media, setMedia] = useState(() => ({
     dark:
       typeof matchMedia === "function" &&
@@ -80,7 +79,7 @@ export function PluginScope({
         config.resolver_generation || "",
         config.plugins || [],
       ),
-    [workspace, key, version],
+    [workspace, key],
   );
   useEffect(() => () => references.destroy(), [references]);
   const preferences: WidgetPreferences = {

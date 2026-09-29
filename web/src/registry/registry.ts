@@ -1,130 +1,30 @@
-import { useSyncExternalStore } from "react";
 import {
-  adaptLegacyPluginUI,
-  serviceBase,
   safeHref,
   WIDGET_BUDGETS,
-  type BoardTask,
   type PluginMetadata,
-  type PluginUI,
+  type PluginWidgetDeclaration,
   type ResolvedReference,
   type TaskReference,
   type WidgetLocation,
-} from "@docket/plugin-ui";
-import { catalogue } from "./catalogue";
-const modules = new Map<string, PluginUI>();
-const listeners = new Set<() => void>();
-let version = 0;
-export function registerPluginUI(plugin: PluginUI, name?: string) {
-  name ||=
-    "apiVersion" in plugin
-      ? plugin.name
-      : (
-          plugin.cards?.[0]?.type ||
-          plugin.referenceResolvers?.[0]?.id ||
-          ""
-        ).split("/")[0];
-  if (!name || (modules.has(name) && modules.get(name) !== plugin))
-    throw new Error("duplicate_definition");
-  const ids =
-    "apiVersion" in plugin
-      ? [
-          ...(plugin.widgets || []).map((c) => c.type),
-          ...(plugin.referenceResolvers || []).map((r) => r.id),
-        ]
-      : [
-          ...(plugin.cards || []).map((c) => c.type),
-          ...(plugin.referenceResolvers || []).map((r) => r.id),
-        ];
-  if (
-    new Set(ids).size !== ids.length ||
-    ids.some((id) => !id.startsWith(name + "/"))
-  )
-    throw new Error("duplicate_definition");
-  if (modules.get(name) === plugin) return;
-  modules.set(name, plugin);
-  version++;
-  for (const notify of listeners) notify();
-}
-export function loadBuiltinPluginUI() {
-  for (const [name, plugin] of Object.entries(catalogue))
-    registerPluginUI(plugin, name);
-}
-export function useRegistryVersion() {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    () => version,
-    () => version,
-  );
-}
-export function widgetModule(
+} from "@docket/plugin-sdk";
+
+/**
+ * Finds the enabled plugin that declares a widget type for a location.
+ * Declarations come only from the server's board metadata; the web build
+ * contains no plugin code.
+ */
+export function widgetDeclaration(
   config: PluginMetadata[],
   type: string,
   location: WidgetLocation,
-) {
+): { metadata: PluginMetadata; declaration: PluginWidgetDeclaration } | undefined {
   for (const metadata of config) {
-    const declaration = metadata.cards.find((c) => c.type === type);
-    if (
-      !declaration ||
-      !(
-        declaration.locations ||
-        ((metadata.api_version || 1) === 1 ? ["board", "activity"] : [])
-      ).includes(location)
-    )
-      continue;
-    const module = modules.get(metadata.name);
-    const base = serviceBase(metadata.name, metadata.service_base);
-    if (!module) return { metadata, declaration, base };
-    if (
-      metadata.api_version !== 2 ||
-      !("apiVersion" in module) ||
-      module.apiVersion !== 2 ||
-      module.name !== metadata.name
-    )
-      return { metadata, declaration, base };
-    return {
-      metadata,
-      declaration,
-      base,
-      module: module.widgets?.find((w) => w.type === type),
-    };
+    const declaration = (metadata.widgets || []).find((w) => w.type === type);
+    if (declaration && declaration.slots.includes(location)) return { metadata, declaration };
   }
   return undefined;
 }
-export function cardModules(
-  task: BoardTask,
-  config: PluginMetadata[] = [],
-  location: WidgetLocation = "board",
-) {
-  return config.flatMap((metadata) => {
-    const plugin = modules.get(metadata.name);
-    if ((metadata.api_version || 1) !== 1 || !plugin || "apiVersion" in plugin)
-      return [];
-    const legacy = adaptLegacyPluginUI(plugin);
-    return metadata.cards.flatMap((declaration) => {
-      if (!(declaration.locations || ["board", "activity"]).includes(location))
-        return [];
-      const module = legacy.cards?.find((c) => c.type === declaration.type);
-      try {
-        return module?.appliesTo(task)
-          ? [
-              {
-                module,
-                base: serviceBase(metadata.name, metadata.service_base) || "",
-              },
-            ]
-          : [];
-      } catch {
-        return [];
-      }
-    });
-  });
-}
+
 export function fallbackReference(ref: TaskReference): ResolvedReference {
   return {
     label: ref.title || ref.url,
@@ -132,6 +32,44 @@ export function fallbackReference(ref: TaskReference): ResolvedReference {
     meta: { kind: ref.kind },
   };
 }
+
+/** Coerces an untrusted resolver answer into bounded display values. */
+export function boundedResolution(
+  value: unknown,
+  reference: TaskReference,
+  workspace: string,
+  taskId: string,
+  plugin: string,
+): ResolvedReference | undefined {
+  const v = value as ResolvedReference | undefined;
+  if (!v || typeof v !== "object" || typeof v.label !== "string" || !v.label.trim()) return undefined;
+  const meta = Object.fromEntries(
+    Object.entries(v.meta && typeof v.meta === "object" ? v.meta : {})
+      .filter(([, item]) => typeof item === "string")
+      .slice(0, 8)
+      .map(([k, item]) => [k.slice(0, 120), (item as string).slice(0, 256)]),
+  );
+  const href =
+    typeof v.href === "string"
+      ? safeHref(
+          { kind: reference.kind, url: v.href, title: v.label },
+          { workspace, taskId, widgetType: plugin + "/reference", instanceId: "" },
+        )
+      : null;
+  return {
+    label: v.label.slice(0, 120),
+    icon: typeof v.icon === "string" ? v.icon.slice(0, 32) : undefined,
+    meta,
+    href: href || undefined,
+  };
+}
+
+/**
+ * Resolves task references through each plugin's declared `endpoint`: a POST
+ * of `{workspace, task_id, reference}` to the plugin service via the proxy.
+ * Anything unexpected — no endpoint, stale generation, timeout, bad JSON —
+ * falls back to the reference's own title.
+ */
 export class ReferenceRegistry {
   private cache = new Map<string, Promise<ResolvedReference>>();
   private controller = new AbortController();
@@ -139,120 +77,46 @@ export class ReferenceRegistry {
     readonly workspace: string,
     readonly generation: string,
     readonly config: PluginMetadata[],
+    private readonly fetcher: typeof fetch = (...args) => fetch(...args),
   ) {}
   destroy() {
     this.controller.abort();
     this.cache.clear();
   }
-  resolve(
-    reference: TaskReference,
-    taskId: string,
-  ): Promise<ResolvedReference> {
+  resolve(reference: TaskReference, taskId: string): Promise<ResolvedReference> {
     const fallback = fallbackReference(reference);
-    if (
-      this.controller.signal.aborted ||
-      !reference.resolver_id ||
-      reference.resolver_generation !== this.generation
-    )
+    if (this.controller.signal.aborted || !reference.resolver_id || reference.resolver_generation !== this.generation)
       return Promise.resolve(fallback);
-    const metadata = this.config.find((p) =>
-      p.reference_resolvers.some((r) => r.id === reference.resolver_id),
-    );
-    const plugin = metadata && modules.get(metadata.name);
-    if (!metadata || !plugin) return Promise.resolve(fallback);
-    const resolver = plugin.referenceResolvers?.find(
-      (r) => r.id === reference.resolver_id,
-    );
-    if (
-      !resolver ||
-      (metadata.api_version || 1) !==
-        ("apiVersion" in plugin ? plugin.apiVersion : 1)
-    )
-      return Promise.resolve(fallback);
-    const base = serviceBase(metadata.name, metadata.service_base);
-    const key = JSON.stringify([
-      this.workspace,
-      this.generation,
-      reference.resolver_id,
-      base,
-      taskId,
-      reference,
-    ]);
+    const metadata = this.config.find((p) => p.reference_resolvers.some((r) => r.id === reference.resolver_id));
+    const resolver = metadata?.reference_resolvers.find((r) => r.id === reference.resolver_id);
+    if (!metadata?.service_base || !resolver?.endpoint) return Promise.resolve(fallback);
+    const url = metadata.service_base + resolver.endpoint;
+    const key = JSON.stringify([this.workspace, this.generation, url, taskId, reference]);
     const cached = this.cache.get(key);
     if (cached) return cached;
-    const request = new Promise<ResolvedReference>((resolve) => {
-      const controller = new AbortController();
-      let done = false;
-      const finish = (value: ResolvedReference) => {
-        if (done) return;
-        done = true;
+    const abort = new AbortController();
+    const stop = () => abort.abort();
+    const timer = setTimeout(stop, WIDGET_BUDGETS.timeoutMS);
+    this.controller.signal.addEventListener("abort", stop, { once: true });
+    const request = this.fetcher(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ workspace: this.workspace, task_id: taskId, reference }),
+      credentials: "omit",
+      signal: abort.signal,
+    })
+      .then((response) => (response.ok ? response.json() : undefined))
+      .then((value) => boundedResolution(value, reference, this.workspace, taskId, metadata.name) || fallback)
+      .catch(() => fallback)
+      .finally(() => {
         clearTimeout(timer);
-        this.controller.signal.removeEventListener("abort", abort);
-        controller.abort();
-        resolve(value);
-      };
-      const abort = () => finish(fallback);
-      const timer = setTimeout(abort, WIDGET_BUDGETS.timeoutMS);
-      this.controller.signal.addEventListener("abort", abort, { once: true });
-      Promise.resolve()
-        .then(() =>
-          controller.signal.aborted
-            ? fallback
-            : "apiVersion" in plugin
-              ? (
-                  resolver as import("@docket/plugin-ui").ReferenceResolverV2
-                ).resolve(reference, {
-                  workspace: this.workspace,
-                  taskId,
-                  serviceBase: base,
-                  signal: controller.signal,
-                })
-              : (
-                  resolver as import("@docket/plugin-ui").ReferenceResolverModule
-                ).resolve(reference, { pluginBase: base || "" }),
-        )
-        .then((value) => {
-          if (!value || typeof value.label !== "string")
-            return finish(fallback);
-          const meta = Object.fromEntries(
-            Object.entries(value.meta || {})
-              .filter(([, v]) => typeof v === "string")
-              .slice(0, 8)
-              .map(([k, v]) => [k.slice(0, 120), v.slice(0, 256)]),
-          );
-          const href =
-            value.href &&
-            safeHref(
-              { kind: reference.kind, url: value.href, title: value.label },
-              {
-                workspace: this.workspace,
-                taskId,
-                widgetType: metadata.name + "/reference",
-                instanceId: "",
-              },
-            );
-          finish({
-            label: value.label.slice(0, 120),
-            icon: value.icon?.slice(0, 32),
-            meta,
-            href: href || undefined,
-          });
-        }, abort)
-        .catch(abort);
-    });
-    if (this.cache.size >= WIDGET_BUDGETS.resolverEntries)
-      this.cache.delete(this.cache.keys().next().value!);
+        this.controller.signal.removeEventListener("abort", stop);
+      });
+    if (this.cache.size >= WIDGET_BUDGETS.resolverEntries) this.cache.delete(this.cache.keys().next().value!);
     this.cache.set(key, request);
     return request;
   }
 }
-export function resolveReference(
-  reference: TaskReference,
-  registry?: ReferenceRegistry,
-  taskId = "",
-) {
-  return (
-    registry?.resolve(reference, taskId) ||
-    Promise.resolve(fallbackReference(reference))
-  );
+export function resolveReference(reference: TaskReference, registry?: ReferenceRegistry, taskId = "") {
+  return registry?.resolve(reference, taskId) || Promise.resolve(fallbackReference(reference));
 }
