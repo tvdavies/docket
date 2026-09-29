@@ -1,4 +1,5 @@
 @import '@docket/plugin-ui/tokens.css';
+.task-card h3 a { color:inherit; text-decoration:none; }
 .docket-widget { color:var(--docket-widget-text);background:var(--docket-widget-surface);border:1px solid var(--docket-widget-border);border-radius:10px;padding:var(--docket-widget-pad);margin:8px 0;min-width:0;max-width:100%;contain:style;overflow-wrap:anywhere;font:var(--docket-widget-text-size)/var(--docket-widget-line-height) var(--docket-widget-font); }
 .docket-widget > header { display:flex;align-items:baseline;flex-wrap:wrap;gap:8px; }
 .docket-widget > header small { color:var(--docket-widget-muted); }

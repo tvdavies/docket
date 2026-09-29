@@ -6,6 +6,7 @@ package bundle
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tvdavies/docket/internal/events"
@@ -136,6 +137,11 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 		body := record.Fallback.Label + " · " + record.Fallback.StatusLabel
 		if record.Fallback.Summary != "" {
 			body += "\n" + record.Fallback.Summary
+		}
+		for _, ref := range record.Fallback.References {
+			label := strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]").Replace(ref.Title)
+			href := strings.NewReplacer("<", "%3C", ">", "%3E").Replace(ref.URL)
+			body += "\n\n[" + label + "](<" + href + ">)"
 		}
 		b.Activity = append(b.Activity, ActivityView{At: record.CreatedAt, Kind: "widget", Type: record.WidgetType, Body: body, Data: map[string]any{"record": record}, sortTime: parseActivityTime(record.CreatedAt), order: len(b.Activity)})
 	}

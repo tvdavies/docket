@@ -89,7 +89,7 @@ export function TaskCard({ workspace, task, selected, config, preferences, live,
           </DropdownMenu.Content></DropdownMenu.Portal>
         </DropdownMenu.Root>
       </div>
-      <h3>{task.title}</h3>
+      <h3><a href={`/workspaces/${encodeURIComponent(workspace)}/tasks/${encodeURIComponent(task.id)}`} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); onSelect(task.id); } }}>{task.title}</a></h3>
       <PluginCardHost workspace={workspace} task={task} config={config.plugins} />
       <BoardWidgets workspace={workspace} task={task} config={config.plugins || []} />
       {preferences.fields.references && task.references[0] && <ResolvedReference reference={task.references[0]} taskId={task.id} compact />}

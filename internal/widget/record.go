@@ -149,8 +149,17 @@ func Fold(log []events.Event) Index {
 		if json.Unmarshal(raw, &r) != nil || r.TaskID != event.Task {
 			continue
 		}
-		// Workspace-specific URLs were validated on ingress. Basic identity is still checked here.
-		if r.Version != 1 || !typePattern.MatchString(r.WidgetType) || !idPattern.MatchString(r.InstanceID) || !timestamp(r.CreatedAt) || r.Revision < 1 || r.Revision > MaxRevision {
+		// Validate saved presentation too: hand-written or future event records
+		// must not smuggle an unbounded/invalid fallback into older readers.
+		workspaceName := ""
+		for _, ref := range r.Fallback.References {
+			if path, ok := strings.CutPrefix(ref.URL, "/workspaces/"); ok {
+				segment, _, _ := strings.Cut(path, "/")
+				workspaceName, _ = url.PathUnescape(segment)
+				break
+			}
+		}
+		if Validate(r, workspaceName) != nil {
 			continue
 		}
 		key := Key(r)

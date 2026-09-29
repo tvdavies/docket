@@ -36,7 +36,7 @@ export interface BoardTask {
     widget_summaries?: WidgetSummary[];
     widget_revision?: string;
 }
-export type WidgetLocation = 'board' | 'activity';
+export type WidgetLocation = "board" | "activity";
 export interface PluginCardDeclaration {
     type: string;
     title: string;
@@ -88,7 +88,7 @@ export interface ResolvedReference {
     meta?: Record<string, string>;
     href?: string;
 }
-export type PluginConfigFieldType = 'string' | 'number' | 'boolean' | 'list' | 'map';
+export type PluginConfigFieldType = "string" | "number" | "boolean" | "list" | "map";
 export interface PluginConfigField {
     type: PluginConfigFieldType;
     required?: boolean;
@@ -102,8 +102,8 @@ export interface PluginConfigSchemas {
     workspace?: Record<string, PluginConfigField>;
     status?: Record<string, PluginConfigField>;
 }
-export type WidgetPriority = 'attention' | 'error' | 'active' | 'history';
-export type WidgetTone = 'neutral' | 'positive' | 'warning' | 'danger' | 'info';
+export type WidgetPriority = "attention" | "error" | "active" | "history";
+export type WidgetTone = "neutral" | "positive" | "warning" | "danger" | "info";
 export interface WidgetReference {
     kind: string;
     url: string;
@@ -125,11 +125,11 @@ export interface WidgetRecordV1 {
     task_id: string;
     created_at: string;
     revision: number;
-    phase: 'created' | 'finalised';
+    phase: "created" | "finalised";
     fallback: WidgetFallback;
 }
-export interface WidgetSummary extends Omit<WidgetRecordV1, 'fallback'> {
-    fallback: Pick<WidgetFallback, 'label' | 'status_label' | 'priority'> & {
+export interface WidgetSummary extends Omit<WidgetRecordV1, "fallback"> {
+    fallback: Pick<WidgetFallback, "label" | "status_label" | "priority"> & {
         references?: WidgetReference[];
     };
 }
@@ -140,11 +140,11 @@ export interface WidgetIdentity {
     instanceId: string;
 }
 export interface WidgetPreferences {
-    theme: 'light' | 'dark';
-    density: 'compact' | 'comfortable';
+    theme: "light" | "dark";
+    density: "compact" | "comfortable";
     reducedMotion: boolean;
 }
-export type WidgetAvailability = 'available' | 'missing_service' | 'plugin_disabled' | 'module_missing' | 'unsupported' | 'error';
+export type WidgetAvailability = "available" | "missing_service" | "plugin_disabled" | "module_missing" | "unsupported" | "error";
 export interface WidgetData {
     version: number;
     revision: number;
@@ -181,7 +181,7 @@ export interface WidgetContext {
 export interface WidgetRow {
     key: string;
     order: number;
-    role: 'text' | 'step' | 'code' | 'reference';
+    role: "text" | "step" | "code" | "reference";
     label: string;
     text?: string;
     reference?: WidgetReference;
@@ -239,10 +239,10 @@ export interface DocketPluginUIV2 {
     referenceResolvers?: ReferenceResolverV2[];
 }
 export type PluginUI = DocketPluginUI | DocketPluginUIV2;
-export type WidgetErrorCode = 'incompatible_api' | 'incompatible_data' | 'invalid_identity' | 'invalid_url' | 'invalid_payload' | 'duplicate_definition' | 'missing_service' | 'mount_failed' | 'update_failed' | 'destroy_failed' | 'detail_gap';
+export type WidgetErrorCode = "incompatible_api" | "incompatible_data" | "invalid_identity" | "invalid_url" | "invalid_payload" | "duplicate_definition" | "missing_service" | "mount_failed" | "update_failed" | "destroy_failed" | "detail_gap";
 export interface WidgetError {
     code: WidgetErrorCode;
-    phase: 'registration' | 'mount' | 'update' | 'destroy' | 'detail';
+    phase: "registration" | "mount" | "update" | "destroy" | "detail";
     retryable: boolean;
 }
 export interface WidgetLivePayload {
@@ -271,8 +271,8 @@ export interface DetailFrame {
     reset: boolean;
     value: unknown;
 }
-export type DetailStatus = 'ready' | 'unavailable' | 'not_found' | 'error';
-export type DetailRevocation = 'released' | 'reselected' | 'unavailable' | 'retired' | 'gap_timeout' | 'error' | 'not_found';
+export type DetailStatus = "ready" | "unavailable" | "not_found" | "error";
+export type DetailRevocation = "released" | "reselected" | "unavailable" | "retired" | "gap_timeout" | "error" | "not_found";
 export interface DetailLease {
     release(): void;
     requestReset(): void;
@@ -303,7 +303,7 @@ export interface WidgetElement extends HTMLElement {
 export declare function widgetElementName(widgetType: string): string;
 /** Definitions cannot be removed. Code-changing reloads require a page reload. */
 export declare function defineWidgetElement(widgetType: string, buildIdentity: string, hooks: WidgetElementHooks): string;
-export declare function customElementWidget(options: Omit<WidgetModule, 'mount'> & {
+export declare function customElementWidget(options: Omit<WidgetModule, "mount"> & {
     buildIdentity: string;
     hooks: WidgetElementHooks;
 }): WidgetModule;
@@ -311,9 +311,9 @@ export declare function customElementWidget(options: Omit<WidgetModule, 'mount'>
 /** Public messages are codes only; never include opaque data or service bodies. */
 export declare class PluginUIError extends Error implements WidgetError {
     readonly code: WidgetErrorCode;
-    readonly phase: WidgetError['phase'];
+    readonly phase: WidgetError["phase"];
     readonly retryable: boolean;
-    constructor(code: WidgetErrorCode, phase: WidgetError['phase'], retryable?: boolean);
+    constructor(code: WidgetErrorCode, phase: WidgetError["phase"], retryable?: boolean);
 }
 
 export declare const kitCSS = ":host{display:block;color:var(--docket-widget-text);font:var(--docket-widget-text-size)/var(--docket-widget-line-height) var(--docket-widget-font);overflow-wrap:anywhere}*{box-sizing:border-box}p,pre{margin:0}ol{padding:0;list-style:none;margin:0}li{padding:var(--docket-widget-space-1) 0}pre{white-space:pre-wrap;max-width:100%;font-family:var(--docket-widget-mono);background:var(--docket-widget-sunken)}button,a{color:var(--docket-widget-accent)}button{font:inherit;cursor:pointer;background:var(--docket-widget-raised);border:1px solid var(--docket-widget-border);border-radius:var(--docket-widget-radius);padding:4px 8px}:focus-visible{outline:var(--docket-widget-focus-width) solid var(--docket-widget-focus);outline-offset:var(--docket-widget-focus-offset)}.muted{color:var(--docket-widget-muted)}[data-tone=positive]{color:var(--docket-widget-positive-fg)}[data-tone=warning]{color:var(--docket-widget-warning-fg)}[data-tone=danger]{color:var(--docket-widget-danger-fg)}[data-tone=info]{color:var(--docket-widget-info-fg)}@media(max-width:700px){button,a{min-height:44px;display:inline-flex;align-items:center}}@media(prefers-reduced-motion:reduce){*{animation:none!important;scroll-behavior:auto!important}}";

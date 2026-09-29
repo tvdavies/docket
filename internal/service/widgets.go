@@ -84,7 +84,9 @@ func writeWidgetError(w http.ResponseWriter, err error) {
 func (stream *workspaceStream) removeWidget(record widget.Record) {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	delete(stream.live, liveKey(livePayload{Kind: record.WidgetType, Task: record.TaskID, Session: record.InstanceID}))
+	key := liveKey(livePayload{Kind: record.WidgetType, Task: record.TaskID, Session: record.InstanceID})
+	delete(stream.live, key)
+	delete(stream.widgets, key) // The durable terminal record now owns the fence.
 }
 func declaredWidget(ws *workspace.Workspace, kind string) bool {
 	for _, p := range ws.Plugins {

@@ -68,9 +68,11 @@ export class BoardStore {
   }
 
   applyInit(value: StreamInit, cursor: string) {
+    if (value.workspace !== this.workspace) return;
     this.widgets.reset();
     this.config = value.config;
     this.base = new Map(value.tasks.map((task) => [task.id, task]));
+    for (const task of value.tasks) this.retireTerminalPreviews(task);
     this.cursor = cursor || value.cursor;
     this.rememberCursor(this.cursor);
     this.pending = this.pending.filter((mutation) => !mutation.cursor || !this.baseCovers(mutation));
@@ -81,7 +83,7 @@ export class BoardStore {
 
   applyPatch(value: StreamPatch, cursor: string) {
     if (cursor && this.observedCursors.includes(cursor)) return;
-    if (value.task) this.base.set(value.task.id, value.task);
+    if (value.task) { this.base.set(value.task.id, value.task); this.retireTerminalPreviews(value.task); }
     this.cursor = cursor || this.cursor;
     this.rememberCursor(cursor);
     if (cursor) this.pending = this.pending.filter((mutation) => mutation.cursor !== cursor);
@@ -96,7 +98,11 @@ export class BoardStore {
   }
 
   applyLive(value: LivePayload) {
-    if (value.payload && typeof value.payload === 'object' && 'widget_version' in value.payload) { this.widgets.accept(value); return; }
+    if (value.payload && typeof value.payload === 'object' && 'widget_version' in value.payload) {
+      const record = this.base.get(value.task || '')?.widget_summaries?.find(r => r.widget_type === value.kind && r.instance_id === value.session);
+      if (record?.phase !== 'finalised') this.widgets.accept(value);
+      return;
+    }
     const key = `${value.kind}\0${value.task || ''}\0${value.session || ''}`;
     const previous = this.live.get(key);
     if (previous) window.clearTimeout(previous.timer);
@@ -114,7 +120,11 @@ export class BoardStore {
     this.emit();
   }
 
-  acceptTask(task: BoardTask) { this.base.set(task.id, task); this.emit(); }
+  private retireTerminalPreviews(task: BoardTask) {
+    for (const record of task.widget_summaries || []) if (record.phase === 'finalised') this.widgets.finalise(record.widget_type,task.id,record.instance_id);
+  }
+
+  acceptTask(task: BoardTask) { this.base.set(task.id, task); this.retireTerminalPreviews(task); this.emit(); }
 
   optimisticPatch(taskId: string, patch: Partial<BoardTask>, requestPatch: TaskPatch = patch) {
     const id = `mutation-${++mutationSequence}`;
@@ -170,6 +180,7 @@ export class BoardStore {
     this.live.clear();
     this.listeners.clear();
     this.connection = 'closed';
+    this.snapshot = this.buildSnapshot();
   }
 
   private rememberCursor(cursor: string) {
