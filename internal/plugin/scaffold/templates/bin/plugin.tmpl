@@ -1,0 +1,13 @@
+#!/bin/sh
+# Publishes a {{.Name}}/status widget record on a task:
+#   docket {{.Name}} TASK-ID [WORKSPACE]
+# Docket draws the collapsed card from "fallback"; Expand opens ui/widget.html.
+set -eu
+task=${1:?usage: docket {{.Name}} TASK-ID [WORKSPACE]}
+workspace=${2:-$(basename "${DOCKET_HOME:-$PWD}")}
+url=${DOCKET_URL:-http://127.0.0.1:7463}
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+curl -fsS -X POST "$url/api/workspaces/$workspace/tasks/$task/widgets/create" \
+  -H 'Content-Type: application/json' -H 'X-Docket-Actor: {{.Name}}' \
+  --data "{\"version\":1,\"widget_type\":\"{{.Name}}/status\",\"instance_id\":\"status\",\"task_id\":\"$task\",\"created_at\":\"$now\",\"revision\":1,\"phase\":\"created\",\"fallback\":{\"label\":\"{{.Title}}\",\"status_label\":\"Ready\",\"priority\":\"active\",\"summary\":\"Published by bin/{{.Name}}.\"}}"
+echo
