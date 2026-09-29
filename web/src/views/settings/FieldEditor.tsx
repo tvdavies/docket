@@ -3,10 +3,11 @@ import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
-import { evaluateDraft, formatValue, hasDefault, hasEnum, isJsonKind, optionLabel, seedDraft, type FieldDraft, type FieldModel } from './model';
+import { evaluateDraft, formatValue, hasDefault, hasDynamicOptions, hasEnum, isJsonKind, optionLabel, seedDraft, type FieldDraft, type FieldModel } from './model';
+import { useFieldOptions } from './useFieldOptions';
 
-export function FieldEditor({ id, model, draft, edited, error, disabled, onChange, onDiscard }: {
-  id: string; model: FieldModel; draft: FieldDraft; edited: boolean; error: string; disabled: boolean;
+export function FieldEditor({ id, plugin, model, draft, edited, error, disabled, onChange, onDiscard }: {
+  id: string; plugin: string; model: FieldModel; draft: FieldDraft; edited: boolean; error: string; disabled: boolean;
   onChange(draft: FieldDraft): void; onDiscard(): void;
 }) {
   const { field, key } = model;
@@ -20,6 +21,12 @@ export function FieldEditor({ id, model, draft, edited, error, disabled, onChang
     }
   }, [controlId, draft.set]);
   const jsonKind = isJsonKind(field);
+  const dynamic = hasDynamicOptions(field);
+  const choices = useFieldOptions(plugin, field);
+  // The stored value stays selectable even when the plugin no longer offers it.
+  const offered = choices.options && draft.set && draft.text !== '' && !choices.options.some((option) => String(option.value) === draft.text)
+    ? [...choices.options, { value: draft.text, label: `${draft.text} (not offered)` }]
+    : choices.options;
   const canFormat = jsonKind && !hasEnum(field) && draft.set && evaluateDraft(field, draft).ok;
   return (
     <div className={`settings-field ${edited ? 'edited' : ''} ${error ? 'invalid' : ''}`} data-key={key}>
@@ -29,7 +36,7 @@ export function FieldEditor({ id, model, draft, edited, error, disabled, onChang
           {field.required && <span className="settings-required">Required</span>}
           {field.secret && <span className="settings-secret-badge">Secret</span>}
         </label>
-        <span className="settings-field-type">{hasEnum(field) ? `${field.type} · choice` : field.type}{edited && <em> · edited</em>}</span>
+        <span className="settings-field-type">{hasEnum(field) || dynamic ? `${field.type} · choice` : field.type}{edited && <em> · edited</em>}</span>
       </div>
       {field.description && <p className="settings-field-description" id={`${id}-description`}>{field.description}</p>}
       <p className="settings-provenance" id={`${id}-provenance`}>
@@ -49,6 +56,11 @@ export function FieldEditor({ id, model, draft, edited, error, disabled, onChang
               <option value="">Choose…</option>
               {field.enum!.map((option, index) => <option key={index} value={String(index)}>{optionLabel(option)}</option>)}
             </select>
+          ) : dynamic && offered ? (
+            <select id={controlId} value={draft.text} aria-describedby={describedBy} aria-invalid={error ? true : undefined} disabled={disabled} onChange={(event) => onChange({ ...draft, text: event.target.value })}>
+              <option value="">Choose…</option>
+              {offered.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
+            </select>
           ) : field.type === 'boolean' ? (
             <span className="settings-boolean">
               <Checkbox id={controlId} checked={draft.checked} aria-describedby={describedBy} aria-invalid={error ? true : undefined} disabled={disabled} onCheckedChange={(checked) => onChange({ ...draft, checked: checked === true })} />
@@ -61,6 +73,11 @@ export function FieldEditor({ id, model, draft, edited, error, disabled, onChang
           ) : (
             <Input id={controlId} type="text" autoComplete="off" value={draft.text} aria-describedby={describedBy} aria-invalid={error ? true : undefined} disabled={disabled} onChange={(event) => onChange({ ...draft, text: event.target.value })} />
           )}
+          {dynamic && <p className="settings-options-status" role={choices.error ? 'alert' : undefined}>
+            {choices.loading ? 'Loading options from the plugin…' : choices.error ? `Could not load options (${choices.error}); enter a value directly.` : `Options served by ${plugin} at `}
+            {!choices.loading && !choices.error && <code>{field.options_from}</code>}
+            {' '}<Button type="button" variant="ghost" size="sm" disabled={choices.loading} onClick={choices.refresh}>Refresh options</Button>
+          </p>}
           {jsonKind && <p className="settings-json-hint">JSON {field.type === 'list' ? 'array' : 'object'}. Saving replaces the whole stored value; an empty <code>{field.type === 'list' ? '[]' : '{}'}</code> is a real value.</p>}
         </div>
       )}

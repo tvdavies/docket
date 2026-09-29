@@ -173,6 +173,32 @@ func TestServiceCommandAndWatchValidation(t *testing.T) {
 	}
 }
 
+func TestOptionsFromValidation(t *testing.T) {
+	service := "service: {url: http://127.0.0.1:1}\n"
+	manifest, err := plugin.Load(writeManifest(t, "name: example\nversion: 1.0.0\n"+service+"config:\n  workspace:\n    model: {type: string, options_from: /api/models}\n"), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Config.Workspace["model"].OptionsFrom; got != "/api/models" {
+		t.Fatalf("options_from = %q", got)
+	}
+	for name, body := range map[string]struct{ body, want string }{
+		"no service":    {"config: {instance: {model: {type: string, options_from: /api/models}}}", "requires a service"},
+		"relative path": {service + "config: {instance: {model: {type: string, options_from: api/models}}}", "clean absolute service path"},
+		"traversal":     {service + "config: {instance: {model: {type: string, options_from: /api/../x}}}", "clean absolute service path"},
+		"list type":     {service + "config: {instance: {model: {type: list, options_from: /api/models}}}", "string or number"},
+		"with enum":     {service + "config: {instance: {model: {type: string, enum: [a], options_from: /api/models}}}", "secret or enum"},
+		"secret":        {service + "config: {instance: {model: {type: string, secret: true, options_from: /api/models}}}", "secret or enum"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := plugin.Load(writeManifest(t, "name: example\nversion: 1.0.0\n"+body.body+"\n"), "dev")
+			if err == nil || !strings.Contains(err.Error(), body.want) {
+				t.Fatalf("error = %v, want substring %q", err, body.want)
+			}
+		})
+	}
+}
+
 func TestMatchWatch(t *testing.T) {
 	for _, test := range []struct {
 		pattern, name string
@@ -190,5 +216,37 @@ func TestMatchWatch(t *testing.T) {
 		if got := plugin.MatchWatch(test.pattern, test.name); got != test.want {
 			t.Errorf("MatchWatch(%q, %q) = %v, want %v", test.pattern, test.name, got, test.want)
 		}
+	}
+}
+
+func TestProblemsReportMissingFiles(t *testing.T) {
+	root := writeManifest(t, "name: example\nversion: 1.0.0\n"+
+		"handlers:\n  react: {on: [task.created], run: bin/react}\n"+
+		"cli: {run: bin/cli}\n"+
+		"service: {url: http://127.0.0.1:1, command: [bin/serve]}\n"+
+		"ui:\n  dir: ui\n  widgets: [{type: example/card, title: Card, entry: card.html}]\n  pages: [{id: home, title: Home, entry: page.html}]\n")
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "ui"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, mode := range map[string]os.FileMode{"bin/react": 0o755, "bin/cli": 0o644, "ui/page.html": 0o644} {
+		if err := os.WriteFile(filepath.Join(root, path), []byte("x"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest, err := plugin.Load(root, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(manifest.Problems(), "\n")
+	for _, want := range []string{"cli.run: bin/cli is not executable", "service.command[0]: bin/serve does not exist", "ui.widgets[0].entry: ui/card.html does not exist"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("problems = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "handlers") || strings.Contains(got, "page.html") {
+		t.Fatalf("problems report present files: %q", got)
 	}
 }

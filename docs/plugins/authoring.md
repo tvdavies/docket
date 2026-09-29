@@ -13,17 +13,21 @@ Reference material:
 - [Lua hooks](../lua-hooks.md) — the handler runtime.
 - [`plugin-sdk.d.ts`](../plugin-sdk.d.ts) — generated types for the UI SDK.
 
-## 1. Start from the example
-
-[`examples/plugins/hello-widget`](../../examples/plugins/hello-widget) is a
-complete UI plugin with no service and no build step: a widget, a task panel and
-a workspace page. Copy it and rename:
+## 1. Scaffold
 
 ```sh
-cp -r examples/plugins/hello-widget ~/dev/my-plugin
-cd ~/dev/my-plugin
-# edit docket-plugin.yaml: name, widget type prefix, titles
+docket plugin new my-plugin              # widget, task panel and workspace page
+docket plugin new my-plugin --widget --service   # pick views; --service adds a Node server
 ```
+
+This writes `./my-plugin` (`--dir` to choose) with a valid manifest, frames
+that use the SDK, a CLI command that publishes a widget and, with `--service`,
+a supervised server exposing `/healthz`, `/hello` and an `options_from` source
+for its settings. The files are the starting point: rename, delete and edit
+freely.
+
+[`examples/plugins/hello-widget`](../../examples/plugins/hello-widget) is a
+finished example of the same shape without a service.
 
 Rules the manifest validator enforces:
 
@@ -32,19 +36,33 @@ Rules the manifest validator enforces:
 - Every `entry` is a clean relative path inside `ui.dir`.
 - Unknown fields are errors — check spelling rather than adding fields.
 
-## 2. Install, enable and look
+## 2. Run it with `plugin dev`
+
+From the workspace you want the plugin in:
 
 ```sh
-docket plugin add ~/dev/my-plugin        # links the checkout; edits apply in place
-docket plugin enable my-plugin           # in the current workspace
-docket plugin list
+docket plugin dev ./my-plugin
 ```
 
-`enable` validates the manifest; an error names the field at fault. An enabled plugin that fails
-validation makes its workspace unavailable, so fix or `disable` it promptly.
+`plugin dev` links the directory (edits apply in place), enables it in the
+current workspace, starts the Docket service if nothing is listening, and then
+stays in the foreground printing one line per event: manifest validation on
+every save, UI reloads, service starts, restarts and failures, and the
+service's own output prefixed `[service]`. Leave it running in a terminal or a
+background job while you edit; stop it with Ctrl-C (the plugin stays enabled).
 
-With the Docket service running (`docket serve`, default
-`http://127.0.0.1:7463`):
+The same steps by hand:
+
+```sh
+docket plugin add ./my-plugin            # links the checkout
+docket plugin enable my-plugin           # validates, in the current workspace
+docket serve                             # if the service is not already running
+```
+
+An enabled plugin that fails validation makes its workspace unavailable, so
+fix or `disable` it promptly.
+
+With the service running (default `http://127.0.0.1:7463`):
 
 - the page is at `/workspaces/<ws>/p/my-plugin/<page-id>` and in the header nav;
 - panels are tabs in any task's detail view;
@@ -53,8 +71,8 @@ With the Docket service running (`docket serve`, default
 ## 3. Publish a widget
 
 Widgets are records in a task's ledger, published over HTTP by something you
-control: a CLI command, a hook or your service. The hello example's
-`bin/hello-widget` shows the minimal call:
+control: a CLI command, a hook or your service. The scaffold's
+`bin/my-plugin` shows the minimal call:
 
 ```sh
 docket my-plugin TASK-0001
@@ -156,9 +174,16 @@ To debug a frame, open the browser dev tools and select the plugin iframe's
 context. You can also open `/plugin-ui/<name>/<hash>/<entry>` directly: it runs
 with the same sandbox, but `connect()` rejects because there is no host.
 
+### Settings with dynamic choices
+
+Config fields can take their choices from the service with `options_from` (see
+[Plugins](../plugins.md#scoped-config)); the settings page fetches them through
+the proxy and refetches when the service restarts.
+
 ## 6. Check
 
 ```sh
+docket plugin validate ./my-plugin  # manifest, plus handler, CLI, service and UI files exist
 docket plugin enable my-plugin      # re-validates the manifest against this workspace
 curl -s localhost:7463/api/workspaces/<ws>/board | jq '.plugins[] | {name, ui_base, widgets, pages, panels}'
 ```
@@ -168,7 +193,7 @@ if it does not, the frame is not sandboxed.
 
 ## Checklist
 
-- [ ] Manifest validates; widget types are `<name>/...`.
+- [ ] `docket plugin validate` reports ok; widget types are `<name>/...`.
 - [ ] `ui.capabilities` lists exactly the bridge methods you call.
 - [ ] Frames use `connect()` and design tokens; no absolute URLs to other hosts.
 - [ ] Widget records carry a useful `fallback`, so cards read well with the plugin disabled.

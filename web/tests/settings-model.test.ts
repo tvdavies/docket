@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildFields, draftFromValue, evaluateDraft, evaluateForm, seedDraft } from '../src/views/settings/model';
+import { buildFields, draftFromValue, evaluateDraft, evaluateForm, hasDynamicOptions, MAX_FIELD_OPTIONS, parseFieldOptions, seedDraft } from '../src/views/settings/model';
 import { invalidSchemaReason, type PluginConfigField } from '../src/api/plugin-settings';
 import { instanceSettingsPath, parseRoute, resolveRoute, statusSettingsPath, workspaceSettingsPath } from '../src/app/router';
 
@@ -52,5 +52,37 @@ describe('generated settings data contract', () => {
       expect(route.valid).toBe(true); expect(resolveRoute(route, []).settings).toEqual(route.settings);
     }
     for (const path of ['/settings/other', '/settings/plugins/extra', '/workspaces/a/settings/plugins/statuses', '/workspaces/%FF/settings/plugins']) expect(parseRoute({ pathname: path, search: '' }).valid).toBe(false);
+  });
+});
+
+describe('options_from fields', () => {
+  test('schema validation accepts service paths on string and number fields only', () => {
+    expect(invalidSchemaReason({ pick: { type: 'string', options_from: '/options/picks' } }, 'instance')).toBe('');
+    expect(invalidSchemaReason({ pick: { type: 'number', options_from: '/options?x' } }, 'instance')).not.toBe('');
+    for (const field of [
+      { type: 'string', options_from: 'relative' },
+      { type: 'string', options_from: '//evil.example/x' },
+      { type: 'string', options_from: 42 },
+      { type: 'list', options_from: '/x' },
+      { type: 'string', options_from: '/x', enum: ['a'] },
+      { type: 'string', options_from: '/x', secret: true },
+    ]) expect(invalidSchemaReason({ pick: field } as unknown as Record<string, PluginConfigField>, 'instance')).not.toBe('');
+    expect(hasDynamicOptions({ type: 'string', options_from: '/x' })).toBe(true);
+    expect(hasDynamicOptions({ type: 'string' })).toBe(false);
+  });
+  test('responses accept bare values and labelled objects, dropping duplicates', () => {
+    expect(parseFieldOptions({ type: 'string' }, ['a', { value: 'b', label: 'Bee' }, { value: 'a', label: 'again' }, { value: 'c', label: ' ' }]))
+      .toEqual([{ value: 'a', label: 'a' }, { value: 'b', label: 'Bee' }, { value: 'c', label: 'c' }]);
+    expect(parseFieldOptions({ type: 'number' }, [1, { value: 2.5 }])).toEqual([{ value: 1, label: '1' }, { value: 2.5, label: '2.5' }]);
+  });
+  test('malformed responses are errors', () => {
+    for (const [field, payload] of [
+      [{ type: 'string' }, { options: [] }],
+      [{ type: 'string' }, [1]],
+      [{ type: 'number' }, ['1']],
+      [{ type: 'number' }, [{ value: Number.NaN }]],
+      [{ type: 'string' }, [null]],
+      [{ type: 'string' }, Array.from({ length: MAX_FIELD_OPTIONS + 1 }, (_, index) => String(index))],
+    ] as [PluginConfigField, unknown][]) expect(() => parseFieldOptions(field, payload)).toThrow();
   });
 });

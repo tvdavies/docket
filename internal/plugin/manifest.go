@@ -74,6 +74,9 @@ type ConfigField struct {
 	Enum        []any  `yaml:"enum,omitempty" json:"enum,omitempty"`
 	Secret      bool   `yaml:"secret,omitempty" json:"secret,omitempty"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	// OptionsFrom is a service path returning the field's choices at runtime,
+	// for option lists (such as installed models) a static enum cannot express.
+	OptionsFrom string `yaml:"options_from,omitempty" json:"options_from,omitempty"`
 }
 
 type Service struct {
@@ -278,6 +281,11 @@ func (m *Manifest) Validate(engineVersion string) error {
 		if err := validateSchema(scope, schema); err != nil {
 			return err
 		}
+		for name, field := range schema {
+			if field.OptionsFrom != "" && m.Service == nil {
+				return fmt.Errorf("config.%s.%s: options_from requires a service", scope, name)
+			}
+		}
 	}
 	if m.Service != nil {
 		if err := validateService(*m.Service); err != nil {
@@ -480,6 +488,17 @@ func validateSchema(scope string, schema map[string]ConfigField) error {
 		for _, candidate := range field.Enum {
 			if err := validateFieldValue(field, candidate); err != nil {
 				return fmt.Errorf("config.%s.%s enum: %w", scope, name, err)
+			}
+		}
+		if field.OptionsFrom != "" {
+			if field.Type != "string" && field.Type != "number" {
+				return fmt.Errorf("config.%s.%s: options_from is only valid on string or number fields", scope, name)
+			}
+			if field.Secret || len(field.Enum) > 0 {
+				return fmt.Errorf("config.%s.%s: options_from cannot be combined with secret or enum", scope, name)
+			}
+			if err := validateServicePath(fmt.Sprintf("config.%s.%s options_from", scope, name), field.OptionsFrom); err != nil {
+				return err
 			}
 		}
 	}

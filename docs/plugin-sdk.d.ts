@@ -93,6 +93,13 @@ export interface PluginConfigField {
     enum?: unknown[];
     secret?: boolean;
     description?: string;
+    /**
+     * Service path (for example "/options/models") whose JSON response lists the
+     * field's choices: an array of values or of { value, label } objects.
+     * Settings forms fetch it through the plugin proxy and fall back to free
+     * input when it fails. Only valid on string and number fields.
+     */
+    options_from?: string;
 }
 export interface PluginConfigSchemas {
     instance?: Record<string, PluginConfigField>;

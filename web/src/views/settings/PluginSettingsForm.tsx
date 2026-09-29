@@ -67,7 +67,7 @@ export function PluginSettingsForm(props: Omit<SettingsFormOptions, 'onFocusFiel
             <p>{errorKeys.length === 1 ? 'One field needs attention:' : `${errorKeys.length} fields need attention:`}</p>
             <ul>{errorKeys.map((key) => <li key={key}><a href={`#${fieldId(key)}-control`} onClick={(event) => { event.preventDefault(); focusField(key); }}>{humanizeKey(key)}</a>: {form.errors[key]}</li>)}</ul>
           </div>}
-          {form.fields.map((model) => <FieldEditor key={model.key} id={fieldId(model.key)} model={model} draft={form.drafts[model.key]} edited={form.editedKeys.includes(model.key)} error={form.errors[model.key] || ''} disabled={!editing} onChange={(draft) => form.setDraft(model.key, draft)} onDiscard={() => form.discardField(model.key)} />)}
+          {form.fields.map((model) => <FieldEditor key={model.key} id={fieldId(model.key)} plugin={entry.name} model={model} draft={form.drafts[model.key]} edited={form.editedKeys.includes(model.key)} error={form.errors[model.key] || ''} disabled={!editing} onChange={(draft) => form.setDraft(model.key, draft)} onDiscard={() => form.discardField(model.key)} />)}
         </fieldset>
         <div className="settings-actions">
           <Button type="submit" disabled={!form.canSave || !!schemaProblem}>{busy ? 'Saving…' : 'Save'}</Button>

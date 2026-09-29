@@ -29,6 +29,34 @@ export const isJsonKind = (field: PluginConfigField) => field.type === 'list' ||
 export const hasEnum = (field: PluginConfigField) => Array.isArray(field.enum) && field.enum.length > 0;
 export const hasDefault = (field: PluginConfigField) => field.default !== undefined && field.default !== null;
 
+export const hasDynamicOptions = (field: PluginConfigField) => typeof field.options_from === 'string' && !hasEnum(field) && !field.secret;
+
+export type FieldOption = { value: string | number; label: string };
+export const MAX_FIELD_OPTIONS = 1000;
+
+/**
+ * Validates an options_from response: an array of values, or of { value, label? }
+ * objects, whose values match the field type. Duplicates keep the first label.
+ */
+export function parseFieldOptions(field: PluginConfigField, payload: unknown): FieldOption[] {
+  if (!Array.isArray(payload)) throw new Error('Options response is not a JSON array.');
+  if (payload.length > MAX_FIELD_OPTIONS) throw new Error(`Options response lists more than ${MAX_FIELD_OPTIONS} choices.`);
+  const options: FieldOption[] = [];
+  const seen = new Set<string>();
+  for (const item of payload) {
+    const record = item !== null && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null;
+    const value = record ? record.value : item;
+    const valid = field.type === 'number' ? typeof value === 'number' && Number.isFinite(value) : typeof value === 'string';
+    if (!valid) throw new Error(`Options must be ${field.type === 'number' ? 'finite numbers' : 'text'}; got ${JSON.stringify(value)}.`);
+    const label = record && typeof record.label === 'string' && record.label.trim() ? record.label : String(value);
+    const key = String(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    options.push({ value: value as string | number, label });
+  }
+  return options;
+}
+
 export function enumIndex(field: PluginConfigField, value: unknown): number {
   if (!hasEnum(field)) return -1;
   const wanted = canonical(value);

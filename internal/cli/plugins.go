@@ -16,7 +16,8 @@ import (
 
 func newPluginCmd() *cobra.Command {
 	command := &cobra.Command{Use: "plugin", Short: "Install and enable trusted Docket plugins"}
-	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd(), newPluginLogsCmd())
+	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd(), newPluginLogsCmd(),
+		newPluginNewCmd(), newPluginValidateCmd(), newPluginDevCmd())
 	return command
 }
 
@@ -302,7 +303,7 @@ func parseSettings(entries []string) (map[string]any, error) {
 func builtinCommand(name string) bool {
 	_, exists := map[string]struct{}{
 		"__lua-hook": {}, "attach": {}, "attach-file": {}, "comment": {}, "completion": {}, "context": {},
-		"detach": {}, "edit": {}, "events": {}, "files": {}, "help": {}, "inbox": {}, "init": {}, "label": {},
+		"detach": {}, "docs": {}, "edit": {}, "events": {}, "files": {}, "help": {}, "inbox": {}, "init": {}, "label": {},
 		"link": {}, "list": {}, "move": {}, "new": {}, "plugin": {}, "project": {}, "reference": {}, "reindex": {},
 		"guide": {}, "ref": {}, "serve": {}, "service": {}, "session": {}, "show": {}, "skill": {}, "unlink": {}, "wait": {}, "watch": {}, "workspace": {},
 	}[name]

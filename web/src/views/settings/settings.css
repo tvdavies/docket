@@ -30,7 +30,7 @@
 .settings-field-type em { font-style: normal; color: var(--accent-strong); }
 .settings-required, .settings-secret-badge { display: inline-block; font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; margin-left: 8px; }
 .settings-field-description { font-size: 13px; line-height: 1.5; margin: 8px 0; }
-.settings-provenance, .settings-secret-note, .settings-json-hint { font-size: 12px; line-height: 1.6; color: var(--muted); margin: 8px 0 12px; }
+.settings-provenance, .settings-secret-note, .settings-json-hint, .settings-options-status { font-size: 12px; line-height: 1.6; color: var(--muted); margin: 8px 0 12px; }
 .settings-default { display: block; }
 .settings-control { max-width: 100%; }
 .settings-control :is(input, textarea, select) { width: 100%; max-width: 100%; }

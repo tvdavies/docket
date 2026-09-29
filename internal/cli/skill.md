@@ -213,6 +213,21 @@ docket service logs
 docket events --json
 ```
 
+## Extending Docket with plugins
+
+Plugins add handlers, statuses, settings, a supervised service, CLI commands and sandboxed UI (task widgets, panels, pages) to a running Docket without rebuilding it. The binary carries its own docs:
+
+```sh
+docket docs                         # list topics
+docket docs plugins/authoring       # step-by-step guide; read this first
+docket docs plugins/ui              # frame bridge API reference
+docket plugin new NAME [--widget] [--panel] [--page] [--service]
+docket plugin dev PATH              # link + enable + serve; streams validation, reloads and service logs
+docket plugin validate PATH [--json]
+```
+
+Keep `docket plugin dev` running while editing: UI and manifest changes apply live, and its output shows validation errors and service failures.
+
 ## Low-level coordination
 
 ```sh
