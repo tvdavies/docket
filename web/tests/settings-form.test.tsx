@@ -161,3 +161,30 @@ describe('failure-safe settings controller', () => {
     await act(async () => { release([current]); await pending; }); expect(calls).toBe(0);
   });
 });
+
+describe('options_from fields', () => {
+  // waitFor mistakes timers left patched by other files for fake ones, so settle the fetch directly.
+  const settle = () => act(async () => { for (let turn = 0; turn < 10; turn += 1) await Promise.resolve(); });
+  const dynamic = (): PluginCatalogueEntry => ({ ...entry(), schemas: { instance: { pick: { type: 'string', options_from: '/options/picks' } } }, instance_values: { pick: 'gone' } });
+  test('offers the plugin-served choices, keeping a stored value it no longer lists', async () => {
+    const requests: string[] = [];
+    globalThis.fetch = (async (path) => { requests.push(String(path)); return Response.json(['a', { value: 'b', label: 'Bee' }]); }) as typeof fetch;
+    const current = dynamic();
+    const view = render(<PluginSettingsForm entry={current} target={target} reload={async () => [current]} checkTarget={() => ''} />);
+    await settle();
+    const select = view.getByRole('combobox') as HTMLSelectElement;
+    expect(requests).toContain('/plugins/fixture/options/picks');
+    expect([...select.options].map((option) => option.textContent)).toEqual(['Choose…', 'a', 'Bee', 'gone (not offered)']);
+    expect(select.value).toBe('gone');
+    expect(view.getByText('string · choice', { exact: false })).toBeTruthy();
+  });
+  test('falls back to a text input when the options cannot be loaded', async () => {
+    globalThis.fetch = (async () => Response.json({ error: 'down' }, { status: 502 })) as typeof fetch;
+    const current = dynamic();
+    const view = render(<PluginSettingsForm entry={current} target={target} reload={async () => [current]} checkTarget={() => ''} />);
+    await settle();
+    expect(view.getByRole('alert').textContent).toContain('Could not load options');
+    expect(view.queryByRole('combobox')).toBeNull();
+    expect((view.getByRole('textbox') as HTMLInputElement).value).toBe('gone');
+  });
+});

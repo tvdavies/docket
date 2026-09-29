@@ -38,6 +38,11 @@ export function invalidSchemaReason(schema: unknown, scope?: 'instance' | 'works
     const matches = (value: unknown) => raw.type === 'list' ? Array.isArray(value) : raw.type === 'map' ? isRecord(value) : typeof value === raw.type && (raw.type !== 'number' || Number.isFinite(value));
     if (raw.default != null && !matches(raw.default)) return `field ${key} default has the wrong type`;
     if (Array.isArray(raw.enum) && raw.enum.some((value) => !matches(value))) return `field ${key} enum has the wrong type`;
+    if (raw.options_from !== undefined) {
+      if (typeof raw.options_from !== 'string' || !/^\/(?!\/)[^\\?#%]*$/.test(raw.options_from)) return `field ${key} options_from is not a service path`;
+      if (raw.type !== 'string' && raw.type !== 'number') return `field ${key} options_from needs a string or number field`;
+      if (raw.secret || (Array.isArray(raw.enum) && raw.enum.length)) return `field ${key} combines options_from with secret or enum`;
+    }
   }
   return '';
 }
@@ -71,6 +76,9 @@ export async function listPluginCatalogue(signal?: AbortSignal): Promise<PluginC
   if (!Array.isArray(payload)) throw new Error('Plugin catalogue response was not a list');
   return payload.map(checkEntry);
 }
+
+/** Reads a field's options_from service path through the plugin proxy. The response is validated by parseFieldOptions. */
+export const fetchFieldOptions = (plugin: string, path: string, signal?: AbortSignal) => api<unknown>(`/plugins/${encodeURIComponent(plugin)}${path}`, { signal });
 
 const body = (values: Record<string, unknown>) => ({ method: 'PATCH', body: JSON.stringify({ values }) });
 export const pluginConfigPath = (plugin: string) => `/api/plugins/${encodeURIComponent(plugin)}/config`;

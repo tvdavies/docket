@@ -98,6 +98,8 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 	sessionCommand.GroupID = groupSessions
 	skillCommand := newSkillCmd()
 	skillCommand.GroupID = groupHelp
+	docsCommand := newDocsCmd()
+	docsCommand.GroupID = groupHelp
 
 	// Preserve the original flat session commands and duplicate context command
 	// for scripts, but keep the primary help surface small and unambiguous.
@@ -111,7 +113,7 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 	root.AddCommand(projectCommands...)
 	root.AddCommand(automationCommands...)
 	root.AddCommand(serviceCommands...)
-	root.AddCommand(sessionCommand, skillCommand)
+	root.AddCommand(sessionCommand, skillCommand, docsCommand)
 	root.AddCommand(legacyAttach, legacyDetach, legacyCurrent, legacyContext, newLuaHookCmd())
 	return root
 }

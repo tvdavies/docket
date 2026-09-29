@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<p id="status" class="muted">Connecting…</p>
+{{- if .Service}}
+<p id="greeting"></p>
+{{- end}}
+<button id="comment">Comment on task</button>
+<script type="module">
+  import { connect } from "/plugin-sdk/v1/client.js";
+  const docket = await connect();
+  const render = (context) => {
+    const presentation = context.widget?.presentation;
+    document.getElementById("status").textContent = `${presentation?.label ?? "{{.Title}}"} · ${presentation?.status.text ?? ""}`;
+  };
+  docket.onUpdate(render);
+  render(docket.context);
+{{- if .Service}}
+  const { message } = await docket.json("/hello");
+  document.getElementById("greeting").textContent = message;
+{{- end}}
+  document.getElementById("comment").onclick = () => docket.comment(`Hello from ${docket.context.plugin}`);
+</script>

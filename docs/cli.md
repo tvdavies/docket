@@ -178,6 +178,26 @@ docket service uninstall
 
 There is one service per user/machine and any number of registered workspaces.
 
+## Documentation and plugin authoring
+
+The reference docs ship inside the binary, so they always match the installed version:
+
+```sh
+docket docs                            # list topics
+docket docs plugins/authoring          # print one (Markdown)
+docket docs plugins/ui --json          # {name, title, content}
+```
+
+Plugin authoring commands:
+
+```sh
+docket plugin new my-plugin --widget --service   # scaffold ./my-plugin (all views when none chosen)
+docket plugin validate my-plugin                 # manifest + referenced files; --json for tooling
+docket plugin dev my-plugin                      # link, enable, serve if needed, stream reloads and logs
+```
+
+`plugin dev` links and enables the plugin in the current workspace (`--workspace`, `--set KEY=VALUE` on first enable), starts an in-process service unless one is already listening (`--serve=false` to only watch), then prints validation results on every manifest save, UI reloads, service restarts and service output until interrupted. Nothing is uninstalled on exit.
+
 ## Environment variables
 
 | Variable | Purpose |

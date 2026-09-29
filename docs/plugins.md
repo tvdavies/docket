@@ -154,6 +154,25 @@ values are overlaid by workspace values; status values remain a per-lane map.
 Secrets are documented by the schema but should be supplied through Docket's
 environment file rather than stored in YAML.
 
+A `string` or `number` field may name a service path in `options_from` instead
+of a fixed `enum`. The settings page fetches it through the plugin proxy
+(`GET /plugins/<name><path>`) and offers the result as a choice list, refreshed
+when the plugin's manifest or service state changes and on **Refresh options**:
+
+```yaml
+config:
+  instance:
+    model:
+      type: string
+      options_from: /options/models   # needs a service; absolute, no query
+```
+
+The response is a JSON array of values or `{"value": ..., "label": "..."}`
+objects (at most 1000) whose values match the field type. Choices are a
+convenience, not validation: a stored value the service no longer lists stays
+selectable, and when the request fails the page falls back to a text input.
+`options_from` cannot be combined with `enum` or `secret`.
+
 ### Service proxy
 
 One optional loopback HTTP service is exposed at `/plugins/<name>/` while the

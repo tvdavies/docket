@@ -1,0 +1,30 @@
+# {{.Name}}
+
+{{.Description}}
+
+Scaffolded by `docket plugin new`. Develop it against a running Docket with:
+
+```sh
+docket plugin dev .      # link, enable here, validate on save, stream reloads{{if .Service}} and service logs{{end}}
+```
+
+Files:
+
+- `docket-plugin.yaml`: the manifest (`docket docs plugins`).
+{{- if .Widget}}
+- `ui/widget.html`: opened when the `{{.Name}}/status` widget is expanded in a task's activity.
+- `bin/{{.Name}}`: `docket {{.Name}} TASK-ID` publishes a widget record on a task.
+{{- end}}
+{{- if .Panel}}
+- `ui/panel.html`: a tab in task detail.
+{{- end}}
+{{- if .Page}}
+- `ui/page.html`: a workspace page at `/workspaces/<ws>/p/{{.Name}}/overview`.
+{{- end}}
+{{- if .Service}}
+- `server/index.mjs`: the supervised service, reached from frames via `docket.json(path)`.
+{{- end}}
+- `ui/style.css`: shared styles using Docket's theme tokens.
+
+Edits under `ui/` reload open frames in place{{if .Service}}; edits under `server/` restart the service{{end}}.
+Guides: `docket docs plugins/authoring` and `docket docs plugins/ui`.
