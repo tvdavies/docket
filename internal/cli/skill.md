@@ -234,6 +234,8 @@ Keep `docket plugin dev` running while editing: UI and manifest changes apply li
 docket events [--since N] --json
 docket watch [--from-start]
 docket inbox [--actor ACTOR] [--all] [--mark-read] --json
+docket inbox [--actor ACTOR] [--all] --peek --json   # durable read; then:
+docket inbox ack [--actor ACTOR] [--all] CHECKPOINT
 ```
 
 These are diagnostics or integration primitives. Configured handlers are the normal durable event mechanism.

@@ -149,9 +149,10 @@ docket project show "$PROJECT"
 |---|---|
 | `docket events [--since N]` | Inspect the append-only event log |
 | `docket watch [--from-start]` | Stream JSONL for diagnostics or a transient consumer |
-| `docket inbox [--mark-read]` | Poll unread events using an actor cursor |
+| `docket inbox [--mark-read]` | Poll unread events using an actor cursor; `--mark-read` acknowledges immediately |
+| `docket inbox --peek` / `docket inbox ack CHECKPOINT` | Durable consumers: read, record, then acknowledge |
 
-Configured handlers are preferred for durable event-driven automation. See [Lua hooks and SDK](lua-hooks.md).
+Configured handlers are preferred for durable event-driven automation. See [Lua hooks and SDK](lua-hooks.md) and [Inbox consumers](inbox.md).
 
 ## Workspaces and service
 

@@ -140,19 +140,39 @@ func ReadBatch(ws *workspace.Workspace, cursor int) ([]Event, int, error) {
 // A durable consumer verifies this before advancing its cursor so a concurrent
 // history replacement cannot acknowledge events it never received.
 func ReadBatchCheckpoint(ws *workspace.Workspace, cursor int) ([]Event, int, string, error) {
-	return readFrom(ws.EventsFile(), cursor)
+	snapshot, err := readFrom(ws.EventsFile(), cursor)
+	return snapshot.Events, snapshot.End, snapshot.EndHash, err
 }
 
-func readFrom(path string, skip int) ([]Event, int, string, error) {
+// Snapshot is one consistent scan of the log after a line-count position.
+// StartHash and EndHash use the same prefix identity as PrefixHash, and Found
+// is the number of non-empty lines present, which is below Start only when the
+// log is shorter than the requested position.
+type Snapshot struct {
+	Events    []Event
+	Start     int
+	StartHash string
+	End       int
+	EndHash   string
+	Found     int
+}
+
+// ReadSnapshot reads valid events after position together with the prefix
+// identity at both boundaries, from a single pass over the log.
+func ReadSnapshot(ws *workspace.Workspace, position int) (Snapshot, error) {
+	return readFrom(ws.EventsFile(), position)
+}
+
+func readFrom(path string, skip int) (Snapshot, error) {
+	snapshot := Snapshot{Start: skip, End: skip}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, skip, "", nil
+			return snapshot, nil
 		}
-		return nil, skip, "", err
+		return snapshot, err
 	}
 	defer f.Close()
-	var out []Event
 	hash := sha256.New()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -165,6 +185,9 @@ func readFrom(path string, skip int) ([]Event, int, string, error) {
 		i++
 		_, _ = hash.Write(line)
 		_, _ = hash.Write([]byte{'\n'})
+		if i == skip {
+			snapshot.StartHash = fmt.Sprintf("%x", hash.Sum(nil))
+		}
 		if i <= skip {
 			continue
 		}
@@ -172,9 +195,15 @@ func readFrom(path string, skip int) ([]Event, int, string, error) {
 		if err := json.Unmarshal(line, &ev); err != nil {
 			continue
 		}
-		out = append(out, ev)
+		snapshot.Events = append(snapshot.Events, ev)
 	}
-	return out, i, fmt.Sprintf("%x", hash.Sum(nil)), sc.Err()
+	snapshot.Found = i
+	snapshot.End = i
+	snapshot.EndHash = fmt.Sprintf("%x", hash.Sum(nil))
+	if i == 0 {
+		snapshot.EndHash = ""
+	}
+	return snapshot, sc.Err()
 }
 
 // PrefixHash returns a SHA-256 checkpoint for the first position non-empty log

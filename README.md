@@ -128,7 +128,8 @@ react:
   execution to `docket.service` so mutations return immediately without
   sacrificing durable retry.
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
-  you, tracked by a per-actor cursor.
+  you, tracked by a per-actor cursor. Durable consumers use `--peek` and
+  `docket inbox ack CHECKPOINT` instead (see [docs/inbox.md](docs/inbox.md)).
 - `docket watch` — **stream**: emits each new event as a JSON line for one
   workspace; it remains a diagnostic primitive rather than the daemon.
 - `docket serve [--all]` — **service**: watches registered workspaces and drains
