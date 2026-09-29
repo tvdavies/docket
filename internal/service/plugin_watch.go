@@ -34,6 +34,8 @@ type PluginState struct {
 	UIHash       string `json:"ui_hash,omitempty"`
 	UIBase       string `json:"ui_base,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// Service is set while Docket supervises the plugin's service.command.
+	Service *ServiceStatus `json:"service,omitempty"`
 
 	// runtime fingerprints everything that affects workspace runtimes: the
 	// registry entry and the manifest without its ui section.

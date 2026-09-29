@@ -128,6 +128,30 @@ curl -sN localhost:7463/api/stream   # event: plugins, one per change
 
 A manifest that stops validating shows up there with an `error`.
 
+### Services
+
+Give the service a `command` and Docket runs it for you while the plugin is
+enabled in any workspace, restarting it when watched files change:
+
+```yaml
+service:
+  url: http://127.0.0.1:9000
+  healthz: /healthz
+  command: [node, server/index.mjs]   # cwd is the plugin root
+  watch: ["server/**/*.mjs", "package.json"]
+```
+
+Save a file under `server/` and the process is restarted within a second.
+Follow its output, including Docket's own start, restart and health lines,
+with:
+
+```sh
+docket plugin logs my-plugin -f
+```
+
+The service's current state (`running`, `healthy`, `unhealthy`, `backoff`)
+and restart count are on `/api/stream` under each plugin's `service`.
+
 To debug a frame, open the browser dev tools and select the plugin iframe's
 context. You can also open `/plugin-ui/<name>/<hash>/<entry>` directly: it runs
 with the same sandbox, but `connect()` rejects because there is no host.
@@ -149,3 +173,4 @@ if it does not, the frame is not sandboxed.
 - [ ] Frames use `connect()` and design tokens; no absolute URLs to other hosts.
 - [ ] Widget records carry a useful `fallback`, so cards read well with the plugin disabled.
 - [ ] Services authorise requests themselves; the proxy is not an auth boundary.
+- [ ] A supervised service binds the port from `service.url` (also in `$PORT`) and exits on `SIGTERM`.

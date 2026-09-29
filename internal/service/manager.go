@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -58,14 +59,20 @@ type Manager struct {
 	stopped  bool
 	wg       sync.WaitGroup
 
-	plugins *pluginHub
+	plugins  *pluginHub
+	services *supervisor
+
+	pluginMu   sync.Mutex
+	pluginBase []PluginState
 }
 
 func NewManager(ctx context.Context, output io.Writer) *Manager {
 	if output == nil {
 		output = io.Discard
 	}
-	return &Manager{ctx: ctx, output: output, runtimes: map[string]*runtime{}, plugins: newPluginHub()}
+	manager := &Manager{ctx: ctx, output: output, runtimes: map[string]*runtime{}, plugins: newPluginHub()}
+	manager.services = newSupervisor(ctx, manager.publishPlugins)
+	return manager
 }
 
 // SetWorkspaces reconciles the running set with entries. Unchanged workspaces
@@ -169,6 +176,8 @@ func (m *Manager) followPlugins(ctx context.Context, interval time.Duration, wor
 	}
 	watcher := newPluginWatcher()
 	go watcher.run(ctx.Done())
+	previous := ""
+	reported := map[string]string{}
 	load := func() {
 		config, err := registry.Load()
 		if err != nil {
@@ -177,8 +186,20 @@ func (m *Manager) followPlugins(ctx context.Context, interval time.Duration, wor
 		}
 		states, generation := inspectPlugins(config.Plugins)
 		watcher.sync(states)
-		changed := m.plugins.update(states)
-		m.setWorkspaces(workspaces(config), generation)
+		encoded, _ := json.Marshal(states)
+		changed := previous != "" && previous != string(encoded)
+		previous = string(encoded)
+		m.setPluginStates(states)
+		entries := workspaces(config)
+		m.setWorkspaces(entries, generation)
+		specs, problems := serviceSpecs(config, entries)
+		for name, problem := range problems {
+			if reported[name] != problem {
+				fmt.Fprintf(m.output, "docket: plugin %s service: %s\n", name, problem)
+			}
+		}
+		reported = problems
+		m.services.sync(specs)
 		if changed {
 			m.refreshConfigs()
 		}
@@ -262,14 +283,48 @@ func (m *Manager) Stop() {
 		return
 	}
 	m.stopped = true
-	m.plugins.close()
 	for name, running := range m.runtimes {
 		running.stream.close()
 		running.cancel()
 		delete(m.runtimes, name)
 	}
 	m.mu.Unlock()
+	m.services.stop()
+	m.plugins.close()
 	m.wg.Wait()
+}
+
+// setPluginStates records the inspected plugin set and publishes it with the
+// current service status attached.
+func (m *Manager) setPluginStates(states []PluginState) {
+	m.pluginMu.Lock()
+	m.pluginBase = states
+	m.pluginMu.Unlock()
+	m.publishPlugins()
+}
+
+// publishPlugins pushes the plugin set to /api/stream. The supervisor calls
+// it whenever a service changes state.
+func (m *Manager) publishPlugins() {
+	m.pluginMu.Lock()
+	defer m.pluginMu.Unlock()
+	if m.pluginBase == nil {
+		return
+	}
+	statuses := m.services.statuses()
+	states := make([]PluginState, len(m.pluginBase))
+	copy(states, m.pluginBase)
+	for index := range states {
+		if status, ok := statuses[states[index].Name]; ok {
+			states[index].Service = &status
+		}
+	}
+	m.plugins.update(states)
+}
+
+// ServiceStatuses reports supervised plugin services by plugin name.
+func (m *Manager) ServiceStatuses() map[string]ServiceStatus {
+	return m.services.statuses()
 }
 
 func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {

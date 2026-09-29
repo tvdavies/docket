@@ -80,6 +80,13 @@ type Service struct {
 	URL     string `yaml:"url" json:"url"`
 	Healthz string `yaml:"healthz,omitempty" json:"healthz,omitempty"`
 	Auth    string `yaml:"auth,omitempty" json:"auth,omitempty"`
+	// Command, when set, is run and supervised by the Docket service while the
+	// plugin is enabled. The first element is a plugin-relative path when it
+	// contains a slash, otherwise a program on PATH.
+	Command []string `yaml:"command,omitempty" json:"command,omitempty"`
+	// Watch lists plugin-relative globs ("**" spans directories); a matching
+	// file change restarts Command.
+	Watch []string `yaml:"watch,omitempty" json:"watch,omitempty"`
 }
 
 type CLI struct {
@@ -497,7 +504,67 @@ func validateService(service Service) error {
 	if service.Healthz != "" && !strings.HasPrefix(service.Healthz, "/") {
 		return errors.New("service.healthz must start with /")
 	}
+	for index, argument := range service.Command {
+		if strings.TrimSpace(argument) == "" {
+			return fmt.Errorf("service.command[%d] is empty", index)
+		}
+	}
+	if len(service.Command) > 0 && strings.Contains(service.Command[0], "/") {
+		if err := validateRelativePath("service.command[0]", service.Command[0]); err != nil {
+			return err
+		}
+	}
+	if len(service.Watch) > 0 && len(service.Command) == 0 {
+		return errors.New("service.watch requires service.command")
+	}
+	for _, pattern := range service.Watch {
+		if err := validateWatchPattern(pattern); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateWatchPattern(pattern string) error {
+	if pattern == "" || strings.HasPrefix(pattern, "/") || strings.Contains(pattern, "\\") || path.Clean(pattern) != pattern || pattern == ".." || strings.HasPrefix(pattern, "../") {
+		return fmt.Errorf("service.watch %q must be a clean plugin-relative glob", pattern)
+	}
+	for _, segment := range strings.Split(pattern, "/") {
+		if segment == "**" {
+			continue
+		}
+		if _, err := path.Match(segment, ""); err != nil {
+			return fmt.Errorf("service.watch %q: %w", pattern, err)
+		}
+	}
+	return nil
+}
+
+// MatchWatch reports whether a plugin-relative slash path matches a
+// service.watch glob. "**" matches zero or more whole segments.
+func MatchWatch(pattern, name string) bool {
+	return matchSegments(strings.Split(pattern, "/"), strings.Split(name, "/"))
+}
+
+func matchSegments(pattern, name []string) bool {
+	for len(pattern) > 0 {
+		if pattern[0] == "**" {
+			for skip := 0; skip <= len(name); skip++ {
+				if matchSegments(pattern[1:], name[skip:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(name) == 0 {
+			return false
+		}
+		if ok, _ := path.Match(pattern[0], name[0]); !ok {
+			return false
+		}
+		pattern, name = pattern[1:], name[1:]
+	}
+	return len(name) == 0
 }
 
 func validateRelativePath(field, value string) error {

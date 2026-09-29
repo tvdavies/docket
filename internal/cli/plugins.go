@@ -16,7 +16,7 @@ import (
 
 func newPluginCmd() *cobra.Command {
 	command := &cobra.Command{Use: "plugin", Short: "Install and enable trusted Docket plugins"}
-	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd())
+	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd(), newPluginLogsCmd())
 	return command
 }
 
