@@ -84,12 +84,14 @@ manifest version). The board metadata's `ui_base` carries the current hash.
 
 - A request with the current hash is served `immutable`; a stale hash serves the
   current bytes with `no-store`, so a reloading frame never mixes generations.
+- The service watches `ui.dir` and pushes the new `ui_base` on the workspace
+  stream within a fraction of a second of an edit. Workspace runtimes are not
+  restarted and live widget previews are kept.
 - When `ui_base` changes, the host swaps the iframe `src` in place and re-sends
-  `init` with the state the frame last saved via `setState`.
-- The browser learns the new hash when it next receives workspace config: on
-  page load or when the workspace stream reconnects. Until the service watches
-  `ui.dir` and pushes changes (tracked separately), reload the page after
-  editing UI files; saved frame state is kept only for the life of the page.
+  `init` with the state the frame last saved via `setState`. Saved frame state
+  is kept for the life of the page.
+- `GET /api/stream` publishes each plugin's `ui_hash` and `manifest_hash` for
+  tools that want to follow changes without opening a workspace stream.
 
 ## The SDK client
 

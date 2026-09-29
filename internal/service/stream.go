@@ -221,9 +221,10 @@ func (stream *workspaceStream) setConfig(config streamConfig) {
 		stream.mu.Unlock()
 		return
 	}
-	if stream.configValue != "" {
-		// Configuration changes revoke live presentation, not durable history or
-		// revision watermarks. Owners republish after the new declaration is active.
+	if stream.configValue != "" && declarationValue(stream.config) != declarationValue(config) {
+		// Declaration changes revoke live presentation, not durable history or
+		// revision watermarks. Owners republish after the new declaration is
+		// active. A new UI asset generation alone keeps previews.
 		for key := range stream.widgets {
 			delete(stream.live, key)
 		}
@@ -232,6 +233,17 @@ func (stream *workspaceStream) setConfig(config streamConfig) {
 	stream.configValue = value
 	stream.mu.Unlock()
 	stream.publish(streamNotification{kind: "config", data: config})
+}
+
+func declarationValue(config streamConfig) string {
+	plugins := make([]boardPlugin, len(config.Plugins))
+	for index, metadata := range config.Plugins {
+		metadata.UIBase = ""
+		plugins[index] = metadata
+	}
+	config.Plugins = plugins
+	encoded, _ := json.Marshal(config)
+	return string(encoded)
 }
 
 func (stream *workspaceStream) currentConfig() streamConfig {
@@ -383,6 +395,9 @@ func (manager *Manager) publishTaskEvent(running *runtime, record events.LogReco
 }
 
 func registerStreamAPI(mux *http.ServeMux, manager *Manager, allowRemoteHost bool) {
+	mux.HandleFunc("GET /api/stream", func(writer http.ResponseWriter, request *http.Request) {
+		serveInstanceStream(writer, request, manager)
+	})
 	mux.HandleFunc("GET /api/workspaces/{workspace}/stream", func(writer http.ResponseWriter, request *http.Request) {
 		running, err := manager.streamRuntime(request.PathValue("workspace"))
 		if err != nil {

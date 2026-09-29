@@ -12,5 +12,5 @@ docket plugin enable hello-widget
 docket hello-widget TASK-0001          # publish a widget record on a task
 ```
 
-Edits under `ui/` change the plugin's UI hash; reload the page to see them. See
+Edits under `ui/` apply to open frames as soon as you save, with no page reload. See
 [docs/plugins/ui.md](../../../docs/plugins/ui.md).

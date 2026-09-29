@@ -174,15 +174,25 @@ injected when available.
 
 ## Hot reload
 
-The service fingerprints the machine registry and installed manifest files.
-Registry or manifest changes restart only the in-process workspace runtimes,
-recompose contributions, and are visible to the dynamic proxy/API without a
-service process restart. Handler identities do not include a generation, so
-existing cursor checkpoints carry across reloads and events do not replay.
-Plugin UI is never part of the Docket build. Files under `ui.dir` are served by
-content hash, so an edit produces a new `ui_base`; reload the page to pick it
-up. Frames that receive a new `ui_base` from the workspace stream swap in place
-and keep their saved state.
+The service watches each installed plugin's manifest and `ui.dir` with
+fsnotify, and still polls the registry every two seconds as a fallback. What a
+change does depends on what changed:
+
+| Change | Effect |
+|---|---|
+| Files under `ui.dir` | New `ui_base`; open frames swap in place and keep their saved state |
+| Only the manifest's `ui` section | Board config is republished; runtimes keep running |
+| Anything else in the manifest, or the registry entry | Workspace runtimes restart and recompose contributions |
+
+None of these restart the service process, and the proxy/API see the change
+immediately. Handler identities do not include a generation, so cursor
+checkpoints carry across runtime restarts and events do not replay. Plugin UI
+is never part of the Docket build.
+
+`GET /api/stream` is an instance-level SSE stream. Each `plugins` event carries
+the full installed set — `name`, `version`, `manifest_hash`, `ui_hash`,
+`ui_base` and, for a manifest that fails to load, `error` — first on connect and
+again after every change. The settings page uses it to reload plugin schemas.
 
 See [Plugin UI reference](plugins/ui.md) for frames and the bridge, and
 [Plugin widgets](plugin-ui.md) for the widget ledger, resolvers and

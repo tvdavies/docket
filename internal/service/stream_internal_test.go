@@ -71,3 +71,26 @@ func TestPrepareLiveNotificationUsesRemainingTTLAndDropsStaleQueueEntries(t *tes
 		t.Fatal("expired queued notification was replayed")
 	}
 }
+
+func TestSetConfigKeepsWidgetPreviewsAcrossUIGenerations(t *testing.T) {
+	stream := newWorkspaceStream()
+	config := streamConfig{Plugins: []boardPlugin{{Name: "example", UIBase: "/plugin-ui/example/one"}}}
+	stream.setConfig(config)
+	stream.widgets["preview"] = widgetWatermark{}
+	stream.live["preview"] = liveItem{}
+
+	config.Plugins[0].UIBase = "/plugin-ui/example/two"
+	stream.setConfig(config)
+	if _, ok := stream.live["preview"]; !ok {
+		t.Fatal("new UI generation revoked a live widget preview")
+	}
+	if stream.currentConfig().Plugins[0].UIBase != "/plugin-ui/example/two" {
+		t.Fatal("config not updated")
+	}
+
+	config = streamConfig{Plugins: []boardPlugin{{Name: "example", UIBase: "/plugin-ui/example/two", Capabilities: []string{"task.read"}}}}
+	stream.setConfig(config)
+	if _, ok := stream.live["preview"]; ok {
+		t.Fatal("declaration change kept a live widget preview")
+	}
+}

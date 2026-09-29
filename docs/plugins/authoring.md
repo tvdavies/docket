@@ -109,14 +109,24 @@ Things to know:
 
 ## 5. Iterate
 
-Edit files under `ui.dir`, then reload the page. Each edit changes the plugin's
-UI hash, so the browser can never serve a stale mix of files, and there is no
-Docket rebuild or restart. When the workspace stream delivers a new hash, open
-frames swap in place and keep the state saved with `setState`.
+Edit files under `ui.dir` and save. The service watches the directory, so
+open frames swap to the new files in place and keep the state saved with
+`setState`; there is no page reload, Docket rebuild or restart. Each edit
+changes the plugin's UI hash, so the browser can never serve a stale mix of
+files. A bundler writing into `ui.dir` in watch mode works the same way.
 
-Manifest changes (handlers, statuses, config, new views) are picked up within a
-couple of seconds by the service's manifest poll, which reloads workspace
-runtimes without restarting the service.
+Manifest changes apply as soon as the file is saved. Edits confined to the `ui`
+section (new views, titles, capabilities) republish board config without
+touching handlers; any other change (handlers, statuses, config) reloads the
+workspace runtimes, still without restarting the service.
+
+To follow reloads from a script or agent, watch the instance stream:
+
+```sh
+curl -sN localhost:7463/api/stream   # event: plugins, one per change
+```
+
+A manifest that stops validating shows up there with an `error`.
 
 To debug a frame, open the browser dev tools and select the plugin iframe's
 context. You can also open `/plugin-ui/<name>/<hash>/<entry>` directly: it runs

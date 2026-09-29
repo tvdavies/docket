@@ -5,15 +5,10 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -62,13 +57,15 @@ type Manager struct {
 	runtimes map[string]*runtime
 	stopped  bool
 	wg       sync.WaitGroup
+
+	plugins *pluginHub
 }
 
 func NewManager(ctx context.Context, output io.Writer) *Manager {
 	if output == nil {
 		output = io.Discard
 	}
-	return &Manager{ctx: ctx, output: output, runtimes: map[string]*runtime{}}
+	return &Manager{ctx: ctx, output: output, runtimes: map[string]*runtime{}, plugins: newPluginHub()}
 }
 
 // SetWorkspaces reconciles the running set with entries. Unchanged workspaces
@@ -136,22 +133,55 @@ func (m *Manager) setWorkspaces(entries []registry.WorkspaceEntry, generation st
 // is deliberately small and cheap: only config metadata is read, while each
 // workspace remains event-driven. Registrations whose project directories stay
 // missing beyond the configured prune_after grace are unregistered so dead
-// paths do not accumulate retrying watchers.
+// paths do not accumulate retrying watchers. Plugin manifests and ui.dir trees
+// are also watched with fsnotify, so plugin edits apply without waiting for
+// the next poll.
 func (m *Manager) FollowRegistry(ctx context.Context, interval time.Duration) {
+	missing := map[string]time.Time{}
+	m.followPlugins(ctx, interval, func(config *registry.Config) []registry.WorkspaceEntry {
+		return registry.PruneMissing(config, missing, time.Now(), func(format string, args ...any) {
+			fmt.Fprintf(m.output, format+"\n", args...)
+		})
+	})
+}
+
+// WatchPlugins hot reloads installed plugins for the workspaces already set
+// with SetWorkspaces, without following registry workspace changes.
+func (m *Manager) WatchPlugins(ctx context.Context, interval time.Duration) {
+	m.followPlugins(ctx, interval, func(*registry.Config) []registry.WorkspaceEntry {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		entries := make([]registry.WorkspaceEntry, 0, len(m.runtimes))
+		for _, running := range m.runtimes {
+			entries = append(entries, running.entry)
+		}
+		return entries
+	})
+}
+
+// followPlugins reconciles runtimes on every poll tick and plugin file change.
+// Only changes outside a manifest's ui section restart workspace runtimes;
+// UI-only changes republish board config to the running streams, which lets
+// open plugin frames swap to the new asset generation in place.
+func (m *Manager) followPlugins(ctx context.Context, interval time.Duration, workspaces func(*registry.Config) []registry.WorkspaceEntry) {
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
-	missing := map[string]time.Time{}
+	watcher := newPluginWatcher()
+	go watcher.run(ctx.Done())
 	load := func() {
 		config, err := registry.Load()
 		if err != nil {
 			fmt.Fprintf(m.output, "docket: service registry: %v\n", err)
 			return
 		}
-		entries := registry.PruneMissing(config, missing, time.Now(), func(format string, args ...any) {
-			fmt.Fprintf(m.output, format+"\n", args...)
-		})
-		m.setWorkspaces(entries, pluginGeneration(config.Plugins))
+		states, generation := inspectPlugins(config.Plugins)
+		watcher.sync(states)
+		changed := m.plugins.update(states)
+		m.setWorkspaces(workspaces(config), generation)
+		if changed {
+			m.refreshConfigs()
+		}
 	}
 	load()
 	ticker := time.NewTicker(interval)
@@ -162,7 +192,27 @@ func (m *Manager) FollowRegistry(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 			load()
+		case <-watcher.events():
+			load()
 		}
+	}
+}
+
+// refreshConfigs republishes board config for every running workspace. The
+// stream deduplicates unchanged config, so only affected boards see an event.
+func (m *Manager) refreshConfigs() {
+	m.mu.RLock()
+	runtimes := make([]*runtime, 0, len(m.runtimes))
+	for _, running := range m.runtimes {
+		runtimes = append(runtimes, running)
+	}
+	m.mu.RUnlock()
+	for _, running := range runtimes {
+		ws, err := workspace.OpenRoot(running.entry.Path)
+		if err != nil {
+			continue
+		}
+		running.stream.setConfig(configForStream(ws))
 	}
 }
 
@@ -212,6 +262,7 @@ func (m *Manager) Stop() {
 		return
 	}
 	m.stopped = true
+	m.plugins.close()
 	for name, running := range m.runtimes {
 		running.stream.close()
 		running.cancel()
@@ -374,18 +425,3 @@ func sortStatuses(statuses []WorkspaceStatus) {
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
-
-func pluginGeneration(entries []registry.PluginEntry) string {
-	parts := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		manifest := filepath.Join(entry.Path, "docket-plugin.yaml")
-		stamp := "missing"
-		if data, err := os.ReadFile(manifest); err == nil {
-			stamp = fmt.Sprintf("%x", sha256.Sum256(data))
-		}
-		metadata, _ := json.Marshal(entry)
-		parts = append(parts, fmt.Sprintf("%x:%s", sha256.Sum256(metadata), stamp))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, "|")
-}
