@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { WidgetRouter } from '../registry/widget-state';
 import type { BoardTask, CreateTaskInput, LivePayload, StreamConfig, StreamInit, StreamPatch, TaskPatch } from '../types';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
@@ -30,6 +31,8 @@ let mutationSequence = 0;
 
 export class BoardStore {
   readonly workspace: string;
+  readonly widgets: WidgetRouter;
+  private widgetFrame?: number;
   private config: StreamConfig = emptyConfig;
   private base = new Map<string, BoardTask>();
   private pending: PendingMutation[] = [];
@@ -43,6 +46,10 @@ export class BoardStore {
 
   constructor(workspace: string) {
     this.workspace = workspace;
+    this.widgets = new WidgetRouter(workspace, () => {
+      if (this.widgetFrame !== undefined) return;
+      this.widgetFrame = window.requestAnimationFrame(() => { this.widgetFrame = undefined; this.emit(); });
+    });
     this.snapshot = this.buildSnapshot();
   }
 
@@ -56,22 +63,27 @@ export class BoardStore {
   setConnection(connection: ConnectionState) {
     if (this.connection === connection) return;
     this.connection = connection;
+    this.widgets.setConnection(connection);
     this.emit();
   }
 
   applyInit(value: StreamInit, cursor: string) {
+    if (value.workspace !== this.workspace) return;
+    this.widgets.reset();
     this.config = value.config;
     this.base = new Map(value.tasks.map((task) => [task.id, task]));
+    for (const task of value.tasks) this.retireTerminalPreviews(task);
     this.cursor = cursor || value.cursor;
     this.rememberCursor(this.cursor);
     this.pending = this.pending.filter((mutation) => !mutation.cursor || !this.baseCovers(mutation));
     this.connection = 'open';
+    this.widgets.setConnection('open');
     this.emit();
   }
 
   applyPatch(value: StreamPatch, cursor: string) {
     if (cursor && this.observedCursors.includes(cursor)) return;
-    if (value.task) this.base.set(value.task.id, value.task);
+    if (value.task) { this.base.set(value.task.id, value.task); this.retireTerminalPreviews(value.task); }
     this.cursor = cursor || this.cursor;
     this.rememberCursor(cursor);
     if (cursor) this.pending = this.pending.filter((mutation) => mutation.cursor !== cursor);
@@ -80,11 +92,17 @@ export class BoardStore {
   }
 
   applyConfig(config: StreamConfig) {
+    if (JSON.stringify(config.plugins) !== JSON.stringify(this.config.plugins)) this.widgets.reset();
     this.config = config;
     this.emit();
   }
 
   applyLive(value: LivePayload) {
+    if (value.payload && typeof value.payload === 'object' && 'widget_version' in value.payload) {
+      const record = this.base.get(value.task || '')?.widget_summaries?.find(r => r.widget_type === value.kind && r.instance_id === value.session);
+      if (record?.phase !== 'finalised') this.widgets.accept(value);
+      return;
+    }
     const key = `${value.kind}\0${value.task || ''}\0${value.session || ''}`;
     const previous = this.live.get(key);
     if (previous) window.clearTimeout(previous.timer);
@@ -95,6 +113,18 @@ export class BoardStore {
     this.live.set(key, { value, timer });
     this.emit();
   }
+
+  replaceReferenceProjections(tasks: BoardTask[], generation: string) {
+    if (generation !== this.config.resolver_generation) return;
+    for (const projection of tasks) { const current = this.base.get(projection.id); if (current) this.base.set(current.id, { ...current, references: projection.references }); }
+    this.emit();
+  }
+
+  private retireTerminalPreviews(task: BoardTask) {
+    for (const record of task.widget_summaries || []) if (record.phase === 'finalised') this.widgets.finalise(record.widget_type,task.id,record.instance_id);
+  }
+
+  acceptTask(task: BoardTask) { this.base.set(task.id, task); this.retireTerminalPreviews(task); this.emit(); }
 
   optimisticPatch(taskId: string, patch: Partial<BoardTask>, requestPatch: TaskPatch = patch) {
     const id = `mutation-${++mutationSequence}`;
@@ -143,10 +173,14 @@ export class BoardStore {
   }
 
   destroy() {
+    this.widgets.destroy();
+    if (this.widgetFrame !== undefined) window.cancelAnimationFrame(this.widgetFrame);
+    this.widgetFrame = undefined;
     for (const item of this.live.values()) window.clearTimeout(item.timer);
     this.live.clear();
     this.listeners.clear();
     this.connection = 'closed';
+    this.snapshot = this.buildSnapshot();
   }
 
   private rememberCursor(cursor: string) {
@@ -218,6 +252,10 @@ export function getBoardStore(workspace: string) {
   return store;
 }
 
+export function releaseBoardStore(workspace: string, store: BoardStore) {
+  store.destroy();
+  if (stores.get(workspace) === store) stores.delete(workspace);
+}
 export function useBoardStore(store: BoardStore): BoardSnapshot {
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }

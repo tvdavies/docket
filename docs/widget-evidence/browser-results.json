@@ -1,0 +1,81 @@
+{
+  "passed": [
+    "unexpanded activity streams without navigation or task refresh",
+    "zero detail connections before expansion",
+    "custom Web Component renders a real SVG with accessible value table",
+    "activity widget occupies the document column rather than its timeline marker",
+    "custom shadow body resists host selector collisions",
+    "focused shadow body is held while attention notice updates",
+    "streaming does not move the page reading position",
+    "explicit New activity applies the held snapshot",
+    "selected shadow text survives live updates",
+    "expansion acquires one view-owned detail lease",
+    "selecting another widget revokes the old transport",
+    "reselected widget collapses",
+    "theme and reduced motion update without remount",
+    "custom disclosure state survives theme change",
+    "phone widget retains a readable content column",
+    "390px task page has no horizontal overflow",
+    "320px task page has no horizontal overflow",
+    "phone controls retain 44px targets at 200% zoom",
+    "keyboard disclosure works inside Shadow DOM",
+    "TTL expiry releases selected transport",
+    "expiry retains the expanded reading view",
+    "fresh publication does not silently reacquire detail",
+    "unknown display version retires custom body",
+    "a broken progress module does not retire the independent chart",
+    "finalisation updates the same activity identity",
+    "disable tears down every authored body",
+    "saved outcome remains after plugin disable",
+    "fresh browser recovers terminal history with no module execution",
+    "plugin-less board stays plain",
+    "same task and instance in another workspace only mounts its enabled plugin",
+    "100-task board retains a bounded visible virtualized window",
+    "board cards open no detailed streams",
+    "retained DOM nodes and listeners stay bounded during streaming",
+    "no browser long tasks above 50ms during the measured update interval",
+    "measured host work p95 <=16ms, maximum <=50ms at 1Hz",
+    "in-app workspace switch releases mounted bodies and transports",
+    "one shared preview connection for the active workspace",
+    "all browser traffic remains on the isolated loopback server",
+    "no browser runtime errors: "
+  ],
+  "machine": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+    "browser": "152.0.7977.82"
+  },
+  "performance": {
+    "longTasks": [],
+    "samples": 250,
+    "p95": 0.20000001788139343,
+    "max": 0.3999999761581421,
+    "nodes": 329,
+    "counters": {
+      "mounts": 13,
+      "destroys": 3,
+      "active": 10,
+      "detail": 0,
+      "maximumDetail": 0,
+      "updates": 63,
+      "aborted": 3
+    },
+    "memoryBefore": {
+      "documents": 1,
+      "nodes": 684,
+      "jsEventListeners": 265
+    },
+    "memoryAfter": {
+      "documents": 1,
+      "nodes": 684,
+      "jsEventListeners": 265
+    }
+  },
+  "connections": {
+    "active": 1,
+    "totalOpened": 6
+  },
+  "taskReads": 6,
+  "manualScreenReader": "NOT RUN: explicit outstanding human gate"
+}

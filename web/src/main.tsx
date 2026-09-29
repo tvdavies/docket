@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
 import { loadBuiltinPluginUI } from './registry/registry';
 import './styles.css';
+import './registry/widgets.css';
 
 loadBuiltinPluginUI();
 

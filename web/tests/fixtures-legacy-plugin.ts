@@ -1,4 +1,4 @@
-import type { DocketPluginUI } from './contracts';
+import type { DocketPluginUI } from '@docket/plugin-ui';
 
 export const demoPluginUI: DocketPluginUI = {
   cards: [{
@@ -12,7 +12,7 @@ export const demoPluginUI: DocketPluginUI = {
       };
       render(ctx.task);
       el.addEventListener('dblclick', ctx.refresh);
-      return { update: render, destroy() { el.replaceChildren(); } };
+      return { update: render, destroy() { el.removeEventListener('dblclick', ctx.refresh); el.replaceChildren(); } };
     },
   }],
   referenceResolvers: [{
