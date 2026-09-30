@@ -202,14 +202,31 @@ func openWS() (*workspace.Workspace, error) {
 // as a warning and left unread for the next drain. Handler ancestry is carried
 // in the subprocess environment so recursive docket commands never block on
 // handler locks; unrelated top-level drains wait and deliver.
+//
+// Task mutations use operationsFor instead, which records the event while the
+// task lock is held and drains only after the lock is released.
 func appendEvent(ws *workspace.Workspace, event events.Event) error {
+	if err := recordEvent(ws, event); err != nil {
+		return err
+	}
+	drainInline(ws)
+	return nil
+}
+
+// recordEvent durably appends one event without running handlers.
+func recordEvent(ws *workspace.Workspace, event events.Event) error {
 	if err := events.Append(ws, event); err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
+	return nil
+}
+
+// drainInline delivers pending events to inline handlers, reporting handler
+// failures as warnings because they cannot roll back committed mutations.
+func drainInline(ws *workspace.Workspace) {
 	for _, failure := range handlers.DrainAll(ws, handlers.Options{Scope: handlers.ScopeInline, Output: os.Stderr, RefreshConfig: true}) {
 		fmt.Fprintf(os.Stderr, "docket: warning: %s\n", failure.Error())
 	}
-	return nil
 }
 
 // actor resolves the acting identity: $DOCKET_ACTOR → git user → "unknown".

@@ -3,11 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tvdavies/docket/internal/actions"
-	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/store"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -54,10 +53,7 @@ only when an optional session pointer is attached.`,
 			if err != nil {
 				return err
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			c, err := operations.Comment(id, text)
 			if err != nil {
 				return err
@@ -100,25 +96,18 @@ task; explicit TASK-ID plus PATH is recommended for automation.`,
 			if err != nil {
 				return err
 			}
-			t, err := task.Load(ws, id)
+			data, err := os.ReadFile(path)
 			if err != nil {
-				return err
+				return fmt.Errorf("read source: %w", err)
 			}
-			att, err := task.AttachFile(ws, id, path, caption, actor())
+			att, err := operationsFor(ws).Attach(id, filepath.Base(path), data, caption)
 			if err != nil {
-				return err
-			}
-			if err := appendEvent(ws, events.Event{
-				Type: events.FileAttached, Task: t.ID, Title: t.Title,
-				Actor: actor(), Assignee: t.Assignee,
-				Data: map[string]any{"file": att.File, "mime": att.Mime},
-			}); err != nil {
 				return err
 			}
 			if flagJSON {
 				return printJSON(att)
 			}
-			fmt.Printf("%s attached attachments/%s (%s, %d bytes)\n", t.ID, att.File, att.Mime, att.Bytes)
+			fmt.Printf("%s attached attachments/%s (%s, %d bytes)\n", id, att.File, att.Mime, att.Bytes)
 			return nil
 		},
 	}

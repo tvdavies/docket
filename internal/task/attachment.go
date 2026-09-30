@@ -94,6 +94,9 @@ func AttachDataWithCommit(ws *workspace.Workspace, id, name string, data []byte,
 			return nil
 		}
 		if err := commit(value, att); err != nil {
+			if Committed(err) {
+				return err
+			}
 			rollbackErr := os.Remove(dest)
 			if rollbackErr != nil && os.IsNotExist(rollbackErr) {
 				rollbackErr = nil

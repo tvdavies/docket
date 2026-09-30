@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/bundle"
-	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -69,10 +68,7 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, err := operations.Create(task.CreateOptions{
 				Title:       title,
 				Description: description,
@@ -240,10 +236,7 @@ when an optional session pointer is attached. Use --assignee "" to clear it.`,
 			if cmd.Flags().Changed("assignee") {
 				assigneeChange = &assignee
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, err := operations.Edit(id, actions.EditOptions{
 				Title: titleChange, Description: descriptionChange, Assignee: assigneeChange,
 			})
@@ -289,10 +282,7 @@ Explicit IDs are recommended for scripts and agents.`,
 			if err != nil {
 				return err
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, from, err := operations.Move(id, status)
 			if err != nil {
 				return err
@@ -329,10 +319,7 @@ only when an optional session pointer is attached.`,
 			if err != nil {
 				return err
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, err := operations.Label(id, add, remove)
 			if err != nil {
 				return err

@@ -6,10 +6,8 @@ package actions
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -19,7 +17,8 @@ import (
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
-// AppendEvent durably records an event after its mutation succeeds.
+// AppendEvent durably records a mutation's event. It runs while the affected
+// task locks are held, so it must not run handlers that could mutate the task.
 type AppendEvent func(events.Event) error
 
 // Tasks performs task operations for one actor and session.
@@ -28,6 +27,10 @@ type Tasks struct {
 	Actor     string
 	Session   string
 	Append    AppendEvent
+	// Committed runs after a mutation's event is recorded and every task lock
+	// is released. The CLI drains inline handlers here, which may mutate the
+	// same task again.
+	Committed func()
 }
 
 func (operations Tasks) append(event events.Event) error {
@@ -37,23 +40,24 @@ func (operations Tasks) append(event events.Event) error {
 	return events.Append(operations.Workspace, event)
 }
 
+// finish runs the post-commit callback when the mutation's event may be
+// visible to consumers, including a failure that could not be rolled back.
+func (operations Tasks) finish(err error) {
+	if operations.Committed != nil && (err == nil || task.Committed(err)) {
+		operations.Committed()
+	}
+}
+
 // Create creates a task and emits task.created.
 func (operations Tasks) Create(options task.CreateOptions) (*task.Task, error) {
-	value, err := task.Create(operations.Workspace, options)
-	if err != nil {
-		return nil, err
-	}
-	if err := operations.append(events.Event{
-		Type: events.TaskCreated, Task: value.ID, Title: value.Title,
-		Actor: operations.Actor, Assignee: value.Assignee,
-	}); err != nil {
-		rollbackErr := os.RemoveAll(value.Dir())
-		if rollbackErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("roll back created task: %w", rollbackErr))
-		}
-		return nil, err
-	}
-	return value, nil
+	value, err := task.CreateWithCommit(operations.Workspace, options, func(value *task.Task) error {
+		return operations.append(events.Event{
+			Type: events.TaskCreated, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+		})
+	})
+	operations.finish(err)
+	return value, err
 }
 
 // EditOptions selects mutable dossier fields. Nil leaves a field unchanged;
@@ -74,7 +78,11 @@ func (operations Tasks) Edit(id string, options EditOptions) (*task.Task, error)
 	if options.Title != nil && strings.TrimSpace(*options.Title) == "" {
 		return nil, fmt.Errorf("title cannot be empty")
 	}
-	value, err := task.Update(operations.Workspace, id, func(value *task.Task) error {
+	eventType := events.TaskUpdated
+	if options.Assignee != nil {
+		eventType = events.TaskAssigned
+	}
+	return operations.update(id, func(value *task.Task) error {
 		if options.Title != nil {
 			value.Title = strings.TrimSpace(*options.Title)
 		}
@@ -85,18 +93,22 @@ func (operations Tasks) Edit(id string, options EditOptions) (*task.Task, error)
 			value.Assignee = *options.Assignee
 		}
 		return nil
+	}, func(value *task.Task) events.Event {
+		return events.Event{
+			Type: eventType, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+		}
 	})
+}
+
+// update mutates one task and records the event built from its new state
+// before the task lock is released.
+func (operations Tasks) update(id string, fn func(*task.Task) error, event func(*task.Task) events.Event) (*task.Task, error) {
+	value, err := task.UpdateWithCommit(operations.Workspace, id, fn, func(value *task.Task) error {
+		return operations.append(event(value))
+	})
+	operations.finish(err)
 	if err != nil {
-		return nil, err
-	}
-	eventType := events.TaskUpdated
-	if options.Assignee != nil {
-		eventType = events.TaskAssigned
-	}
-	if err := operations.append(events.Event{
-		Type: eventType, Task: value.ID, Title: value.Title,
-		Actor: operations.Actor, Assignee: value.Assignee,
-	}); err != nil {
 		return nil, err
 	}
 	return value, nil
@@ -135,18 +147,18 @@ func (operations Tasks) SetWait(id string, options SetWaitOptions) (*task.Task, 
 		ID: waitID, Kind: options.Kind, Reason: options.Reason,
 		Reference: options.Reference, Since: task.Now(), Actor: operations.Actor,
 	}
-	return task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+	return operations.update(id, func(value *task.Task) error {
 		if value.Wait != nil {
 			return fmt.Errorf("task is already waiting on %s (%s)", value.Wait.Kind, value.Wait.ID)
 		}
 		value.Wait = waiting
 		return nil
-	}, func(value *task.Task) error {
-		return operations.append(events.Event{
+	}, func(value *task.Task) events.Event {
+		return events.Event{
 			Type: events.TaskWaiting, Task: value.ID, Title: value.Title,
 			Actor: operations.Actor, Assignee: value.Assignee,
 			Data: map[string]any{"wait": waiting},
-		})
+		}
 	})
 }
 
@@ -166,7 +178,7 @@ func (operations Tasks) ResolveWait(id string, options ResolveWaitOptions) (*tas
 		return nil, fmt.Errorf("wait id is required")
 	}
 	var resolved *task.Wait
-	return task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+	return operations.update(id, func(value *task.Task) error {
 		if value.Wait == nil {
 			return fmt.Errorf("task is not waiting")
 		}
@@ -177,14 +189,14 @@ func (operations Tasks) ResolveWait(id string, options ResolveWaitOptions) (*tas
 		resolved = &copy
 		value.Wait = nil
 		return nil
-	}, func(value *task.Task) error {
-		return operations.append(events.Event{
+	}, func(value *task.Task) events.Event {
+		return events.Event{
 			Type: events.TaskResumed, Task: value.ID, Title: value.Title,
 			Actor: operations.Actor, Assignee: value.Assignee,
 			Data: map[string]any{
 				"wait_id": resolved.ID, "kind": resolved.Kind, "result": options.Result,
 			},
-		})
+		}
 	})
 }
 
@@ -207,7 +219,7 @@ func (operations Tasks) AddReference(id, kind, referenceURL, title string) (*tas
 		ID: referenceID, Kind: kind, URL: referenceURL, Title: title,
 		AddedAt: task.Now(), AddedBy: operations.Actor,
 	}
-	value, err := task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+	value, err := operations.update(id, func(value *task.Task) error {
 		for _, existing := range value.References {
 			if existing.Kind == kind && existing.URL == referenceURL {
 				return fmt.Errorf("task already has %s reference %q", kind, referenceURL)
@@ -215,12 +227,12 @@ func (operations Tasks) AddReference(id, kind, referenceURL, title string) (*tas
 		}
 		value.References = append(value.References, reference)
 		return nil
-	}, func(value *task.Task) error {
-		return operations.append(events.Event{
+	}, func(value *task.Task) events.Event {
+		return events.Event{
 			Type: events.TaskReferenceAdded, Task: value.ID, Title: value.Title,
 			Actor: operations.Actor, Assignee: value.Assignee,
 			Data: map[string]any{"reference": reference},
-		})
+		}
 	})
 	if err != nil {
 		return nil, nil, err
@@ -231,13 +243,15 @@ func (operations Tasks) AddReference(id, kind, referenceURL, title string) (*tas
 // Attach stores a browser/SDK-provided file and emits task.file_attached in
 // the same per-task-lock transaction as the file and manifest write.
 func (operations Tasks) Attach(id, name string, data []byte, caption string) (*task.Attachment, error) {
-	return task.AttachDataWithCommit(operations.Workspace, id, name, data, caption, operations.Actor, func(value *task.Task, attachment *task.Attachment) error {
+	attachment, err := task.AttachDataWithCommit(operations.Workspace, id, name, data, caption, operations.Actor, func(value *task.Task, attachment *task.Attachment) error {
 		return operations.append(events.Event{
 			Type: events.FileAttached, Task: value.ID, Title: value.Title,
 			Actor: operations.Actor, Assignee: value.Assignee,
 			Data: map[string]any{"file": attachment.File, "mime": attachment.Mime},
 		})
 	})
+	operations.finish(err)
+	return attachment, err
 }
 
 // RemoveReference removes one reference by its stable ID.
@@ -247,7 +261,7 @@ func (operations Tasks) RemoveReference(id, referenceID string) (*task.Task, *ta
 		return nil, nil, fmt.Errorf("reference id is required")
 	}
 	var removed *task.Reference
-	value, err := task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
+	value, err := operations.update(id, func(value *task.Task) error {
 		for index, reference := range value.References {
 			if reference.ID != referenceID {
 				continue
@@ -258,12 +272,12 @@ func (operations Tasks) RemoveReference(id, referenceID string) (*task.Task, *ta
 			return nil
 		}
 		return fmt.Errorf("reference %q not found", referenceID)
-	}, func(value *task.Task) error {
-		return operations.append(events.Event{
+	}, func(value *task.Task) events.Event {
+		return events.Event{
 			Type: events.TaskReferenceRemoved, Task: value.ID, Title: value.Title,
 			Actor: operations.Actor, Assignee: value.Assignee,
 			Data: map[string]any{"reference": removed},
-		})
+		}
 	})
 	if err != nil {
 		return nil, nil, err
@@ -319,19 +333,18 @@ func (operations Tasks) Move(id, status string) (*task.Task, string, error) {
 		return nil, "", fmt.Errorf("unknown status %q (configured: %s)", status, strings.Join(operations.Workspace.Config.Statuses, ", "))
 	}
 	var from string
-	value, err := task.Update(operations.Workspace, id, func(value *task.Task) error {
+	value, err := operations.update(id, func(value *task.Task) error {
 		from = value.Status
 		value.Status = status
 		return nil
+	}, func(value *task.Task) events.Event {
+		return events.Event{
+			Type: events.TaskMoved, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{"from": from, "to": status},
+		}
 	})
 	if err != nil {
-		return nil, "", err
-	}
-	if err := operations.append(events.Event{
-		Type: events.TaskMoved, Task: value.ID, Title: value.Title,
-		Actor: operations.Actor, Assignee: value.Assignee,
-		Data: map[string]any{"from": from, "to": status},
-	}); err != nil {
 		return nil, "", err
 	}
 	return value, from, nil
@@ -339,20 +352,15 @@ func (operations Tasks) Move(id, status string) (*task.Task, string, error) {
 
 // Assign changes a task's assignee and emits task.assigned.
 func (operations Tasks) Assign(id, assignee string) (*task.Task, error) {
-	value, err := task.Update(operations.Workspace, id, func(value *task.Task) error {
+	return operations.update(id, func(value *task.Task) error {
 		value.Assignee = assignee
 		return nil
+	}, func(value *task.Task) events.Event {
+		return events.Event{
+			Type: events.TaskAssigned, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+		}
 	})
-	if err != nil {
-		return nil, err
-	}
-	if err := operations.append(events.Event{
-		Type: events.TaskAssigned, Task: value.ID, Title: value.Title,
-		Actor: operations.Actor, Assignee: value.Assignee,
-	}); err != nil {
-		return nil, err
-	}
-	return value, nil
 }
 
 // Comment appends a comment and emits task.commented.
@@ -360,44 +368,53 @@ func (operations Tasks) Comment(id, text string) (*task.Comment, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("comment text is required")
 	}
-	value, err := task.Load(operations.Workspace, id)
-	if err != nil {
-		return nil, err
-	}
-	comment, err := task.AddComment(operations.Workspace, id, operations.Actor, operations.Session, text)
-	if err != nil {
-		return nil, err
-	}
-	if err := operations.append(events.Event{
-		Type: events.TaskCommented, Task: value.ID, Title: value.Title,
-		Actor: operations.Actor, Assignee: value.Assignee,
-	}); err != nil {
-		rollbackErr := os.Remove(filepath.Join(value.CommentsDir(), comment.File))
-		if rollbackErr != nil && !os.IsNotExist(rollbackErr) {
-			return nil, errors.Join(err, fmt.Errorf("roll back comment: %w", rollbackErr))
-		}
-		return nil, err
-	}
-	return comment, nil
+	comment, err := task.AddCommentWithCommit(operations.Workspace, id, operations.Actor, operations.Session, text, func(value *task.Task, _ *task.Comment) error {
+		return operations.append(events.Event{
+			Type: events.TaskCommented, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+		})
+	})
+	operations.finish(err)
+	return comment, err
 }
 
 // Label adds and removes labels while preserving order and emits task.labeled.
 func (operations Tasks) Label(id string, add, remove []string) (*task.Task, error) {
-	value, err := task.Update(operations.Workspace, id, func(value *task.Task) error {
+	return operations.update(id, func(value *task.Task) error {
 		value.Labels = applyLabels(value.Labels, add, remove)
 		return nil
+	}, func(value *task.Task) events.Event {
+		return events.Event{
+			Type: events.TaskLabeled, Task: value.ID, Title: value.Title,
+			Actor: operations.Actor, Assignee: value.Assignee,
+			Data: map[string]any{"labels": value.Labels},
+		}
 	})
-	if err != nil {
-		return nil, err
+}
+
+// Link records a typed relationship (and its inverse) and emits task.linked
+// while both task locks are held.
+func (operations Tasks) Link(from, kind, to string) error {
+	err := task.LinkWithCommit(operations.Workspace, from, kind, to, operations.linkCommit(events.TaskLinked, from, kind, to))
+	operations.finish(err)
+	return err
+}
+
+// Unlink removes a typed relationship (and its inverse) and emits
+// task.unlinked while both task locks are held.
+func (operations Tasks) Unlink(from, kind, to string) error {
+	err := task.UnlinkWithCommit(operations.Workspace, from, kind, to, operations.linkCommit(events.TaskUnlinked, from, kind, to))
+	operations.finish(err)
+	return err
+}
+
+func (operations Tasks) linkCommit(eventType, from, kind, to string) func(a, b *task.Task) error {
+	return func(*task.Task, *task.Task) error {
+		return operations.append(events.Event{
+			Type: eventType, Task: from, Actor: operations.Actor,
+			Data: map[string]any{"kind": kind, "to": to},
+		})
 	}
-	if err := operations.append(events.Event{
-		Type: events.TaskLabeled, Task: value.ID, Title: value.Title,
-		Actor: operations.Actor, Assignee: value.Assignee,
-		Data: map[string]any{"labels": value.Labels},
-	}); err != nil {
-		return nil, err
-	}
-	return value, nil
 }
 
 func applyLabels(existing, add, remove []string) []string {

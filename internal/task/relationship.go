@@ -1,7 +1,9 @@
 package task
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 
@@ -13,6 +15,12 @@ import (
 // the inverse edge on the target task. Both tasks are locked (in id order to
 // avoid deadlock) and updated atomically.
 func Link(ws *workspace.Workspace, from, kind, to string) error {
+	return LinkWithCommit(ws, from, kind, to, nil)
+}
+
+// LinkWithCommit is Link plus a commit callback run while both task locks are
+// held. A failed commit restores both original dossiers.
+func LinkWithCommit(ws *workspace.Workspace, from, kind, to string, commit func(a, b *Task) error) error {
 	rel, ok := ws.Config.RelByName(kind)
 	if !ok {
 		return fmt.Errorf("unknown relationship %q", kind)
@@ -26,11 +34,16 @@ func Link(ws *workspace.Workspace, from, kind, to string) error {
 			addRel(b, rel.Inverse, a.ID)
 		}
 		return nil
-	})
+	}, commit)
 }
 
 // Unlink removes a relationship and its inverse.
 func Unlink(ws *workspace.Workspace, from, kind, to string) error {
+	return UnlinkWithCommit(ws, from, kind, to, nil)
+}
+
+// UnlinkWithCommit is Unlink plus a commit callback run under both task locks.
+func UnlinkWithCommit(ws *workspace.Workspace, from, kind, to string, commit func(a, b *Task) error) error {
 	rel, ok := ws.Config.RelByName(kind)
 	if !ok {
 		return fmt.Errorf("unknown relationship %q", kind)
@@ -41,7 +54,7 @@ func Unlink(ws *workspace.Workspace, from, kind, to string) error {
 			removeRel(b, rel.Inverse, a.ID)
 		}
 		return nil
-	})
+	}, commit)
 }
 
 func addRel(t *Task, kind, id string) {
@@ -74,8 +87,9 @@ func removeRel(t *Task, kind, id string) {
 	}
 }
 
-// updateTwo locks two tasks in a stable order, mutates both, and saves them.
-func updateTwo(ws *workspace.Workspace, idA, idB string, fn func(a, b *Task) error) error {
+// updateTwo locks two tasks in a stable order, mutates both, saves them, and
+// runs commit before releasing either lock.
+func updateTwo(ws *workspace.Workspace, idA, idB string, fn func(a, b *Task) error, commit func(a, b *Task) error) error {
 	dirA, err := resolveDir(ws, idA)
 	if err != nil {
 		return err
@@ -91,6 +105,14 @@ func updateTwo(ws *workspace.Workspace, idA, idB string, fn func(a, b *Task) err
 	}
 	return store.WithLock(filepath.Join(first, ".lock"), func() error {
 		return store.WithLock(filepath.Join(second, ".lock"), func() error {
+			originalA, err := os.ReadFile(filepath.Join(dirA, "task.md"))
+			if err != nil {
+				return err
+			}
+			originalB, err := os.ReadFile(filepath.Join(dirB, "task.md"))
+			if err != nil {
+				return err
+			}
 			a, err := loadDir(dirA)
 			if err != nil {
 				return err
@@ -104,10 +126,34 @@ func updateTwo(ws *workspace.Workspace, idA, idB string, fn func(a, b *Task) err
 			}
 			a.UpdatedAt = Now()
 			b.UpdatedAt = Now()
-			if err := a.save(); err != nil {
-				return err
+			restore := func(cause error) error {
+				return errors.Join(cause,
+					restoreDossier(a.TaskFile(), originalA),
+					restoreDossier(b.TaskFile(), originalB))
 			}
-			return b.save()
+			if err := a.save(); err != nil {
+				return restore(err)
+			}
+			if err := b.save(); err != nil {
+				return restore(err)
+			}
+			if commit == nil {
+				return nil
+			}
+			if err := commit(a, b); err != nil {
+				if Committed(err) {
+					return err
+				}
+				return restore(err)
+			}
+			return nil
 		})
 	})
+}
+
+func restoreDossier(path string, original []byte) error {
+	if err := store.WriteAtomic(path, original, 0o644); err != nil {
+		return fmt.Errorf("roll back task dossier: %w", err)
+	}
+	return nil
 }
