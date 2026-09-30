@@ -54,3 +54,26 @@ func TestBoundedShowIsReadOnlyAndCompact(t *testing.T) {
 		t.Fatal("a bounded read changed workspace files")
 	}
 }
+
+func TestPipedListPrintsFullTitlesAsTabSeparatedColumns(t *testing.T) {
+	dir := t.TempDir()
+	ws, err := workspace.Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "Investigate the intermittent login cache invalidation failure on staging servers"
+	if _, err := task.Create(ws, task.CreateOptions{Title: title, Labels: []string{"bug"}}); err != nil {
+		t.Fatal(err)
+	}
+	out, stderr, err := runDocket(t, dir, "list")
+	if err != nil {
+		t.Fatalf("list: %v: %s", err, stderr)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 || lines[0] != "ID\tSTATUS\tTITLE\tLABELS\tWAITING" {
+		t.Fatalf("output = %q", out)
+	}
+	if columns := strings.Split(lines[1], "\t"); len(columns) != 5 || columns[2] != title || columns[3] != "bug" {
+		t.Fatalf("row = %q", lines[1])
+	}
+}

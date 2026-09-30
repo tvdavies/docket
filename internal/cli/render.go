@@ -12,6 +12,13 @@ import (
 	"github.com/tvdavies/docket/internal/bundle"
 )
 
+// stdoutIsTerminal reports whether stdout is an interactive terminal. Agent
+// harnesses and pipes are not, and get output meant for tools.
+func stdoutIsTerminal() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 func readStdin() ([]byte, error) {
 	return io.ReadAll(os.Stdin)
 }

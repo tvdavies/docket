@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -429,21 +430,36 @@ func taskSummaries(tasks []*task.Task) []taskSummary {
 	return out
 }
 
+// printTaskTable prints an aligned table with shortened titles on a
+// terminal. Elsewhere (pipes, files, agent harnesses) it prints full titles in
+// tab-separated columns so grep, cut, and awk see every word.
 func printTaskTable(tasks []*task.Task) {
 	if len(tasks) == 0 {
 		fmt.Println("No tasks.")
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tLABELS\tWAITING")
+	terminal := stdoutIsTerminal()
+	var out io.Writer = os.Stdout
+	var table *tabwriter.Writer
+	if terminal {
+		table = tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+		out = table
+	}
+	fmt.Fprintln(out, "ID\tSTATUS\tTITLE\tLABELS\tWAITING")
 	for _, t := range tasks {
 		waiting := ""
 		if t.Wait != nil {
 			waiting = t.Wait.Kind
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, truncate(t.Title, 50), strings.Join(t.Labels, ","), waiting)
+		title := strings.Join(strings.Fields(t.Title), " ")
+		if terminal {
+			title = truncate(title, 50)
+		}
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, title, strings.Join(t.Labels, ","), waiting)
 	}
-	_ = w.Flush()
+	if table != nil {
+		_ = table.Flush()
+	}
 }
 
 func reportTask(t *task.Task, verb string) error {
@@ -454,9 +470,11 @@ func reportTask(t *task.Task, verb string) error {
 	return nil
 }
 
+// truncate shortens s to at most n characters without splitting a rune.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(runes[:n-1]) + "…"
 }

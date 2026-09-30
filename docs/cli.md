@@ -104,9 +104,45 @@ decision reference, and a relationship):
 | `show --view current` | 451 |
 
 Start with a filtered `list` to find the relevant task. `list --json` returns
-task summaries without descriptions or history. The human table truncates long
-titles; use JSON when their full text matters. Read a specific embedded topic
+task summaries without descriptions or history. The table shortens long titles
+only on a terminal; piped output keeps them whole. Read a specific embedded topic
 with `docs TOPIC` instead of loading every guide.
+
+## Combining with grep, head, tail, and jq
+
+Docket's flags cover what shell tools can't do well: choosing which task state
+to show (`--view`) and cutting Markdown history on item boundaries
+(`--activity`). Plain text filtering, searching, and field selection are left to
+`grep`, `head`, `tail`, `cut`, and `jq`. Docket has no `--search`, `--limit`, or
+event-type filter flags for this reason.
+
+The output is designed for this:
+
+- Diagnostics go to stderr and failures exit non-zero, so stdout is always safe
+  to pipe and `&&` chains stop on errors.
+- `list` prints an aligned table with shortened titles on a terminal. When
+  stdout is not a terminal (a pipe, a file, or an agent harness) it prints full
+  titles in tab-separated columns: `ID STATUS TITLE LABELS WAITING`.
+- `events` prints one event per line; `show` starts each activity item with a
+  `[time] actor · type` line.
+- Every `--json` output is a single JSON document; the order of lists and
+  activity is stable between reads.
+
+```sh
+docket list | grep -i cache                                    # search titles
+docket list --status ready | cut -f1 | tail -n +2 | head -n 5  # first five ready IDs
+docket list --json | jq -r '.[] | select(.wait) | .id'         # tasks that are waiting
+docket show TASK-0001 | grep -A1 'task.moved'                  # status changes
+docket show TASK-0001 --json | jq '{status, wait, references}' # selected fields
+docket show TASK-0001 --json | jq -r '.activity[] | select(.kind == "comment") | .body' | tail -n 2
+docket events | grep TASK-0001 | tail -n 3                     # recent events for a task
+docket events --json | jq -c '.[] | select(.type == "task.moved")'
+```
+
+Use `--view` and `--activity` when reading Markdown: `tail -n` counts lines,
+so it can split a multi-line comment. For JSON, `jq` slicing
+(`.activity[-20:]`) and `--activity 20` are equivalent. `--compact` matches
+`jq -c .` for callers without `jq`.
 
 ## Task commands
 
@@ -284,7 +320,7 @@ also includes the Lua SDK, handler configuration, and plugin commands.
 | Guide | Size | Approx. tokens |
 |---|---|---|
 | Previous all-in-one `docket skill` | 8.7 KB | ~2,200 |
-| `docket skill` | 3.5 KB | ~900 |
+| `docket skill` | 3.8 KB | ~950 |
 | `docket skill --full` | 9.0 KB | ~2,300 |
 
 Keep the entry guide under 4 KB (about 1,000 tokens); a test enforces this.

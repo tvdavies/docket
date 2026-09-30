@@ -52,11 +52,18 @@ docket edit TASK-0007 --assignee reviewer
 docket move TASK-0007 in-review
 ```
 
-## Output
+## Output and pipes
 
-- Markdown (the default) is the smallest form for reading.
-- `--json` sends structured output to stdout and diagnostics to stderr. Add `--compact` for single-line JSON.
-- `docket show --json` without `--view` keeps the full, stable bundle for scripts.
+- Markdown (the default) is the smallest form for reading. `--json` is for fields; add `--compact` for one line.
+- stdout carries only data; errors go to stderr with a non-zero exit.
+- Filter with shell tools instead of looking for flags. Piped `list` prints full titles as tab-separated columns:
+
+```sh
+docket list | grep -i cache
+docket list --json | jq -r '.[] | select(.wait) | .id'
+docket show TASK-0007 --json | jq '{status, wait}'
+docket events | grep TASK-0007 | tail -n 5
+```
 
 ## Anything else
 
