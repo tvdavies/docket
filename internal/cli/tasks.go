@@ -94,7 +94,7 @@ func newNewCmd() *cobra.Command {
 	cmd.Flags().StringVar(&desc, "desc", "", "task description")
 	cmd.Flags().StringVar(&descFile, "desc-file", "", "read description from file ('-' for stdin)")
 	cmd.Flags().StringVar(&project, "project", "", "project id")
-	cmd.Flags().StringVar(&status, "status", "", "initial status (defaults to first lane)")
+	cmd.Flags().StringVar(&status, "status", "", "initial status (defaults to first configured status)")
 	cmd.Flags().StringSliceVar(&labels, "label", nil, "label (repeatable)")
 	cmd.MarkFlagsMutuallyExclusive("desc", "desc-file")
 	_ = cmd.MarkFlagRequired("title")
@@ -187,33 +187,10 @@ pointer is attached; explicit IDs are recommended for scripts and agents.`,
 }
 
 func newContextCmd() *cobra.Command {
-	var comments int
-	cmd := &cobra.Command{
-		Use:   "context [TASK-ID]",
-		Short: "Compatibility alias for show --comments",
-		Long:  "This compatibility command remains for existing scripts. New usage should call `docket show [TASK-ID] --comments N`.",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ws, err := openWS()
-			if err != nil {
-				return err
-			}
-			id, err := resolveTaskID(ws, firstArg(args))
-			if err != nil {
-				return err
-			}
-			b, err := bundle.Build(ws, id, comments)
-			if err != nil {
-				return err
-			}
-			if flagJSON {
-				return printJSON(b)
-			}
-			printBundleHuman(b)
-			return nil
-		},
-	}
-	cmd.Flags().IntVar(&comments, "comments", 0, "limit to the most recent N comments (0 = all)")
+	cmd := newShowCmd()
+	cmd.Use = "context [TASK-ID]"
+	cmd.Short = "Compatibility alias for show --comments"
+	cmd.Long = "This compatibility command remains for existing scripts. New usage should call `docket show [TASK-ID] --comments N`."
 	return cmd
 }
 

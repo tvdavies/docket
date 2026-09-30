@@ -121,7 +121,7 @@ func SerializeDeclaredConfig(config *Config) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := []byte("# docket workspace config. Statuses double as board lanes, in order.\n")
+	header := []byte("# docket workspace config. Statuses define workflow stages, in order.\n")
 	return append(header, data...), nil
 }
 

@@ -10,7 +10,7 @@
 - Category: architecture, dependencies, CLI design.
 - Depends on: none. Inbox correctness has a separate plan.
 - Planned at: `0af2dda`, 30 September 2026.
-- **Implementation status: implemented, awaiting review** (not merged, released or rolled out).
+- **Implementation status: merged** in [PR #16](https://github.com/tvdavies/docket/pull/16). Release and operational rollout have not been verified.
 
 ## Background
 

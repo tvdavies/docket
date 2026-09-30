@@ -45,6 +45,23 @@ docket show TASK-0001
 
 `show` returns the complete context bundle: description, active wait, references, attachments, project, assignee, labels, resolved relationships, sessions, and a chronological activity timeline. Use `--comments N` to limit comment bodies included in the bundle and timeline.
 
+## Choosing output for agent sessions
+
+The default `show` output is Markdown: task state followed by context and one
+activity timeline. Comments appear once. Prefer it when a model needs to read
+the task; use `--json` when a program needs structured fields. Full JSON bundles
+also expose comments, sessions, and historical widgets outside the activity
+array, so some context appears twice.
+
+Start with a filtered `list` to find the relevant task. For a smaller read, use
+`show TASK-ID --comments 5`; this limits comment bodies only, not other events
+or session history. Zero means all comments. Neither `show` nor `events` currently
+has a general history limit or pagination.
+
+`list --json` returns task summaries without descriptions or history. The
+human table truncates long titles; use JSON when their full text matters.
+Read a specific embedded topic with `docs TOPIC` instead of loading every guide.
+
 ## Task commands
 
 | Command | Purpose |
@@ -53,7 +70,7 @@ docket show TASK-0001
 | `docket list` | List and filter tasks |
 | `docket show [TASK-ID]` | Read a complete context bundle |
 | `docket edit [TASK-ID]` | Change title, description, or assignee |
-| `docket move [TASK-ID] STATUS` | Change status lane |
+| `docket move [TASK-ID] STATUS` | Change workflow status |
 | `docket wait set\|show\|resolve TASK-ID` | Record or resolve one external dependency |
 | `docket comment [TASK-ID] TEXT` | Add immutable durable context |
 | `docket label [TASK-ID]` | Add or remove labels |
@@ -192,6 +209,12 @@ docket service uninstall
 ```
 
 There is one runner per user/machine and any number of registered workspaces.
+
+## Optional derived index
+
+`docket reindex [--json]` writes `.docket/.index/tasks.json` from current task
+summaries. No built-in command reads this cache. Run it only for an external
+consumer that explicitly uses that file; normal task operations need no indexing.
 
 ## Documentation and plugins
 

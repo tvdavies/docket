@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode"
 
@@ -25,31 +24,17 @@ type AppendEvent func(events.Event) error
 
 // Tasks performs task operations for one actor and session.
 type Tasks struct {
-	Workspace    *workspace.Workspace
-	Actor        string
-	Session      string
-	Append       AppendEvent
-	RecordCursor func(events.LogCursor)
+	Workspace *workspace.Workspace
+	Actor     string
+	Session   string
+	Append    AppendEvent
 }
 
 func (operations Tasks) append(event events.Event) error {
-	return operations.appendAll([]events.Event{event})
-}
-
-func (operations Tasks) appendAll(group []events.Event) error {
-	if operations.Append == nil {
-		cursor, err := events.AppendAllWithCursor(operations.Workspace, group)
-		if err == nil && operations.RecordCursor != nil {
-			operations.RecordCursor(cursor)
-		}
-		return err
+	if operations.Append != nil {
+		return operations.Append(event)
 	}
-	for _, event := range group {
-		if err := operations.Append(event); err != nil {
-			return err
-		}
-	}
-	return nil
+	return events.Append(operations.Workspace, event)
 }
 
 // Create creates a task and emits task.created.
@@ -115,120 +100,6 @@ func (operations Tasks) Edit(id string, options EditOptions) (*task.Task, error)
 		return nil, err
 	}
 	return value, nil
-}
-
-// PatchOptions applies one atomic multi-field dossier update. Nil fields are
-// unchanged; empty Assignee and Labels values explicitly clear them.
-type PatchOptions struct {
-	Title       *string
-	Description *string
-	Assignee    *string
-	Labels      *[]string
-	Status      *string
-}
-
-var errNoPatchChanges = errors.New("no effective task changes")
-
-// Patch validates every field, writes all requested dossier changes once under
-// one task lock, and appends the resulting ordered event group before releasing
-// that lock. A failed event commit restores the original dossier.
-func (operations Tasks) Patch(id string, options PatchOptions) (*task.Task, error) {
-	if options.Title == nil && options.Description == nil && options.Assignee == nil && options.Labels == nil && options.Status == nil {
-		return nil, fmt.Errorf("no task changes requested")
-	}
-	if options.Title != nil {
-		trimmed := strings.TrimSpace(*options.Title)
-		if trimmed == "" {
-			return nil, fmt.Errorf("title cannot be empty")
-		}
-		options.Title = &trimmed
-	}
-	if options.Description != nil {
-		trimmed := strings.TrimRight(*options.Description, "\n")
-		options.Description = &trimmed
-	}
-	if options.Status != nil && !operations.Workspace.Config.HasStatus(*options.Status) {
-		return nil, fmt.Errorf("unknown status %q (configured: %s)", *options.Status, strings.Join(operations.Workspace.Config.Statuses, ", "))
-	}
-	if options.Labels != nil {
-		normalised := uniqueLabels(*options.Labels)
-		options.Labels = &normalised
-	}
-
-	var titleOrDescriptionChanged, assigneeChanged, labelsChanged, statusChanged bool
-	var fromStatus string
-	result, err := task.UpdateWithCommit(operations.Workspace, id, func(value *task.Task) error {
-		fromStatus = value.Status
-		if options.Title != nil && *options.Title != value.Title {
-			value.Title = *options.Title
-			titleOrDescriptionChanged = true
-		}
-		if options.Description != nil && *options.Description != value.Description {
-			value.Description = *options.Description
-			titleOrDescriptionChanged = true
-		}
-		if options.Assignee != nil && *options.Assignee != value.Assignee {
-			value.Assignee = *options.Assignee
-			assigneeChanged = true
-		}
-		if options.Labels != nil && !slices.Equal(*options.Labels, value.Labels) {
-			value.Labels = append([]string(nil), (*options.Labels)...)
-			labelsChanged = true
-		}
-		if options.Status != nil && *options.Status != value.Status {
-			value.Status = *options.Status
-			statusChanged = true
-		}
-		if !titleOrDescriptionChanged && !assigneeChanged && !labelsChanged && !statusChanged {
-			return errNoPatchChanges
-		}
-		return nil
-	}, func(value *task.Task) error {
-		group := make([]events.Event, 0, 3)
-		if assigneeChanged {
-			group = append(group, events.Event{
-				Type: events.TaskAssigned, Task: value.ID, Title: value.Title,
-				Actor: operations.Actor, Assignee: value.Assignee,
-			})
-		} else if titleOrDescriptionChanged {
-			group = append(group, events.Event{
-				Type: events.TaskUpdated, Task: value.ID, Title: value.Title,
-				Actor: operations.Actor, Assignee: value.Assignee,
-			})
-		}
-		if labelsChanged {
-			group = append(group, events.Event{
-				Type: events.TaskLabeled, Task: value.ID, Title: value.Title,
-				Actor: operations.Actor, Assignee: value.Assignee,
-				Data: map[string]any{"labels": value.Labels},
-			})
-		}
-		if statusChanged {
-			group = append(group, events.Event{
-				Type: events.TaskMoved, Task: value.ID, Title: value.Title,
-				Actor: operations.Actor, Assignee: value.Assignee,
-				Data: map[string]any{"from": fromStatus, "to": value.Status},
-			})
-		}
-		return operations.appendAll(group)
-	})
-	if errors.Is(err, errNoPatchChanges) {
-		return task.Load(operations.Workspace, id)
-	}
-	return result, err
-}
-
-func uniqueLabels(labels []string) []string {
-	result := make([]string, 0, len(labels))
-	seen := map[string]bool{}
-	for _, label := range labels {
-		label = strings.TrimSpace(label)
-		if label != "" && !seen[label] {
-			seen[label] = true
-			result = append(result, label)
-		}
-	}
-	return result
 }
 
 // SetWaitOptions describes an external condition blocking task progress.

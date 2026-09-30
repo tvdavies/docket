@@ -36,7 +36,7 @@ func Init(root string) (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := `# docket workspace config. Statuses double as board lanes, in order.
+	header := `# docket workspace config. Statuses define workflow stages, in order.
 #
 # Optional post-hoc event handlers use exactly one of lua or run. Paths are
 # relative to the directory containing .docket/:

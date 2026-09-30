@@ -70,9 +70,6 @@ func (t *Task) Dir() string { return t.dir }
 // TaskFile is the path to the task's markdown dossier.
 func (t *Task) TaskFile() string { return filepath.Join(t.dir, "task.md") }
 
-// LockFile is the per-task flock path.
-func (t *Task) LockFile() string { return filepath.Join(t.dir, ".lock") }
-
 // CommentsDir holds append-only comment files.
 func (t *Task) CommentsDir() string { return filepath.Join(t.dir, "comments") }
 

@@ -172,9 +172,6 @@ func TestAttachFile(t *testing.T) {
 	if _, err := task.AttachData(ws, created.ID, "../outside.txt", []byte("bad"), "", "tom"); err == nil {
 		t.Fatal("attachment traversal unexpectedly accepted")
 	}
-	if _, _, err := reloaded.AttachmentPath("../repro.log"); err == nil {
-		t.Fatal("attachment download traversal unexpectedly accepted")
-	}
 }
 
 func TestAttachDataWithCommitHoldsTaskLockThroughCommit(t *testing.T) {

@@ -113,8 +113,8 @@ type CLI struct {
 }
 
 // UI is legacy browser metadata from the retired board. It is parsed and
-// validated for compatibility; Docket serves none of it. Widget declarations
-// still identify the plugin's historical widget records.
+// validated for compatibility; Docket serves none of it. Historical widget records are
+// read directly from the event log, independently of these declarations.
 type UI struct {
 	// Dir held static UI assets. Its contents are no longer read.
 	Dir                string              `yaml:"dir,omitempty" json:"dir,omitempty"`
@@ -130,8 +130,8 @@ type UI struct {
 	Cards      []Card `yaml:"cards,omitempty" json:"cards,omitempty"`
 }
 
-// Widget is a task-ledger widget type. Slots choose where its presentation
-// appears; Entry, when set, is the iframe opened from the activity timeline.
+// Widget describes a legacy task-ledger presentation. Docket only validates
+// this metadata; it no longer opens the iframe or applies presentation slots.
 type Widget struct {
 	Type  string   `yaml:"type" json:"type"`
 	Title string   `yaml:"title" json:"title"`
@@ -139,7 +139,7 @@ type Widget struct {
 	Slots []string `yaml:"slots,omitempty" json:"slots"`
 }
 
-// View is an iframe contribution: a task detail panel or a workspace page.
+// View describes a legacy iframe contribution; Docket no longer serves it.
 type View struct {
 	ID    string `yaml:"id" json:"id"`
 	Title string `yaml:"title" json:"title"`
@@ -166,34 +166,6 @@ var Capabilities = []string{"task.read", "task.comment", "task.move", "service.f
 
 // WidgetSlots are the placements a widget presentation may use.
 var WidgetSlots = []string{"board", "activity"}
-
-// DeclaredWidgets returns every ledger widget type, including deprecated v2
-// cards, with default slots applied.
-func (ui UI) DeclaredWidgets() []Widget {
-	result := make([]Widget, 0, len(ui.Widgets)+len(ui.Cards))
-	for _, declared := range ui.Widgets {
-		if len(declared.Slots) == 0 {
-			declared.Slots = append([]string{}, WidgetSlots...)
-		}
-		result = append(result, declared)
-	}
-	if ui.APIVersion >= 2 {
-		for _, card := range ui.Cards {
-			result = append(result, Widget{Type: card.Type, Title: card.Title, Slots: append([]string{}, card.Locations...)})
-		}
-	}
-	return result
-}
-
-// DeclaresWidget reports whether kind is a ledger widget type of this plugin.
-func (ui UI) DeclaresWidget(kind string) bool {
-	for _, declared := range ui.DeclaredWidgets() {
-		if declared.Type == kind {
-			return true
-		}
-	}
-	return false
-}
 
 // EffectiveConfig is the validated configuration delivered to a plugin.
 type EffectiveConfig struct {

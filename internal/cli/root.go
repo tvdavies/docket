@@ -239,7 +239,7 @@ func resolveTaskID(ws *workspace.Workspace, explicit string) (string, error) {
 	if id := session.Current(ws, sessionID()); id != "" {
 		return id, nil
 	}
-	return "", fmt.Errorf("no task id given and no task attached to this session (use `docket attach <id>` first)")
+	return "", fmt.Errorf("no task id given and no task attached to this session (use `docket session attach <id>` first)")
 }
 
 // printJSON writes v as indented JSON to stdout.

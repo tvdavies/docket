@@ -17,7 +17,7 @@ var (
 // Config is the parsed `config.yaml`. It declares the status lanes, advisory
 // labels, typed relationship kinds, event handlers, and id-generation settings.
 type Config struct {
-	// Statuses double as board lanes, in order.
+	// Statuses define workflow stages, in order.
 	Statuses []string `yaml:"statuses"`
 	// Terminal statuses are treated as "closed" for filtering.
 	Terminal []string `yaml:"terminal,omitempty"`
@@ -240,16 +240,6 @@ func (c *Config) HandlerNames() []string {
 func (c *Config) HasStatus(s string) bool {
 	for _, st := range c.Statuses {
 		if st == s {
-			return true
-		}
-	}
-	return false
-}
-
-// IsTerminal reports whether s is a terminal (closed) status.
-func (c *Config) IsTerminal(s string) bool {
-	for _, t := range c.Terminal {
-		if t == s {
 			return true
 		}
 	}

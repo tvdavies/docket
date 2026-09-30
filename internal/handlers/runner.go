@@ -545,16 +545,6 @@ func TransferCheckpointLocked(ws *workspace.Workspace, source, destination strin
 	return checkpoint, nil
 }
 
-// AdoptCursor copies a legacy handler checkpoint to a namespaced identity
-// after strict validation. The source is retained as evidence, not as a
-// rollback mechanism: once the destination advances, restoring legacy wiring
-// against the retained source replays its suffix. Use the plugin handoff
-// transition for recovery in either direction.
-func AdoptCursor(ws *workspace.Workspace, legacy, identity string) error {
-	_, err := TransferCheckpointLocked(ws, legacy, identity)
-	return err
-}
-
 func advanceCursor(ws *workspace.Workspace, name string, position int, expectedHash string) error {
 	prefixHash, found, err := events.PrefixHash(ws, position)
 	if err != nil {

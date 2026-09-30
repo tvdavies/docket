@@ -280,7 +280,7 @@ ui:
 	if problem := manifest.HostingProblem(); problem != "" {
 		t.Fatalf("service without command needs no hosting: %q", problem)
 	}
-	if !manifest.UI.DeclaresWidget("dispatch/session") {
+	if len(manifest.UI.Widgets) != 1 || manifest.UI.Widgets[0].Type != "dispatch/session" {
 		t.Fatal("legacy widget declaration lost")
 	}
 	resolved, err := manifest.ResolveConfig(nil, map[string]any{"model": "large"}, map[string]map[string]any{"merge": {"agent": "merger"}}, []string{"in-review", "merge"})
