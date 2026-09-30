@@ -199,10 +199,11 @@ preserve nonmatching-event progress, source bytes and private backups.
 
 Supported source protocol: this implementation's locked seeding and existing
 refresh-under-lock drains. `TestHandoffServiceAndSupervisorContinuity` runs the
-real service Manager/config watcher in a separate fixture process, checks the
-same service and supervisor PIDs across forward/reverse/forward, and proves
-pending delivery without an append after publication. The supervisor is a stub,
-not a Dispatch session or a systemd cgroup test.
+real event-runner Manager/config watcher in a separate fixture process, checks
+the same runner and supervisor PIDs across forward/reverse/forward, and proves
+pending delivery without an append after publication. The supervisor is a stub
+standing in for an externally supervised process (Docket no longer hosts
+plugin processes), not a Dispatch session or a systemd cgroup test.
 
 **Old unlocked seeders at `30ec1b1`/`a019053` are unsupported for a concurrent
 handoff.** `TestLegacyUnlockedSeedCanOverwritePreparedCheckpoint` reproduces

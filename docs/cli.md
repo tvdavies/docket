@@ -149,11 +149,12 @@ docket project show "$PROJECT"
 |---|---|
 | `docket events [--since N]` | Inspect the append-only event log |
 | `docket watch [--from-start]` | Stream JSONL for diagnostics or a transient consumer |
-| `docket inbox [--mark-read]` | Poll unread events using an actor cursor |
+| `docket inbox [--mark-read]` | Poll unread events using an actor cursor; `--mark-read` acknowledges immediately |
+| `docket inbox --peek` / `docket inbox ack CHECKPOINT` | Durable consumers: read, record, then acknowledge |
 
-Configured handlers are preferred for durable event-driven automation. See [Lua hooks and SDK](lua-hooks.md).
+Configured handlers are preferred for durable event-driven automation. See [Lua hooks and SDK](lua-hooks.md) and [Inbox consumers](inbox.md).
 
-## Workspaces and service
+## Workspaces and the event runner
 
 `docket init` creates and registers a workspace, so manual registry commands are uncommon.
 
@@ -164,11 +165,25 @@ docket workspace add ~/dev/other --name other
 docket workspace remove other          # files remain untouched
 ```
 
-`serve` is the foreground process; `service` controls the background systemd user unit:
+`run` is the headless event runner. It delivers `delivery: service` hooks and
+opens no network listener:
 
 ```sh
-docket serve --all                     # foreground/debugging
-docket service install
+docket run                             # current workspace, foreground
+docket run --all                       # every registered workspace, foreground
+docket run --once --all                # drain pending hooks once and exit (heartbeat/cron)
+```
+
+`--once` exits non-zero when any handler fails; failed events stay pending for
+the next run. With `--all`, a registered workspace whose directory is gone is
+reported as `missing` without failing the run; the long-running `run --all`
+prunes such registrations after `prune_after`. `docket serve` is a deprecated alias for `docket run` and
+rejects the removed `--listen`/`--allow-remote` flags.
+
+`service` optionally installs `docket run --all` as a systemd user unit:
+
+```sh
+docket service install                 # (re)write the unit
 docket service start
 docket service status
 docket service logs
@@ -176,27 +191,29 @@ docket service restart
 docket service uninstall
 ```
 
-There is one service per user/machine and any number of registered workspaces.
+There is one runner per user/machine and any number of registered workspaces.
 
-## Documentation and plugin authoring
+## Documentation and plugins
 
 The reference docs ship inside the binary, so they always match the installed version:
 
 ```sh
 docket docs                            # list topics
 docket docs plugins/authoring          # print one (Markdown)
-docket docs plugins/ui --json          # {name, title, content}
+docket docs inbox --json               # {name, title, content}
 ```
 
-Plugin authoring commands:
+Plugin commands:
 
 ```sh
-docket plugin new my-plugin --widget --service   # scaffold ./my-plugin (all views when none chosen)
-docket plugin validate my-plugin                 # manifest + referenced files; --json for tooling
-docket plugin dev my-plugin                      # link, enable, serve if needed, stream reloads and logs
+docket plugin add ~/dev/my-plugin                 # install (link) a local plugin
+docket plugin enable my-plugin --set key=value    # enable in this workspace
+docket plugin validate ~/dev/my-plugin            # manifest + referenced files; --json for tooling
+docket plugin config get my-plugin                # schemas and stored settings
+docket plugin config set my-plugin key=value      # workspace scope (default)
+docket plugin config set my-plugin --scope instance key=value
+docket plugin config set my-plugin --status merge agent=merger
 ```
-
-`plugin dev` links and enables the plugin in the current workspace (`--workspace`, `--set KEY=VALUE` on first enable), starts an in-process service unless one is already listening (`--serve=false` to only watch), then prints validation results on every manifest save, UI reloads, service restarts and service output until interrupted. Nothing is uninstalled on exit.
 
 ## Environment variables
 

@@ -1,15 +1,14 @@
 package plugin_test
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/tvdavies/docket/internal/plugin"
 )
 
+// Legacy ui metadata stays validated so existing manifests keep the meaning
+// they had, even though Docket no longer serves it.
 func TestFrameUIManifestValidation(t *testing.T) {
 	base := "name: demo\nversion: 1.0.0\n"
 	service := "service: {url: 'http://127.0.0.1:9000'}\n"
@@ -52,38 +51,5 @@ func TestDeclaredWidgetsIncludeLegacyV2CardsAndDefaultSlots(t *testing.T) {
 	}
 	if !ui.DeclaresWidget("demo/card") || (plugin.UI{Cards: ui.Cards}).DeclaresWidget("demo/card") {
 		t.Fatal("v1 cards are not ledger widgets")
-	}
-}
-
-func TestUIHashTracksDirectoryChanges(t *testing.T) {
-	root := writeManifest(t, "name: demo\nversion: 1.0.0\nui: {dir: ui}\n")
-	manifest, err := plugin.Load(root, "dev")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hash, err := manifest.UIHash(); err != nil || hash != "" {
-		t.Fatalf("missing dir hash = %q %v", hash, err)
-	}
-	file := filepath.Join(root, "ui", "index.html")
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(file, []byte("one"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	first, err := manifest.UIHash()
-	if err != nil || len(first) != 16 {
-		t.Fatalf("hash = %q %v", first, err)
-	}
-	if again, _ := manifest.UIHash(); again != first {
-		t.Fatal("hash is unstable")
-	}
-	if err := os.WriteFile(file, []byte("two!"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	later := time.Now().Add(time.Second)
-	_ = os.Chtimes(file, later, later)
-	if next, _ := manifest.UIHash(); next == first {
-		t.Fatal("hash ignored an edit")
 	}
 }

@@ -1,10 +1,5 @@
 /bin/
 dist/
-node_modules/
-!web/dist/
-!web/dist/**
-web/node_modules/
-web/*.tsbuildinfo
 *.log
 .DS_Store
 

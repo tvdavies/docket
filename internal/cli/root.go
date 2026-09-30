@@ -73,7 +73,7 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 		&cobra.Group{ID: groupSessions, Title: "Optional session shorthand:"},
 		&cobra.Group{ID: groupProjects, Title: "Projects and relationships:"},
 		&cobra.Group{ID: groupAutomation, Title: "Automation and event diagnostics:"},
-		&cobra.Group{ID: groupService, Title: "Workspace, service, and maintenance:"},
+		&cobra.Group{ID: groupService, Title: "Workspace, event runner, and maintenance:"},
 		&cobra.Group{ID: groupHelp, Title: "Help and shell integration:"},
 	)
 	root.SetHelpCommandGroupID(groupHelp)
@@ -91,7 +91,7 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 	automationCommands := []*cobra.Command{newInboxCmd(), newEventsCmd(), newWatchCmd()}
 	setCommandGroup(groupAutomation, automationCommands...)
 
-	serviceCommands := []*cobra.Command{newWorkspaceCmd(), newPluginCmd(), newServeCmd(), newServiceCmd(), newReindexCmd()}
+	serviceCommands := []*cobra.Command{newWorkspaceCmd(), newPluginCmd(), newRunCmd(), newServeCmd(), newServiceCmd(), newReindexCmd()}
 	setCommandGroup(groupService, serviceCommands...)
 
 	sessionCommand := newSessionCmd()

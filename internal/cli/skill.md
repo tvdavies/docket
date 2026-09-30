@@ -129,7 +129,7 @@ handlers:
 - `on` is a list of exact event types or `["*"]`.
 - `match` uses exact dotted paths; nested paths are supported under `data`.
 - Use exactly one of `lua:` or `run:`.
-- `delivery: service` is asynchronous and durable; `inline` is the default.
+- `delivery: service` is asynchronous and durable, delivered by `docket run`; `inline` is the default.
 - A new handler name starts at cursor zero and may receive historical events.
 - Failures retain the cursor and retry; hooks must be idempotent.
 
@@ -205,28 +205,27 @@ end
 
 SDK task mutations use Docket's locks, atomic writes, validation, and event production. Do not edit `.docket` internals directly.
 
-For service-delivered failures:
+For runner-delivered (`delivery: service`) hooks and their failures:
 
 ```sh
-docket service status
+docket run --once          # deliver pending events now; non-zero exit on failure
+docket service status      # if the optional systemd unit runs `docket run --all`
 docket service logs
 docket events --json
 ```
 
 ## Extending Docket with plugins
 
-Plugins add handlers, statuses, settings, a supervised service, CLI commands and sandboxed UI (task widgets, panels, pages) to a running Docket without rebuilding it. The binary carries its own docs:
+Plugins add hooks, statuses, scoped settings and a CLI command without rebuilding Docket. The binary carries its own docs:
 
 ```sh
 docket docs                         # list topics
 docket docs plugins/authoring       # step-by-step guide; read this first
-docket docs plugins/ui              # frame bridge API reference
-docket plugin new NAME [--widget] [--panel] [--page] [--service]
-docket plugin dev PATH              # link + enable + serve; streams validation, reloads and service logs
 docket plugin validate PATH [--json]
+docket plugin add PATH && docket plugin enable NAME
+docket plugin config get NAME [--json]
+docket plugin config set NAME [--scope instance|workspace|status] [--status S] KEY=VALUE...
 ```
-
-Keep `docket plugin dev` running while editing: UI and manifest changes apply live, and its output shows validation errors and service failures.
 
 ## Low-level coordination
 
@@ -234,6 +233,10 @@ Keep `docket plugin dev` running while editing: UI and manifest changes apply li
 docket events [--since N] --json
 docket watch [--from-start]
 docket inbox [--actor ACTOR] [--all] [--mark-read] --json
+docket inbox [--actor ACTOR] [--all] --peek --json   # durable read; then:
+docket inbox ack [--actor ACTOR] [--all] CHECKPOINT
 ```
+
+`--mark-read` acknowledges as soon as it prints. A durable consumer peeks, records the batch, then acknowledges; see `docket docs inbox`.
 
 These are diagnostics or integration primitives. Configured handlers are the normal durable event mechanism.

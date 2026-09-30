@@ -68,7 +68,7 @@ func newDocsCmd() *cobra.Command {
 		Use:     "docs [topic]",
 		Short:   "Print Docket's reference documentation, shipped with this binary",
 		Long:    "Without a topic, lists the embedded documents. With one, prints it as Markdown. The docs match this binary's version, so prefer them over copies found elsewhere.",
-		Example: "  docket docs\n  docket docs plugins/authoring\n  docket docs plugins/ui\n  docket docs plugin-sdk.d.ts",
+		Example: "  docket docs\n  docket docs plugins/authoring\n  docket docs inbox",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {

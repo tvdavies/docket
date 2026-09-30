@@ -1,14 +1,15 @@
-// Package service runs Docket's machine-wide multi-workspace runtime and HTTP
-// board/API surface. Workspaces remain independent stores; this package only
-// coordinates their watchers in one user process.
+// Package service runs Docket's headless event runner. It watches registered
+// workspaces and drains their durable handler cursors. Workspaces remain
+// independent stores; this package only coordinates their watchers in one
+// user process. It opens no network listener.
 package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -21,11 +22,7 @@ import (
 
 const maxRetry = 30 * time.Second
 
-// ErrWorkspaceNotManaged indicates that a URL workspace name is not registered
-// with this service manager.
-var ErrWorkspaceNotManaged = errors.New("workspace is not managed by this service")
-
-// WorkspaceStatus is the service's live view of one registered workspace.
+// WorkspaceStatus is the runner's live view of one registered workspace.
 type WorkspaceStatus struct {
 	Name         string `json:"name"`
 	Path         string `json:"path"`
@@ -41,7 +38,6 @@ type runtime struct {
 	entry      registry.WorkspaceEntry
 	generation string
 	cancel     context.CancelFunc
-	stream     *workspaceStream
 
 	mu           sync.RWMutex
 	status       WorkspaceStatus
@@ -58,21 +54,13 @@ type Manager struct {
 	runtimes map[string]*runtime
 	stopped  bool
 	wg       sync.WaitGroup
-
-	plugins  *pluginHub
-	services *supervisor
-
-	pluginMu   sync.Mutex
-	pluginBase []PluginState
 }
 
 func NewManager(ctx context.Context, output io.Writer) *Manager {
 	if output == nil {
 		output = io.Discard
 	}
-	manager := &Manager{ctx: ctx, output: output, runtimes: map[string]*runtime{}, plugins: newPluginHub()}
-	manager.services = newSupervisor(ctx, manager.publishPlugins)
-	return manager
+	return &Manager{ctx: ctx, output: output, runtimes: map[string]*runtime{}}
 }
 
 // SetWorkspaces reconciles the running set with entries. Unchanged workspaces
@@ -112,7 +100,6 @@ func (m *Manager) setWorkspaces(entries []registry.WorkspaceEntry, generation st
 			initialised bool
 		}{names: names, initialised: running.initialised}
 		running.mu.RUnlock()
-		running.stream.close()
 		running.cancel()
 		delete(m.runtimes, name)
 	}
@@ -120,8 +107,7 @@ func (m *Manager) setWorkspaces(entries []registry.WorkspaceEntry, generation st
 		ctx, cancel := context.WithCancel(m.ctx)
 		prior := inherited[name]
 		running := &runtime{
-			entry: entry, generation: generation,
-			cancel: cancel, stream: newWorkspaceStream(),
+			entry: entry, generation: generation, cancel: cancel,
 			handlerNames: prior.names, initialised: prior.initialised,
 			status: WorkspaceStatus{
 				Name: entry.Name, Path: entry.Path, State: "starting", UpdatedAt: now(),
@@ -140,9 +126,9 @@ func (m *Manager) setWorkspaces(entries []registry.WorkspaceEntry, generation st
 // is deliberately small and cheap: only config metadata is read, while each
 // workspace remains event-driven. Registrations whose project directories stay
 // missing beyond the configured prune_after grace are unregistered so dead
-// paths do not accumulate retrying watchers. Plugin manifests and ui.dir trees
-// are also watched with fsnotify, so plugin edits apply without waiting for
-// the next poll.
+// paths do not accumulate retrying watchers. Plugin manifest edits are also
+// watched with fsnotify so they apply without waiting for the next poll;
+// removing or relocating a plugin is picked up by the poll.
 func (m *Manager) FollowRegistry(ctx context.Context, interval time.Duration) {
 	missing := map[string]time.Time{}
 	m.followPlugins(ctx, interval, func(config *registry.Config) []registry.WorkspaceEntry {
@@ -166,43 +152,33 @@ func (m *Manager) WatchPlugins(ctx context.Context, interval time.Duration) {
 	})
 }
 
-// followPlugins reconciles runtimes on every poll tick and plugin file change.
-// Only changes outside a manifest's ui section restart workspace runtimes;
-// UI-only changes republish board config to the running streams, which lets
-// open plugin frames swap to the new asset generation in place.
+// followPlugins reconciles runtimes on every poll tick and plugin manifest
+// change. A changed plugin generation restarts the affected runtimes, which
+// recompose their handlers from the new manifests.
 func (m *Manager) followPlugins(ctx context.Context, interval time.Duration, workspaces func(*registry.Config) []registry.WorkspaceEntry) {
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
 	watcher := newPluginWatcher()
 	go watcher.run(ctx.Done())
-	previous := ""
 	reported := map[string]string{}
 	load := func() {
 		config, err := registry.Load()
 		if err != nil {
-			fmt.Fprintf(m.output, "docket: service registry: %v\n", err)
+			fmt.Fprintf(m.output, "docket: runner registry: %v\n", err)
 			return
 		}
 		states, generation := inspectPlugins(config.Plugins)
 		watcher.sync(states)
-		encoded, _ := json.Marshal(states)
-		changed := previous != "" && previous != string(encoded)
-		previous = string(encoded)
-		m.setPluginStates(states)
 		entries := workspaces(config)
 		m.setWorkspaces(entries, generation)
-		specs, problems := serviceSpecs(config, entries)
+		problems := hostingProblems(config, entries)
 		for name, problem := range problems {
 			if reported[name] != problem {
-				fmt.Fprintf(m.output, "docket: plugin %s service: %s\n", name, problem)
+				fmt.Fprintf(m.output, "docket: plugin %s: %s\n", name, problem)
 			}
 		}
 		reported = problems
-		m.services.sync(specs)
-		if changed {
-			m.refreshConfigs()
-		}
 	}
 	load()
 	ticker := time.NewTicker(interval)
@@ -216,24 +192,6 @@ func (m *Manager) followPlugins(ctx context.Context, interval time.Duration, wor
 		case <-watcher.events():
 			load()
 		}
-	}
-}
-
-// refreshConfigs republishes board config for every running workspace. The
-// stream deduplicates unchanged config, so only affected boards see an event.
-func (m *Manager) refreshConfigs() {
-	m.mu.RLock()
-	runtimes := make([]*runtime, 0, len(m.runtimes))
-	for _, running := range m.runtimes {
-		runtimes = append(runtimes, running)
-	}
-	m.mu.RUnlock()
-	for _, running := range runtimes {
-		ws, err := workspace.OpenRoot(running.entry.Path)
-		if err != nil {
-			continue
-		}
-		running.stream.setConfig(configForStream(ws))
 	}
 }
 
@@ -256,25 +214,6 @@ func (m *Manager) Statuses() []WorkspaceStatus {
 	return statuses
 }
 
-// LeaseWorkspace opens a fresh authoritative view by registry name and holds a
-// manager read lease until release is called. Reconciliation therefore cannot
-// replace or remove that name while an HTTP request is reading or mutating its
-// store.
-func (m *Manager) LeaseWorkspace(name string) (*workspace.Workspace, func(), error) {
-	m.mu.RLock()
-	running, ok := m.runtimes[name]
-	if !ok {
-		m.mu.RUnlock()
-		return nil, nil, fmt.Errorf("%w: %s", ErrWorkspaceNotManaged, name)
-	}
-	ws, err := workspace.OpenRoot(running.entry.Path)
-	if err != nil {
-		m.mu.RUnlock()
-		return nil, nil, err
-	}
-	return ws, m.mu.RUnlock, nil
-}
-
 // Stop cancels every workspace and waits for its watcher to leave.
 func (m *Manager) Stop() {
 	m.mu.Lock()
@@ -284,47 +223,57 @@ func (m *Manager) Stop() {
 	}
 	m.stopped = true
 	for name, running := range m.runtimes {
-		running.stream.close()
 		running.cancel()
 		delete(m.runtimes, name)
 	}
 	m.mu.Unlock()
-	m.services.stop()
-	m.plugins.close()
 	m.wg.Wait()
 }
 
-// setPluginStates records the inspected plugin set and publishes it with the
-// current service status attached.
-func (m *Manager) setPluginStates(states []PluginState) {
-	m.pluginMu.Lock()
-	m.pluginBase = states
-	m.pluginMu.Unlock()
-	m.publishPlugins()
-}
-
-// publishPlugins pushes the plugin set to /api/stream. The supervisor calls
-// it whenever a service changes state.
-func (m *Manager) publishPlugins() {
-	m.pluginMu.Lock()
-	defer m.pluginMu.Unlock()
-	if m.pluginBase == nil {
-		return
+// drainWorkspace delivers every pending event to the workspace's handlers.
+// Plugin handlers that appear after the runtime first drained (a hot-reloaded
+// manifest) are seeded at the log end so enabling them never replays history.
+func (m *Manager) drainWorkspace(ctx context.Context, running *runtime) error {
+	fresh, err := workspace.OpenRoot(running.entry.Path)
+	if err != nil {
+		return err
 	}
-	statuses := m.services.statuses()
-	states := make([]PluginState, len(m.pluginBase))
-	copy(states, m.pluginBase)
-	for index := range states {
-		if status, ok := statuses[states[index].Name]; ok {
-			states[index].Service = &status
+	running.mu.RLock()
+	initialised := running.initialised
+	previous := make(map[string]bool, len(running.handlerNames))
+	for name := range running.handlerNames {
+		previous[name] = true
+	}
+	running.mu.RUnlock()
+	if initialised {
+		for name, config := range fresh.Config.Handlers {
+			if config.PluginName != "" && !previous[name] {
+				if err := handlers.SeedCursorAtEnd(fresh, name); err != nil {
+					return fmt.Errorf("seed hot-reloaded plugin handler %q: %w", name, err)
+				}
+			}
 		}
 	}
-	m.plugins.update(states)
-}
-
-// ServiceStatuses reports supervised plugin services by plugin name.
-func (m *Manager) ServiceStatuses() map[string]ServiceStatus {
-	return m.services.statuses()
+	failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Scope: handlers.ScopeAll, Output: m.output, RefreshConfig: true})
+	current := make(map[string]bool, len(fresh.Config.Handlers))
+	for name := range fresh.Config.Handlers {
+		current[name] = true
+	}
+	running.mu.Lock()
+	running.handlerNames = current
+	running.initialised = true
+	running.status.EventCount = events.Count(fresh)
+	running.status.HandlerCount = len(fresh.Config.Handlers)
+	running.status.UpdatedAt = now()
+	running.mu.Unlock()
+	if len(failures) == 0 {
+		return nil
+	}
+	errs := make([]error, 0, len(failures))
+	for _, failure := range failures {
+		errs = append(errs, failure)
+	}
+	return errors.Join(errs...)
 }
 
 func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
@@ -346,7 +295,7 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 
 		ws, err := workspace.OpenRoot(running.entry.Path)
 		if err != nil {
-			running.fail("unavailable", err)
+			m.fail(running, "unavailable", err)
 			if !wait(ctx, backoff) {
 				return
 			}
@@ -355,72 +304,27 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 		}
 
 		started := false
-		running.stream.restart()
-		drain := func() error {
-			fresh, err := workspace.OpenRoot(running.entry.Path)
-			if err != nil {
-				return err
-			}
-			running.mu.RLock()
-			initialised := running.initialised
-			previous := make(map[string]bool, len(running.handlerNames))
-			for name := range running.handlerNames {
-				previous[name] = true
-			}
-			running.mu.RUnlock()
-			if initialised {
-				for name, config := range fresh.Config.Handlers {
-					if config.PluginName != "" && !previous[name] {
-						if err := handlers.SeedCursorAtEnd(fresh, name); err != nil {
-							return fmt.Errorf("seed hot-reloaded plugin handler %q: %w", name, err)
-						}
-					}
-				}
-			}
-			failures := handlers.DrainAll(fresh, handlers.Options{Context: ctx, Scope: handlers.ScopeAll, Output: m.output, RefreshConfig: true})
-			current := make(map[string]bool, len(fresh.Config.Handlers))
-			for name := range fresh.Config.Handlers {
-				current[name] = true
-			}
-			running.mu.Lock()
-			running.handlerNames = current
-			running.initialised = true
-			running.status.EventCount = events.Count(fresh)
-			running.status.HandlerCount = len(fresh.Config.Handlers)
-			running.status.UpdatedAt = now()
-			running.mu.Unlock()
-			if len(failures) == 0 {
-				return nil
-			}
-			errs := make([]error, 0, len(failures))
-			for _, failure := range failures {
-				errs = append(errs, failure)
-			}
-			return errors.Join(errs...)
-		}
-
-		err = events.WatchWithSetupCursor(ws, false, done, func(cursor events.LogCursor, reset bool) error {
-			fresh, err := workspace.OpenRoot(running.entry.Path)
-			if err != nil {
-				return err
-			}
-			running.stream.observe(cursor, reset)
-			running.stream.setConfig(configForStream(fresh))
+		drain := func() error { return m.drainWorkspace(ctx, running) }
+		// The watcher is armed before setup runs, and setup drains the backlog,
+		// so an event appended during startup is either drained here or
+		// delivered by the watcher afterwards. Setup also reruns whenever
+		// config.yaml changes, applying hook changes without a new event.
+		err = events.WatchWithSetupCursor(ws, false, done, func(events.LogCursor, bool) error {
 			if err := drain(); err != nil {
 				return err
 			}
 			started = true
 			backoff = time.Second
 			running.update(func(status *WorkspaceStatus) {
+				if status.State == "retrying" || status.State == "unavailable" {
+					fmt.Fprintf(m.output, "docket: workspace %s watching again\n", running.entry.Name)
+				}
 				status.State = "watching"
 				status.LastError = ""
 				status.UpdatedAt = now()
 			})
 			return nil
 		}, func(record events.LogRecord) error {
-			if err := m.publishTaskEvent(running, record); err != nil {
-				return err
-			}
 			running.update(func(status *WorkspaceStatus) {
 				status.LastEvent = record.Event.Time
 				status.UpdatedAt = now()
@@ -430,7 +334,7 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 		if ctx.Err() != nil {
 			continue
 		}
-		running.fail("retrying", err)
+		m.fail(running, "retrying", err)
 		if !wait(ctx, backoff) {
 			return
 		}
@@ -440,14 +344,91 @@ func (m *Manager) runWorkspace(ctx context.Context, running *runtime) {
 	}
 }
 
-func (r *runtime) fail(state string, err error) {
-	r.update(func(status *WorkspaceStatus) {
-		status.State = state
+// OnceResult reports one bounded drain of one workspace.
+type OnceResult struct {
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	EventCount   int    `json:"event_count"`
+	HandlerCount int    `json:"handler_count"`
+	// State is "ok", "failed", or "missing" for a registered project
+	// directory that no longer exists (see OnceOptions.SkipMissing).
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
+}
+
+// OnceOptions configures RunOnce.
+type OnceOptions struct {
+	// SkipMissing reports a registration whose project directory no longer
+	// exists as "missing" instead of failing the run. A registry-wide
+	// heartbeat uses this so one deleted project does not fail every run;
+	// the long-running runner prunes such registrations after prune_after.
+	SkipMissing bool
+	// Registry, when set, is checked for enabled plugins that fail to load
+	// or declare an unlaunched service.command, reported like the runner.
+	Registry *registry.Config
+}
+
+// RunOnce performs one bounded drain of every entry and returns. Failed or
+// unprocessed events stay pending for the next drain; nothing is rolled
+// back. The returned error joins every workspace failure.
+func RunOnce(ctx context.Context, entries []registry.WorkspaceEntry, output io.Writer, options OnceOptions) ([]OnceResult, error) {
+	manager := NewManager(ctx, output)
+	if options.Registry != nil {
+		problems := hostingProblems(options.Registry, entries)
+		names := make([]string, 0, len(problems))
+		for name := range problems {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(manager.output, "docket: plugin %s: %s\n", name, problems[name])
+		}
+	}
+	results := make([]OnceResult, 0, len(entries))
+	var failures []error
+	sorted := append([]registry.WorkspaceEntry(nil), entries...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	for _, entry := range sorted {
+		if options.SkipMissing {
+			if _, err := os.Stat(entry.Path); os.IsNotExist(err) {
+				fmt.Fprintf(manager.output, "docket: workspace %s missing: %s does not exist\n", entry.Name, entry.Path)
+				results = append(results, OnceResult{Name: entry.Name, Path: entry.Path, State: "missing"})
+				continue
+			}
+		}
+		running := &runtime{entry: entry, status: WorkspaceStatus{Name: entry.Name, Path: entry.Path}}
+		err := manager.drainWorkspace(ctx, running)
+		result := OnceResult{Name: entry.Name, Path: entry.Path, EventCount: running.status.EventCount, HandlerCount: running.status.HandlerCount, State: "ok"}
 		if err != nil {
-			status.LastError = err.Error()
+			result.State = "failed"
+			result.Error = err.Error()
+			failures = append(failures, fmt.Errorf("workspace %s: %w", entry.Name, err))
+		}
+		results = append(results, result)
+	}
+	return results, errors.Join(failures...)
+}
+
+// fail records a workspace failure and reports it on the runner output when
+// the state or error changes, so a broken config or plugin manifest that stops
+// hook delivery is visible in the runner log rather than only in Statuses.
+func (m *Manager) fail(running *runtime, state string, err error) {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	changed := false
+	running.update(func(status *WorkspaceStatus) {
+		changed = status.State != state || status.LastError != message
+		status.State = state
+		if message != "" {
+			status.LastError = message
 		}
 		status.UpdatedAt = now()
 	})
+	if changed {
+		fmt.Fprintf(m.output, "docket: workspace %s %s: %s\n", running.entry.Name, state, message)
+	}
 }
 
 func (r *runtime) update(fn func(*WorkspaceStatus)) {

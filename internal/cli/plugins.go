@@ -15,9 +15,15 @@ import (
 )
 
 func newPluginCmd() *cobra.Command {
-	command := &cobra.Command{Use: "plugin", Short: "Install and enable trusted Docket plugins"}
-	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd(), newPluginLogsCmd(),
-		newPluginNewCmd(), newPluginValidateCmd(), newPluginDevCmd())
+	command := &cobra.Command{
+		Use:   "plugin",
+		Short: "Install, enable and configure trusted Docket plugins",
+		Long: `Plugins contribute hooks, statuses, scoped configuration and a CLI command
+to the workspaces that enable them. Docket runs the hooks and CLI; it does not
+serve plugin UI or launch plugin services.`,
+	}
+	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd(),
+		newPluginConfigCmd(), newPluginValidateCmd())
 	return command
 }
 
@@ -305,7 +311,7 @@ func builtinCommand(name string) bool {
 		"__lua-hook": {}, "attach": {}, "attach-file": {}, "comment": {}, "completion": {}, "context": {},
 		"detach": {}, "docs": {}, "edit": {}, "events": {}, "files": {}, "help": {}, "inbox": {}, "init": {}, "label": {},
 		"link": {}, "list": {}, "move": {}, "new": {}, "plugin": {}, "project": {}, "reference": {}, "reindex": {},
-		"guide": {}, "ref": {}, "serve": {}, "service": {}, "session": {}, "show": {}, "skill": {}, "unlink": {}, "wait": {}, "watch": {}, "workspace": {},
+		"guide": {}, "ref": {}, "run": {}, "serve": {}, "service": {}, "session": {}, "show": {}, "skill": {}, "unlink": {}, "wait": {}, "watch": {}, "workspace": {},
 	}[name]
 	return exists
 }

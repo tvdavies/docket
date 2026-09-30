@@ -1,12 +1,14 @@
 # Plugins
 
 Docket plugins are trusted local packages that declare extension points in a
-strict `docket-plugin.yaml` manifest. Installing a plugin is equivalent to
-trusting its handlers, CLI and service with your user account. Plugin browser
-UI is the exception: it runs in sandboxed iframes with only the capabilities it
-declares (see [Plugin UI reference](plugins/ui.md)). There is no marketplace or
-signature verification. To write one, start with
-[Authoring plugins](plugins/authoring.md).
+strict `docket-plugin.yaml` manifest: hooks, statuses, scoped configuration and
+a CLI command. Installing a plugin is equivalent to trusting its hooks and CLI
+with your user account. There is no marketplace or signature verification. To
+write one, start with [Authoring plugins](plugins/authoring.md).
+
+Docket does not serve plugin UI, proxy plugin services or launch plugin
+processes. Manifests written for earlier releases keep loading; see
+[Legacy presentation metadata](#legacy-presentation-metadata).
 
 ## Install and enable
 
@@ -38,6 +40,7 @@ plugins:
 
 ```sh
 docket plugin enable dispatch --set server_root=/home/me/dev/dispatch
+docket plugin config set dispatch server_root=/home/me/dev/dispatch
 docket plugin disable dispatch
 ```
 
@@ -87,27 +90,8 @@ config:
   status:
     agent: {type: string, enum: [planner, implementer]}
 
-service:
-  url: http://127.0.0.1:9000
-  healthz: /healthz
-  auth: none
-  command: [bin/example-server, --port, "9000"]
-  watch: ["server/**", "bin/example-server"]
-
 cli:
   run: bin/docket-example
-
-ui:
-  dir: ui
-  capabilities: [task.read, service.fetch, service.stream]
-  widgets:
-    - {type: example/session, title: Live session, entry: session.html}
-  pages:
-    - {id: sessions, title: Sessions, entry: sessions.html}
-  reference_resolvers:
-    - id: example/session
-      kinds: [session]
-      pattern: "^https?://127\\.0\\.0\\.1:9000/sessions/"
 ```
 
 Unknown manifest fields are errors. Names use lowercase letters, numbers,
@@ -154,68 +138,27 @@ values are overlaid by workspace values; status values remain a per-lane map.
 Secrets are documented by the schema but should be supplied through Docket's
 environment file rather than stored in YAML.
 
-A `string` or `number` field may name a service path in `options_from` instead
-of a fixed `enum`. The settings page fetches it through the plugin proxy
-(`GET /plugins/<name><path>`) and offers the result as a choice list, refreshed
-when the plugin's manifest or service state changes and on **Refresh options**:
+Read and change settings with `docket plugin config`:
 
-```yaml
-config:
-  instance:
-    model:
-      type: string
-      options_from: /options/models   # needs a service; absolute, no query
+```sh
+docket plugin config get example                     # schemas and stored values; --json
+docket plugin config set example --scope instance endpoint=http://127.0.0.1:9000
+docket plugin config set example checkout=/srv/app   # workspace scope (default)
+docket plugin config set example --status review agent=implementer
+docket plugin config set example --scope instance --file settings.json
 ```
 
-The response is a JSON array of values or `{"value": ..., "label": "..."}`
-objects (at most 1000) whose values match the field type. Choices are a
-convenience, not validation: a stored value the service no longer lists stays
-selectable, and when the request fails the page falls back to a text input.
-`options_from` cannot be combined with `enum` or `secret`.
-
-### Service proxy
-
-One optional loopback HTTP service is exposed at `/plugins/<name>/` while the
-plugin is enabled in at least one registered workspace. Docket strips the prefix,
-rewrites outbound `Host`, sets `X-Forwarded-Prefix`, and supports HTTP Upgrade /
-WebSockets. Inbound `X-Docket-*` headers are removed so future board-edge identity
-headers cannot be spoofed. `service.auth` is reserved and must be absent or
-`none` in v1.
-
-Authentication for remote board access remains a board-edge concern; plugin
-services should continue binding loopback and trust only the local proxy.
-
-### Supervised services
-
-Without `service.command`, the plugin runs its service itself (for example as a
-systemd unit) and Docket only proxies it. With `service.command`, `docket serve`
-runs it while the plugin is enabled in at least one registered workspace:
-
-- `command[0]` containing `/` is plugin-relative; otherwise it is looked up on
-  `PATH`. The working directory is the plugin root, and the environment adds
-  `DOCKET_PLUGIN`, `DOCKET_PLUGIN_ROOT`, `DOCKET_PLUGIN_CONFIG` (JSON with the
-  resolved instance `config`), `DOCKET_PLUGIN_SERVICE_URL` and, when
-  `service.url` has a port, `PORT`.
-- The process runs in its own process group. Stopping sends `SIGTERM` to the
-  group and `SIGKILL` five seconds later.
-- A crash restarts it with exponential backoff (1 s doubling to 30 s, reset
-  after ten seconds of uptime).
-- With `service.healthz`, Docket probes `service.url + healthz` every ten
-  seconds; three consecutive failures (connection errors or non-2xx) restart it.
-- `service.watch` globs are plugin-relative; `*` stays within a path segment
-  and `**` spans directories. A matching create, write, rename or delete
-  restarts the process immediately. Dot-directories and `node_modules` are not
-  watched.
-- The process is replaced when the service section, the plugin path or its
-  instance config changes, and stopped when the plugin is disabled everywhere,
-  removed, or the Docket service exits.
-
-Output goes to `${XDG_STATE_HOME:-~/.local/state}/docket/plugins/<name>/service.log`
-(rotated to `.1` at 5 MiB; `DOCKET_STATE_DIR` overrides the base). Read it with
-`docket plugin logs <name> [-f] [-n LINES]`. Each plugin on `GET /api/stream`
-carries a `service` object with `state` (`starting`, `running`, `healthy`,
-`unhealthy`, `backoff`), `pid`, `restarts`, `started_at`, `last_error` and
-`log`.
+`set` merges into one scope: keys you do not name are kept, and a list or map
+replaces the stored value whole. Values are stored literally, so an empty
+string, `0` or `false` is a real value. Each `KEY=VALUE` is parsed as YAML
+(`3` is a number, `'"3"'` a string). The whole candidate is validated first —
+against the schema and, for instance scope, against every workspace that
+enables the plugin — and a rejected update leaves every file unchanged. `get`
+resolves instance defaults but never prints secret fields; workspace and
+status values are shown exactly as stored. `set` echoes only key names.
+Secret fields are never stored: provide them in the environment of whatever
+runs the hooks (`~/.config/docket/environment` for the systemd unit, or the
+environment of `docket run` otherwise).
 
 ### CLI passthrough
 
@@ -227,28 +170,29 @@ injected when available.
 
 ## Hot reload
 
-The service watches each installed plugin's manifest and `ui.dir` with
-fsnotify, and still polls the registry every two seconds as a fallback. What a
-change does depends on what changed:
+The event runner (`docket run`) watches each installed plugin's manifest with
+fsnotify, and polls the registry every two seconds as a fallback. A manifest or
+registry change restarts the affected workspace watchers, which recompose
+their hooks and statuses. Handler identities do not include a generation, so
+cursor checkpoints carry across restarts and events do not replay. A plugin
+handler that first appears through hot reload is seeded at the current log
+end. Edits limited to a manifest's legacy `ui` section cause no restart.
 
-| Change | Effect |
+## Legacy presentation metadata
+
+Earlier releases also served plugin UI in a web board. Those manifest sections
+still parse and are still validated, so existing manifests keep loading
+unchanged, but Docket no longer acts on them:
+
+| Field | Now |
 |---|---|
-| Files under `ui.dir` | New `ui_base`; open frames swap in place and keep their saved state |
-| Only the manifest's `ui` section | Board config is republished; runtimes keep running |
-| Anything else in the manifest, or the registry entry | Workspace runtimes restart and recompose contributions |
+| `ui` (`dir`, `capabilities`, `widgets`, `panels`, `pages`, `reference_resolvers`, `cards`) | Parsed and validated; nothing is served. The `ui.dir` directory need not exist. |
+| `service.url`, `healthz`, `auth` | Parsed and validated; nothing is proxied or probed. |
+| `service.command`, `service.watch` | Parsed and validated; **not launched**. The runner and `plugin validate` warn that it must run under systemd, a container or another supervisor. |
+| `config.*.options_from` | Parsed and validated; options are not fetched. |
 
-None of these restart the Docket service, and the proxy/API see the change
-immediately. A supervised plugin service restarts only for its own `service`
-section or `service.watch` matches (see [Supervised services](#supervised-services)). Handler identities do not include a generation, so cursor
-checkpoints carry across runtime restarts and events do not replay. Plugin UI
-is never part of the Docket build.
-
-`GET /api/stream` is an instance-level SSE stream. Each `plugins` event carries
-the full installed set — `name`, `version`, `manifest_hash`, `ui_hash`,
-`ui_base`, `service` for supervised services and, for a manifest that fails to
-load, `error` — first on connect and
-again after every change. The settings page uses it to reload plugin schemas.
-
-See [Plugin UI reference](plugins/ui.md) for frames and the bridge, and
-[Plugin widgets](plugin-ui.md) for the widget ledger, resolvers and
-generated settings.
+Widget records that plugins published to the event log
+(`task.widget_created`, `task.widget_finalised`) remain readable history: task
+bundles keep their summaries and references in `widgets` and the activity
+stream. Nothing produces new ones; record new outcomes as comments, references
+or attachments.

@@ -1,6 +1,12 @@
 // Package plugin defines Docket's trusted local plugin manifest and validates
 // its declarative extension points. Installation and workspace composition are
 // kept in higher-level packages so this package remains dependency-light.
+//
+// Docket runs a plugin's hooks, statuses, configuration and CLI. The service
+// and ui sections, and config options_from, are legacy presentation metadata:
+// they are still parsed and validated so existing manifests keep loading, but
+// Docket no longer serves UI, proxies services, fetches options or launches
+// service.command.
 package plugin
 
 import (
@@ -37,10 +43,11 @@ type Manifest struct {
 	Handlers    map[string]Handler `yaml:"handlers,omitempty" json:"handlers,omitempty"`
 	Statuses    []Status           `yaml:"statuses,omitempty" json:"statuses,omitempty"`
 	Config      ConfigSchemas      `yaml:"config,omitempty" json:"config,omitempty"`
-	Service     *Service           `yaml:"service,omitempty" json:"service,omitempty"`
 	CLI         *CLI               `yaml:"cli,omitempty" json:"cli,omitempty"`
-	UI          UI                 `yaml:"ui,omitempty" json:"ui,omitempty"`
-	Root        string             `yaml:"-" json:"root"`
+	// Service and UI are legacy metadata; see the package documentation.
+	Service *Service `yaml:"service,omitempty" json:"service,omitempty"`
+	UI      UI       `yaml:"ui,omitempty" json:"ui,omitempty"`
+	Root    string   `yaml:"-" json:"root"`
 }
 
 type Requirements struct {
@@ -74,8 +81,8 @@ type ConfigField struct {
 	Enum        []any  `yaml:"enum,omitempty" json:"enum,omitempty"`
 	Secret      bool   `yaml:"secret,omitempty" json:"secret,omitempty"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	// OptionsFrom is a service path returning the field's choices at runtime,
-	// for option lists (such as installed models) a static enum cannot express.
+	// OptionsFrom is legacy metadata naming a service path that listed the
+	// field's choices for the retired settings UI. It is parsed, not fetched.
 	OptionsFrom string `yaml:"options_from,omitempty" json:"options_from,omitempty"`
 }
 
@@ -83,24 +90,33 @@ type Service struct {
 	URL     string `yaml:"url" json:"url"`
 	Healthz string `yaml:"healthz,omitempty" json:"healthz,omitempty"`
 	Auth    string `yaml:"auth,omitempty" json:"auth,omitempty"`
-	// Command, when set, is run and supervised by the Docket service while the
-	// plugin is enabled. The first element is a plugin-relative path when it
-	// contains a slash, otherwise a program on PATH.
+	// Command was run and supervised by earlier Docket services. It is still
+	// validated, but Docket no longer launches it; see HostingProblem.
 	Command []string `yaml:"command,omitempty" json:"command,omitempty"`
-	// Watch lists plugin-relative globs ("**" spans directories); a matching
-	// file change restarts Command.
+	// Watch lists plugin-relative globs that restarted Command.
 	Watch []string `yaml:"watch,omitempty" json:"watch,omitempty"`
+}
+
+// HostingProblem describes a legacy service.command that Docket no longer
+// launches, or "" when the plugin needs no hosting. The runner reports it so
+// an operator can move the process to an OS or container supervisor. It never
+// prevents the plugin's hooks, CLI or configuration from loading.
+func (m *Manifest) HostingProblem() string {
+	if m.Service == nil || len(m.Service.Command) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("service.command %q is no longer launched by Docket; run it under systemd, a container or another supervisor", strings.Join(m.Service.Command, " "))
 }
 
 type CLI struct {
 	Run string `yaml:"run" json:"run"`
 }
 
-// UI declares a plugin's browser contributions. Plugin code never runs in the
-// Docket page: Docket renders declarative widget presentations itself and
-// loads entries from Dir into opaque-origin sandboxed iframes.
+// UI is legacy browser metadata from the retired board. It is parsed and
+// validated for compatibility; Docket serves none of it. Widget declarations
+// still identify the plugin's historical widget records.
 type UI struct {
-	// Dir holds static UI assets served at /plugin-ui/<name>/<hash>/.
+	// Dir held static UI assets. Its contents are no longer read.
 	Dir                string              `yaml:"dir,omitempty" json:"dir,omitempty"`
 	Capabilities       []string            `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 	Widgets            []Widget            `yaml:"widgets,omitempty" json:"widgets,omitempty"`
@@ -559,33 +575,6 @@ func validateWatchPattern(pattern string) error {
 	return nil
 }
 
-// MatchWatch reports whether a plugin-relative slash path matches a
-// service.watch glob. "**" matches zero or more whole segments.
-func MatchWatch(pattern, name string) bool {
-	return matchSegments(strings.Split(pattern, "/"), strings.Split(name, "/"))
-}
-
-func matchSegments(pattern, name []string) bool {
-	for len(pattern) > 0 {
-		if pattern[0] == "**" {
-			for skip := 0; skip <= len(name); skip++ {
-				if matchSegments(pattern[1:], name[skip:]) {
-					return true
-				}
-			}
-			return false
-		}
-		if len(name) == 0 {
-			return false
-		}
-		if ok, _ := path.Match(pattern[0], name[0]); !ok {
-			return false
-		}
-		pattern, name = pattern[1:], name[1:]
-	}
-	return len(name) == 0
-}
-
 func validateRelativePath(field, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s is required", field)
@@ -654,7 +643,7 @@ func resolveScope(scope string, schema map[string]ConfigField, input map[string]
 	for key, field := range schema {
 		value, exists := input[key]
 		if field.Secret && exists {
-			return nil, fmt.Errorf("config.%s.%s is secret and must be supplied through the service environment", scope, key)
+			return nil, fmt.Errorf("config.%s.%s is secret and must be supplied through the hook environment", scope, key)
 		}
 		if !exists && field.Default != nil {
 			value, exists = cloneValue(field.Default), true

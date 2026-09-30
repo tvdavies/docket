@@ -17,16 +17,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultListen = "127.0.0.1:7463"
-
 // DefaultPruneAfter is how long a registered workspace directory must be
-// continuously missing before the service unregisters it.
+// continuously missing before the event runner unregisters it.
 const DefaultPruneAfter = time.Hour
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
-// Config is machine-local service configuration.
+// Config is the machine-local registry.
 type Config struct {
+	// Listen was the web board's address. It is ignored, but an existing
+	// value is preserved so an older binary used for rollback still finds it.
 	Listen     string           `yaml:"listen,omitempty"`
 	PruneAfter string           `yaml:"prune_after,omitempty"`
 	Workspaces []WorkspaceEntry `yaml:"workspaces,omitempty"`
@@ -99,7 +99,7 @@ func Load() (*Config, error) {
 }
 
 func loadPath(path string) (*Config, error) {
-	config := &Config{Listen: DefaultListen}
+	config := &Config{}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -109,9 +109,6 @@ func loadPath(path string) (*Config, error) {
 	}
 	if err := yaml.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("parse service config: %w", err)
-	}
-	if config.Listen == "" {
-		config.Listen = DefaultListen
 	}
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("validate service config: %w", err)

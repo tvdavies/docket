@@ -1,14 +1,8 @@
 package service_test
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,55 +183,6 @@ func TestManagerReloadsHandlerConfigWithoutNewEvent(t *testing.T) {
 	})
 }
 
-func TestWorkspaceLeaseBlocksPathReplacementUntilRequestCompletes(t *testing.T) {
-	first := t.TempDir()
-	second := t.TempDir()
-	if _, err := workspace.Init(first); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := workspace.Init(second); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: first}})
-
-	leased, release, err := manager.LeaseWorkspace("test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if leased.Root != filepath.Join(first, workspace.DirName) {
-		t.Fatalf("leased root = %s", leased.Root)
-	}
-	replaced := make(chan struct{})
-	go func() {
-		manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: second}})
-		close(replaced)
-	}()
-	select {
-	case <-replaced:
-		t.Fatal("workspace path was replaced while request lease was active")
-	case <-time.After(50 * time.Millisecond):
-	}
-	release()
-	select {
-	case <-replaced:
-	case <-time.After(time.Second):
-		t.Fatal("workspace replacement did not continue after lease release")
-	}
-
-	leased, release, err = manager.LeaseWorkspace("test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	if leased.Root != filepath.Join(second, workspace.DirName) {
-		t.Fatalf("replacement root = %s", leased.Root)
-	}
-}
-
 func TestManagerReconcilesWorkspaceSet(t *testing.T) {
 	root, _, _ := createHandledWorkspace(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -248,358 +193,6 @@ func TestManagerReconcilesWorkspaceSet(t *testing.T) {
 	waitFor(t, func() bool { return len(manager.Statuses()) == 1 })
 	manager.SetWorkspaces(nil)
 	waitFor(t, func() bool { return len(manager.Statuses()) == 0 })
-}
-
-func TestPluginProxyRewritesHostPrefixAndStripsReservedHeaders(t *testing.T) {
-	var targetHost string
-	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Host != targetHost {
-			http.Error(writer, "bad host: "+request.Host, http.StatusForbidden)
-			return
-		}
-		if request.Header.Get("X-Docket-User") != "" {
-			http.Error(writer, "spoofed docket header", http.StatusForbidden)
-			return
-		}
-		if request.Header.Get("X-Forwarded-Prefix") != "/plugins/example" {
-			http.Error(writer, "missing prefix", http.StatusBadRequest)
-			return
-		}
-		writer.Write([]byte("proxied:" + request.URL.Path))
-	}))
-	defer target.Close()
-	targetHost = strings.TrimPrefix(target.URL, "http://")
-	project, pluginRoot, configPath := pluginServiceFixture(t, target.URL)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
-	server := httptest.NewServer(service.Handler(manager))
-	defer server.Close()
-	request, _ := http.NewRequest(http.MethodGet, server.URL+"/plugins/example/sessions/one", nil)
-	request.Header.Set("X-Docket-User", "attacker")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(response.Body)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK || string(body) != "proxied:/sessions/one" {
-		t.Fatalf("proxy = %d %q", response.StatusCode, body)
-	}
-
-	target.Close()
-	response, err = http.Get(server.URL + "/plugins/example/healthz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	var failure map[string]string
-	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusBadGateway || failure["plugin"] != "example" || failure["target"] != target.URL {
-		t.Fatalf("dead target response = %d %#v", response.StatusCode, failure)
-	}
-	_ = pluginRoot
-	_ = configPath
-}
-
-func TestPluginProxyRejectsCrossOriginRequests(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.WriteHeader(http.StatusNoContent)
-	}))
-	defer target.Close()
-	project, _, _ := pluginServiceFixture(t, target.URL)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
-	server := httptest.NewServer(service.Handler(manager))
-	defer server.Close()
-
-	request, _ := http.NewRequest(http.MethodPost, server.URL+"/plugins/example/action", strings.NewReader("value=1"))
-	request.Header.Set("Origin", "http://evil.example")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-origin proxy status = %d", response.StatusCode)
-	}
-
-	request, _ = http.NewRequest(http.MethodGet, server.URL+"/plugins/example/socket", nil)
-	request.Header.Set("Origin", "http://evil.example")
-	request.Header.Set("Connection", "Upgrade")
-	request.Header.Set("Upgrade", "websocket")
-	response, err = http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-origin websocket status = %d", response.StatusCode)
-	}
-}
-
-func TestPluginProxyPreservesServiceBasePath(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Write([]byte(request.URL.Path))
-	}))
-	defer target.Close()
-	project, _, _ := pluginServiceFixture(t, target.URL+"/api")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
-	server := httptest.NewServer(service.Handler(manager))
-	defer server.Close()
-
-	response, err := http.Get(server.URL + "/plugins/example/healthz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(response.Body)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK || string(body) != "/api/healthz" {
-		t.Fatalf("base-path proxy = %d %q", response.StatusCode, body)
-	}
-}
-
-func TestPluginProxyPassesWebSocketUpgrades(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
-			http.Error(writer, "upgrade required", http.StatusBadRequest)
-			return
-		}
-		hijacker, ok := writer.(http.Hijacker)
-		if !ok {
-			http.Error(writer, "hijacking unavailable", http.StatusInternalServerError)
-			return
-		}
-		connection, buffered, err := hijacker.Hijack()
-		if err != nil {
-			return
-		}
-		defer connection.Close()
-		_, _ = buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
-		_ = buffered.Flush()
-		line, _ := buffered.ReadString('\n')
-		_, _ = buffered.WriteString("echo:" + line)
-		_ = buffered.Flush()
-	}))
-	defer target.Close()
-	project, _, _ := pluginServiceFixture(t, target.URL)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
-	server := httptest.NewServer(service.Handler(manager))
-	defer server.Close()
-
-	address := strings.TrimPrefix(server.URL, "http://")
-	connection, err := net.Dial("tcp", address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer connection.Close()
-	_, _ = fmt.Fprintf(connection, "GET /plugins/example/socket HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n", address)
-	reader := bufio.NewReader(connection)
-	status, err := reader.ReadString('\n')
-	if err != nil || !strings.Contains(status, "101") {
-		t.Fatalf("upgrade status = %q, %v", status, err)
-	}
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		if line == "\r\n" {
-			break
-		}
-	}
-	_, _ = connection.Write([]byte("ping\n"))
-	echo, err := reader.ReadString('\n')
-	if err != nil || echo != "echo:ping\n" {
-		t.Fatalf("websocket tunnel = %q, %v", echo, err)
-	}
-}
-
-func TestPluginConfigAPIValidatesAndWritesEachScope(t *testing.T) {
-	project := t.TempDir()
-	ws, err := workspace.Init(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pluginRoot := t.TempDir()
-	manifest := `
-name: example
-version: 1.0.0
-config:
-  instance:
-    retries: {type: number}
-  workspace:
-    enabled: {type: boolean}
-  status:
-    agent: {type: string}
-`
-	if err := os.WriteFile(filepath.Join(pluginRoot, plugin.ManifestFile), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(t.TempDir(), "registry.yaml")
-	t.Setenv("DOCKET_CONFIG", configPath)
-	writeRegistryFixture(t, configPath, project, pluginRoot)
-	appendPluginUse(t, ws)
-	invalidProject := t.TempDir()
-	invalidWS, err := workspace.Init(invalidProject)
-	if err != nil {
-		t.Fatal(err)
-	}
-	invalidFile, err := os.OpenFile(filepath.Join(invalidWS.Root, "config.yaml"), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := invalidFile.WriteString("handlers:\n  broken: {on: [task.created]}\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := invalidFile.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.Update(func(config *registry.Config) error {
-		config.Workspaces = append(config.Workspaces, registry.WorkspaceEntry{Name: "invalid-unrelated", Path: invalidProject})
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
-	server := httptest.NewServer(service.Handler(manager))
-	defer server.Close()
-
-	patch := func(path, body string) *http.Response {
-		request, _ := http.NewRequest(http.MethodPatch, server.URL+path, strings.NewReader(body))
-		request.Header.Set("Content-Type", "application/json")
-		response, err := http.DefaultClient.Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return response
-	}
-	response := patch("/api/plugins/example/config", `{"values":{"retries":"many"}}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("invalid instance config status = %d", response.StatusCode)
-	}
-	response = patch("/api/plugins/example/config", `{"values":{"retries":3}}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("instance config status = %d", response.StatusCode)
-	}
-	response = patch("/api/workspaces/test/plugins/example/config", `{"values":{"enabled":true}}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("workspace config status = %d", response.StatusCode)
-	}
-	response = patch("/api/workspaces/test/plugins/example/statuses/backlog", `{"values":{"agent":"worker"}}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("status config status = %d", response.StatusCode)
-	}
-	config, err := registry.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if config.Plugins[0].Config["retries"] != 3 {
-		t.Fatalf("instance values = %#v", config.Plugins[0].Config)
-	}
-	opened, err := workspace.OpenRoot(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	use := opened.DeclaredConfig.Plugins.Values["example"]
-	if use.Config["enabled"] != true || use.Statuses["backlog"]["agent"] != "worker" {
-		t.Fatalf("workspace values = %#v", use)
-	}
-}
-
-func TestPluginConfigAPIConcurrentInstancePatchesPreserveDisjointKeys(t *testing.T) {
-	project := t.TempDir()
-	ws, err := workspace.Init(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pluginRoot := t.TempDir()
-	var manifest strings.Builder
-	manifest.WriteString("name: example\nversion: 1.0.0\nconfig:\n  instance:\n")
-	const count = 16
-	for index := 0; index < count; index++ {
-		fmt.Fprintf(&manifest, "    key%d: {type: number}\n", index)
-	}
-	if err := os.WriteFile(filepath.Join(pluginRoot, plugin.ManifestFile), []byte(manifest.String()), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(t.TempDir(), "registry.yaml")
-	t.Setenv("DOCKET_CONFIG", configPath)
-	writeRegistryFixture(t, configPath, project, pluginRoot)
-	appendPluginUse(t, ws)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "test", Path: project}})
-	server := httptest.NewServer(service.Handler(manager))
-	defer server.Close()
-
-	start := make(chan struct{})
-	var group sync.WaitGroup
-	errors := make(chan error, count)
-	for index := 0; index < count; index++ {
-		index := index
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			<-start
-			body := fmt.Sprintf(`{"values":{"key%d":%d}}`, index, index)
-			request, _ := http.NewRequest(http.MethodPatch, server.URL+"/api/plugins/example/config", strings.NewReader(body))
-			request.Header.Set("Content-Type", "application/json")
-			response, err := http.DefaultClient.Do(request)
-			if err != nil {
-				errors <- err
-				return
-			}
-			defer response.Body.Close()
-			if response.StatusCode != http.StatusOK {
-				errors <- fmt.Errorf("key%d status = %d", index, response.StatusCode)
-			}
-		}()
-	}
-	close(start)
-	group.Wait()
-	close(errors)
-	for err := range errors {
-		t.Error(err)
-	}
-	config, err := registry.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(config.Plugins) != 1 || len(config.Plugins[0].Config) != count {
-		t.Fatalf("concurrent instance values = %#v", config.Plugins)
-	}
-	for index := 0; index < count; index++ {
-		if config.Plugins[0].Config[fmt.Sprintf("key%d", index)] != index {
-			t.Fatalf("key%d missing from %#v", index, config.Plugins[0].Config)
-		}
-	}
 }
 
 func TestHotReloadSeedsNewPluginHandlerWithoutHistoricalReplay(t *testing.T) {
@@ -724,49 +317,10 @@ func TestPluginManifestHotReloadPreservesCursorAndRecomposesHandler(t *testing.T
 	}
 }
 
-func TestHTTPStatusSurface(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager := service.NewManager(ctx, io.Discard)
-	defer manager.Stop()
-	manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: "missing", Path: filepath.Join(t.TempDir(), "gone")}})
-	waitFor(t, func() bool {
-		statuses := manager.Statuses()
-		return len(statuses) == 1 && statuses[0].State == "unavailable"
-	})
-
-	server := httptest.NewServer(service.Handler(manager))
-	defer server.Close()
-	response, err := http.Get(server.URL + "/api/workspaces")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	var statuses []service.WorkspaceStatus
-	if err := json.NewDecoder(response.Body).Decode(&statuses); err != nil {
-		t.Fatal(err)
-	}
-	if len(statuses) != 1 || statuses[0].Name != "missing" || statuses[0].State != "unavailable" {
-		t.Fatalf("unexpected API response: %#v", statuses)
-	}
-}
-
-func TestValidateListenRequiresExplicitRemoteOptIn(t *testing.T) {
-	if err := service.ValidateListen("127.0.0.1:7463", false); err != nil {
-		t.Fatalf("loopback refused: %v", err)
-	}
-	if err := service.ValidateListen("0.0.0.0:7463", false); err == nil {
-		t.Fatal("expected non-loopback address to be refused")
-	}
-	if err := service.ValidateListen("0.0.0.0:7463", true); err != nil {
-		t.Fatalf("explicit remote bind refused: %v", err)
-	}
-}
-
 func TestSystemdUnitUsesOneMultiWorkspaceService(t *testing.T) {
 	unit := service.BuildSystemdUnit("/home/tom/bin/docket", "/home/tom/.config/docket/config.yaml", "/usr/bin:/bin")
 	for _, want := range []string{
-		`ExecStart="/home/tom/bin/docket" serve --all`,
+		`ExecStart="/home/tom/bin/docket" run --all`,
 		`Environment="DOCKET_CONFIG=/home/tom/.config/docket/config.yaml"`,
 		`EnvironmentFile=-%h/.config/docket/environment`,
 		`WantedBy=default.target`,
@@ -791,22 +345,6 @@ func waitFor(t *testing.T, condition func() bool) {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
-}
-
-func pluginServiceFixture(t *testing.T, target string) (string, string, string) {
-	t.Helper()
-	project := t.TempDir()
-	ws, err := workspace.Init(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pluginRoot := t.TempDir()
-	writePluginManifest(t, pluginRoot, "task.created", "service: {url: "+target+", healthz: /healthz}\n")
-	configPath := filepath.Join(t.TempDir(), "registry.yaml")
-	t.Setenv("DOCKET_CONFIG", configPath)
-	writeRegistryFixture(t, configPath, project, pluginRoot)
-	appendPluginUse(t, ws)
-	return project, pluginRoot, configPath
 }
 
 func writePluginManifest(t *testing.T, root, eventType, extra string) {
@@ -865,4 +403,236 @@ func TestFollowRegistryPrunesLongMissingWorkspaces(t *testing.T) {
 		statuses := manager.Statuses()
 		return len(statuses) == 1 && statuses[0].Name == "alive"
 	})
+}
+
+func TestRunOnceDrainsBacklogAndLeavesFailuresPending(t *testing.T) {
+	root, ws, output := createHandledWorkspace(t)
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	entries := []registry.WorkspaceEntry{{Name: "test", Path: root}}
+	results, err := service.RunOnce(context.Background(), entries, io.Discard, service.OnceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].EventCount != 1 || results[0].HandlerCount != 1 || results[0].Error != "" {
+		t.Fatalf("results = %#v", results)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil || !strings.Contains(string(data), `"task":"TASK-0001"`) {
+		t.Fatalf("handler output = %q, %v", data, err)
+	}
+	if handlers.Cursor(ws, "record") != 1 {
+		t.Fatal("cursor did not advance after successful delivery")
+	}
+
+	// A failing handler keeps its batch pending and the drain reports it.
+	if err := os.WriteFile(filepath.Join(root, "hooks", "record"), []byte("#!/bin/sh\ncat >/dev/null\nexit 3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0002"}); err != nil {
+		t.Fatal(err)
+	}
+	results, err = service.RunOnce(context.Background(), entries, io.Discard, service.OnceOptions{})
+	if err == nil || len(results) != 1 || results[0].Error == "" {
+		t.Fatalf("failing drain: results = %#v err = %v", results, err)
+	}
+	if handlers.Cursor(ws, "record") != 1 {
+		t.Fatal("failed batch was acknowledged")
+	}
+
+	// Recovery on a later run delivers the pending event exactly once more.
+	if err := os.WriteFile(filepath.Join(root, "hooks", "record"), []byte("#!/bin/sh\ncat >> "+shellQuote(output)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RunOnce(context.Background(), entries, io.Discard, service.OnceOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(output)
+	if strings.Count(string(data), `"task":"TASK-0002"`) != 1 || handlers.Cursor(ws, "record") != 2 {
+		t.Fatalf("recovered delivery = %q cursor=%d", data, handlers.Cursor(ws, "record"))
+	}
+}
+
+func TestRunOnceReportsUnavailableWorkspaceAndContinues(t *testing.T) {
+	root, ws, output := createHandledWorkspace(t)
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	entries := []registry.WorkspaceEntry{
+		{Name: "a-missing", Path: filepath.Join(t.TempDir(), "gone")},
+		{Name: "b-present", Path: root},
+	}
+	results, err := service.RunOnce(context.Background(), entries, io.Discard, service.OnceOptions{})
+	if err == nil || !strings.Contains(err.Error(), "a-missing") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(results) != 2 || results[0].Error == "" || results[1].Error != "" {
+		t.Fatalf("results = %#v", results)
+	}
+	if data, _ := os.ReadFile(output); !strings.Contains(string(data), "TASK-0001") {
+		t.Fatal("unavailable workspace prevented delivery elsewhere")
+	}
+}
+
+func TestRunOnceCancellationStopsRunningHandler(t *testing.T) {
+	root, ws, _ := createHandledWorkspace(t)
+	startedFile := filepath.Join(root, "handler-started")
+	if err := os.WriteFile(filepath.Join(root, "hooks", "record"), []byte("#!/bin/sh\ntouch "+shellQuote(startedFile)+"\nsleep 10\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		waitFor(t, func() bool { _, err := os.Stat(startedFile); return err == nil })
+		cancel()
+	}()
+	started := time.Now()
+	_, err := service.RunOnce(ctx, []registry.WorkspaceEntry{{Name: "test", Path: root}}, io.Discard, service.OnceOptions{})
+	if err == nil {
+		t.Fatal("cancelled drain reported success")
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("cancelled drain took %s", elapsed)
+	}
+	if handlers.Cursor(ws, "record") != 0 {
+		t.Fatal("cancelled delivery was acknowledged")
+	}
+}
+
+func TestFollowRegistryWarnsAboutUnhostedServiceCommand(t *testing.T) {
+	project := t.TempDir()
+	ws, err := workspace.Init(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot := t.TempDir()
+	output := filepath.Join(project, "plugin-events.jsonl")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "hooks", "record"), []byte("#!/bin/sh\ncat >> "+shellQuote(output)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A legacy manifest that expected Docket to launch its service process.
+	writePluginManifest(t, pluginRoot, "task.created", "service: {url: 'http://127.0.0.1:9', command: [bin/serve]}\n")
+	configPath := filepath.Join(t.TempDir(), "registry.yaml")
+	t.Setenv("DOCKET_CONFIG", configPath)
+	writeRegistryFixture(t, configPath, project, pluginRoot)
+	appendPluginUse(t, ws)
+
+	var logs lockedBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := service.NewManager(ctx, &logs)
+	defer manager.Stop()
+	go manager.FollowRegistry(ctx, 20*time.Millisecond)
+	waitFor(t, func() bool { return len(manager.Statuses()) == 1 && manager.Statuses()[0].State == "watching" })
+	// The hosting requirement is reported, and hooks still run.
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		data, _ := os.ReadFile(output)
+		return strings.Contains(string(data), "TASK-0001")
+	})
+	if got := logs.String(); !strings.Contains(got, "plugin example: service.command") || !strings.Contains(got, "no longer launched") {
+		t.Fatalf("runner log = %q", got)
+	}
+}
+
+type lockedBuffer struct {
+	mu   sync.Mutex
+	data strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.String()
+}
+
+func TestRunOnceSkipMissingReportsWithoutFailingAndWarnsAboutHosting(t *testing.T) {
+	root, ws, output := createHandledWorkspace(t)
+	if err := events.Append(ws, events.Event{Type: events.TaskCreated, Task: "TASK-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot := t.TempDir()
+	writePluginManifest(t, pluginRoot, "task.moved", "service: {url: 'http://127.0.0.1:9', command: [bin/serve]}\n")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "hooks", "record"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "registry.yaml")
+	t.Setenv("DOCKET_CONFIG", configPath)
+	writeRegistryFixture(t, configPath, root, pluginRoot)
+	appendPluginUse(t, ws)
+	config, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []registry.WorkspaceEntry{{Name: "gone", Path: filepath.Join(t.TempDir(), "gone")}, {Name: "test", Path: root}}
+	var logs lockedBuffer
+	results, err := service.RunOnce(context.Background(), entries, &logs, service.OnceOptions{SkipMissing: true, Registry: config})
+	if err != nil {
+		t.Fatalf("missing registration failed the run: %v", err)
+	}
+	if len(results) != 2 || results[0].State != "missing" || results[1].State != "ok" {
+		t.Fatalf("results = %#v", results)
+	}
+	if data, _ := os.ReadFile(output); !strings.Contains(string(data), "TASK-0001") {
+		t.Fatal("present workspace was not drained")
+	}
+	got := logs.String()
+	if !strings.Contains(got, "workspace gone missing") || !strings.Contains(got, "plugin example: service.command") {
+		t.Fatalf("runner log = %q", got)
+	}
+}
+
+func TestRunnerLogsBrokenPluginManifestThatStopsHooks(t *testing.T) {
+	project := t.TempDir()
+	ws, err := workspace.Init(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "hooks", "record"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePluginManifest(t, pluginRoot, "task.created", "")
+	configPath := filepath.Join(t.TempDir(), "registry.yaml")
+	t.Setenv("DOCKET_CONFIG", configPath)
+	writeRegistryFixture(t, configPath, project, pluginRoot)
+	appendPluginUse(t, ws)
+
+	var logs lockedBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := service.NewManager(ctx, &logs)
+	defer manager.Stop()
+	go manager.FollowRegistry(ctx, 20*time.Millisecond)
+	waitFor(t, func() bool { return len(manager.Statuses()) == 1 && manager.Statuses()[0].State == "watching" })
+
+	writePluginManifest(t, pluginRoot, "task.created", "surprise: true\n")
+	waitFor(t, func() bool {
+		got := logs.String()
+		return strings.Contains(got, "plugin example:") && strings.Contains(got, "workspace test unavailable")
+	})
+	writePluginManifest(t, pluginRoot, "task.created", "")
+	// Fixing the manifest changes the plugin generation, so the workspace
+	// restarts and resumes watching.
+	waitFor(t, func() bool { return len(manager.Statuses()) == 1 && manager.Statuses()[0].State == "watching" })
 }

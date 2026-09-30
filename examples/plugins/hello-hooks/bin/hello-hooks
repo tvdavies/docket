@@ -1,0 +1,5 @@
+#!/bin/sh
+# Plugin CLI passthrough: `docket hello-hooks ARGS...` runs this script with
+# DOCKET_HOME, DOCKET_PLUGIN and DOCKET_PLUGIN_ROOT set.
+set -eu
+echo "hello-hooks ${DOCKET_PLUGIN:-?} in ${DOCKET_HOME:-?}: $*"

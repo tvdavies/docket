@@ -16,9 +16,6 @@ func TestExamplePluginsValidate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
-		if hash, err := manifest.UIHash(); manifest.UIDir() != "" && (err != nil || hash == "") {
-			t.Fatalf("%s: ui hash %q: %v", path, hash, err)
-		}
 		if problems := manifest.Problems(); len(problems) > 0 {
 			t.Fatalf("%s: %v", path, problems)
 		}

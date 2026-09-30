@@ -13,64 +13,140 @@ import (
 	docketservice "github.com/tvdavies/docket/internal/service"
 )
 
-func newServeCmd() *cobra.Command {
-	var all, allowRemote bool
-	var listen string
+func newRunCmd() *cobra.Command {
+	var all, once bool
 	cmd := &cobra.Command{
-		Use:   "serve",
-		Short: "Watch handlers and serve the local Docket Kanban board",
-		Long: `serve runs one foreground Docket service. By default it serves the current
-workspace. With --all it follows the machine-local workspace registry and
-starts or stops workspace runtimes as registrations change. This is the
-foreground/debugging form; use "docket service" to manage the background systemd
-user service.`,
-		Example: `  docket serve            # current workspace, foreground
-  docket serve --all      # all registered workspaces, foreground
-  docket serve --all --listen 127.0.0.1:7463`,
+		Use:   "run",
+		Short: "Run the headless event runner: watch workspaces and deliver hooks",
+		Long: `run watches workspaces and drains every configured handler, including
+"delivery: service" hooks that mutating commands leave for the runner. It
+opens no network listener.
+
+By default it runs in the foreground for the current workspace until
+interrupted. With --all it follows the machine-local workspace registry,
+starting and stopping workspace watchers as registrations change, and
+reloads plugin manifests and config.yaml hook changes as they happen.
+
+--once performs one bounded drain of pending events and exits, for a
+heartbeat, cron job or scheduler. Events that fail or cannot be processed stay
+pending for the next drain; the originating task changes are never rolled
+back. The exit status is non-zero if any handler failed. With --all, a
+registered workspace whose directory no longer exists is reported as
+"missing" and does not fail the run; remove it with "docket workspace
+remove", or let a long-running "docket run --all" prune it.
+
+"docket service" installs this as a systemd user unit running "run --all".`,
+		Example: `  docket run                # current workspace, foreground
+  docket run --all          # all registered workspaces, foreground
+  docket run --once --all   # deliver pending hook events once and exit`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
+			return runEventRunner(cmd, all, once)
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "run every workspace in the machine-local registry")
+	cmd.Flags().BoolVar(&once, "once", false, "drain pending events once and exit")
+	return cmd
+}
 
-			config, err := registry.Load()
+// newServeCmd keeps "serve" working for existing unit files and scripts for
+// one transition. It runs the same headless runner; the board, API and
+// listen flags are gone.
+func newServeCmd() *cobra.Command {
+	var all bool
+	var listen string
+	var allowRemote bool
+	cmd := &cobra.Command{
+		Use:        "serve",
+		Short:      "Deprecated alias for \"docket run\" (no web board or HTTP API)",
+		Deprecated: "use \"docket run\"; Docket no longer serves a web board or HTTP API",
+		Args:       cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if listen != "" || allowRemote {
+				return fmt.Errorf("--listen and --allow-remote are no longer supported: Docket no longer serves a web board or HTTP API; run \"docket run%s\" for hook delivery", map[bool]string{true: " --all"}[all])
+			}
+			return runEventRunner(cmd, all, false)
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "run every workspace in the machine-local registry")
+	cmd.Flags().StringVar(&listen, "listen", "", "removed; rejected with an explanation")
+	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, "removed; rejected with an explanation")
+	_ = cmd.Flags().MarkHidden("listen")
+	_ = cmd.Flags().MarkHidden("allow-remote")
+	return cmd
+}
+
+func runEventRunner(cmd *cobra.Command, all, once bool) error {
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var entries []registry.WorkspaceEntry
+	var config *registry.Config
+	if all {
+		loaded, err := registry.Load()
+		if err != nil {
+			return err
+		}
+		config = loaded
+		entries = config.Workspaces
+	} else {
+		ws, err := openWS()
+		if err != nil {
+			return err
+		}
+		root := filepath.Dir(ws.Root)
+		entries = []registry.WorkspaceEntry{{Name: filepath.Base(root), Path: root}}
+	}
+
+	if once {
+		if config == nil {
+			loaded, err := registry.Load()
 			if err != nil {
 				return err
 			}
-			if listen == "" {
-				listen = config.Listen
+			config = loaded
+		}
+		results, err := docketservice.RunOnce(ctx, entries, os.Stderr, docketservice.OnceOptions{SkipMissing: all, Registry: config})
+		if flagJSON {
+			if printErr := printJSON(results); printErr != nil {
+				return printErr
 			}
-			if err := docketservice.ValidateListen(listen, allowRemote); err != nil {
-				return err
+		} else {
+			for _, result := range results {
+				fmt.Printf("%s\t%s\t%d events\t%d handlers\n", result.Name, result.State, result.EventCount, result.HandlerCount)
 			}
-			manager := docketservice.NewManager(ctx, os.Stderr)
-			defer manager.Stop()
-			if all {
-				go manager.FollowRegistry(ctx, 2*time.Second)
-			} else {
-				ws, err := openWS()
-				if err != nil {
-					return err
-				}
-				root := filepath.Dir(ws.Root)
-				manager.SetWorkspaces([]registry.WorkspaceEntry{{Name: filepath.Base(root), Path: root}})
-				go manager.WatchPlugins(ctx, 2*time.Second)
-			}
-			return docketservice.Serve(ctx, listen, manager, os.Stderr)
-		},
+		}
+		if err != nil {
+			return fmt.Errorf("drain incomplete; failed events stay pending for the next run: %w", err)
+		}
+		return nil
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "serve every workspace in the machine-local registry")
-	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, "allow an unauthenticated non-loopback HTTP bind")
-	cmd.Flags().StringVar(&listen, "listen", "", "HTTP listen address (defaults to service config, 127.0.0.1:7463)")
-	return cmd
+
+	manager := docketservice.NewManager(ctx, os.Stderr)
+	defer manager.Stop()
+	if all {
+		go manager.FollowRegistry(ctx, 2*time.Second)
+	} else {
+		manager.SetWorkspaces(entries)
+		go manager.WatchPlugins(ctx, 2*time.Second)
+	}
+	fmt.Fprintf(os.Stderr, "docket: event runner started for %d workspace(s); press Ctrl-C to stop\n", len(entries))
+	<-ctx.Done()
+	return nil
 }
 
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "service",
-		Short: "Install and control the background systemd user service",
+		Short: "Install and control the optional systemd user unit for the event runner",
 		Long: `There is one Docket user service per machine, not one per workspace. It
-runs ` + "`docket serve --all`" + ` in the background. Use ` + "`docket serve`" + ` directly only
-for foreground development or debugging.`,
+runs ` + "`docket run --all`" + ` in the background so "delivery: service" hooks
+are delivered without a foreground process. It is optional: containers and
+other supervisors can run ` + "`docket run --all`" + ` directly, and schedulers can
+call ` + "`docket run --once --all`" + `.
+
+"install" rewrites the unit, so re-run it after upgrading from a release whose
+unit ran "serve --all".`,
 		Example: `  docket service install
   docket service start
   docket service status

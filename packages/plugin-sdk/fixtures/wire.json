@@ -1,5 +1,0 @@
-{
-  "workspace": "fixture",
-  "record": {"version":1,"widget_type":"fixture-progress/job","instance_id":"job-1","task_id":"TASK-1","created_at":"2026-09-10T10:00:00Z","revision":1,"phase":"created","fallback":{"label":"Fixture job","status_label":"Processing","priority":"active","references":[{"kind":"task","url":"/workspaces/fixture/tasks/TASK-1","title":"Original task"}]}},
-  "preview": {"widget_version":1,"revision":2,"data":{"version":1,"value":{"text":"Checked synthetic inputs","count":3}},"last_activity_at":"2026-09-10T10:00:01Z"}
-}

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-//go:embed *.md plugins/*.md plugin-sdk.d.ts
+//go:embed *.md plugins/*.md
 var files embed.FS
 
 // Topic is one embedded document, addressed by its path without extension.
@@ -49,16 +49,10 @@ func Read(name string) (Topic, string, bool) {
 }
 
 func topicName(file string) string {
-	if strings.HasSuffix(file, ".d.ts") {
-		return file
-	}
 	return strings.TrimSuffix(file, path.Ext(file))
 }
 
 func title(file, content string) string {
-	if file == "plugin-sdk.d.ts" {
-		return "Plugin SDK TypeScript declarations"
-	}
 	for _, line := range strings.Split(content, "\n") {
 		if heading, ok := strings.CutPrefix(line, "# "); ok {
 			return strings.TrimSpace(heading)

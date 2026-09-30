@@ -1,13 +1,17 @@
-// Package widget defines generic, event-backed display records. It has no agent semantics.
+// Package widget reads legacy widget records from the event log. Earlier
+// Docket releases let plugins publish task.widget_created and
+// task.widget_finalised events for the retired web board. Nothing produces
+// them now, but existing events remain history: this package validates and
+// folds them so task bundles keep showing their summaries and references.
+// New session or outcome information belongs in comments, references and
+// attachments.
 package widget
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/url"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,13 +19,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/tvdavies/docket/internal/events"
-	"github.com/tvdavies/docket/internal/workspace"
 )
 
 const Created = "task.widget_created"
 const Finalised = "task.widget_finalised"
 const MaxRecordBytes = 8 << 10
-const MaxPreviewBytes = 16 << 10
 const MaxRevision = 9007199254740991
 
 var typePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*/[a-zA-Z0-9][a-zA-Z0-9_/-]*$`)
@@ -51,13 +53,13 @@ type Record struct {
 	Phase      string   `json:"phase"`
 	Fallback   Fallback `json:"fallback"`
 }
-type Error struct {
-	Code     string `json:"error"`
-	Revision int64  `json:"current_revision,omitempty"`
-}
 
-func (e *Error) Error() string { return e.Code }
-func Key(r Record) string      { return r.TaskID + "\x00" + r.WidgetType + "\x00" + r.InstanceID }
+// errInvalid rejects a record that does not match the published schema.
+type errInvalid struct{}
+
+func (errInvalid) Error() string { return "invalid_widget_record" }
+
+func Key(r Record) string { return r.TaskID + "\x00" + r.WidgetType + "\x00" + r.InstanceID }
 func text(v string, max int, required bool) bool {
 	return utf8.ValidString(v) && utf8.RuneCountInString(v) <= max && (!required || strings.TrimSpace(v) != "") && !strings.ContainsRune(v, '\x00')
 }
@@ -86,8 +88,11 @@ func SafeURL(v, kind, plugin, workspaceName string) bool {
 	}
 	return kind != "session" && kind != "task" && u.Scheme == "https" && u.Host != ""
 }
+
+// Validate checks a historical record against the schema it was published
+// under, so hand-edited or malformed events never reach readers.
 func Validate(r Record, workspaceName string) error {
-	invalid := func() error { return &Error{Code: "invalid_widget_record"} }
+	invalid := func() error { return errInvalid{} }
 	if r.Version != 1 || !typePattern.MatchString(r.WidgetType) || len(r.WidgetType) > 100 || !idPattern.MatchString(r.InstanceID) || !idPattern.MatchString(r.TaskID) || !timestamp(r.CreatedAt) || r.Revision < 1 || r.Revision > MaxRevision || (r.Phase != "created" && r.Phase != "finalised") {
 		return invalid()
 	}
@@ -113,14 +118,6 @@ func Validate(r Record, workspaceName string) error {
 		return invalid()
 	}
 	return nil
-}
-func Enabled(ws *workspace.Workspace, kind string) bool {
-	for _, p := range ws.Plugins {
-		if p.Manifest.UI.DeclaresWidget(kind) {
-			return true
-		}
-	}
-	return false
 }
 
 type History struct {
@@ -169,13 +166,6 @@ func Fold(log []events.Event) Index {
 	}
 	return index
 }
-func Load(ws *workspace.Workspace) (Index, error) {
-	log, err := events.All(ws)
-	if err != nil {
-		return nil, err
-	}
-	return Fold(log), nil
-}
 func (index Index) Records(taskID string) []Record {
 	result := []Record{}
 	for _, history := range index {
@@ -200,52 +190,4 @@ func Revision(records []Record) string {
 	b, _ := json.Marshal(records)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-func Compact(records []Record) []Record {
-	out := make([]Record, len(records))
-	for i, r := range records {
-		r.Fallback.Summary = ""
-		r.Fallback.StartedAt = ""
-		r.Fallback.EndedAt = ""
-		if len(r.Fallback.References) > 1 {
-			r.Fallback.References = r.Fallback.References[:1]
-		}
-		out[i] = r
-	}
-	return out
-}
-func Transition(history History, exists bool, next Record) (bool, error) {
-	if exists {
-		operation := history.Current
-		if next.Phase == "created" {
-			operation = history.Create
-		}
-		if reflect.DeepEqual(operation, next) {
-			return false, nil
-		}
-		if next.Phase == "created" || history.Current.Phase == "finalised" || next.Revision <= history.Current.Revision || next.CreatedAt != history.Create.CreatedAt {
-			return false, &Error{Code: "widget_conflict", Revision: history.Current.Revision}
-		}
-	} else if next.Phase == "finalised" {
-		return false, &Error{Code: "widget_not_created"}
-	}
-	return true, nil
-}
-
-type Preview struct {
-	WidgetVersion int   `json:"widget_version"`
-	Revision      int64 `json:"revision"`
-	Data          struct {
-		Version int             `json:"version"`
-		Value   json.RawMessage `json:"value"`
-	} `json:"data"`
-	LastActivityAt string `json:"last_activity_at,omitempty"`
-}
-
-func ParsePreview(raw json.RawMessage) (Preview, error) {
-	var p Preview
-	if len(raw) > MaxPreviewBytes || json.Unmarshal(raw, &p) != nil || p.WidgetVersion != 1 || p.Revision < 1 || p.Revision > MaxRevision || p.Data.Version < 1 || int64(p.Data.Version) > MaxRevision || len(p.Data.Value) == 0 || (p.LastActivityAt != "" && !timestamp(p.LastActivityAt)) {
-		return p, fmt.Errorf("invalid_widget_preview")
-	}
-	return p, nil
 }
