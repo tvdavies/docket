@@ -200,7 +200,8 @@ func TestInboxDetectsTruncatedAndReplacedHistory(t *testing.T) {
 
 	// Replaced before acknowledgement: the checkpoint no longer describes
 	// the log, so it must not acknowledge unrelated replacement events.
-	replaced := strings.Replace(string(original), "T1", "T9", 1)
+	// Match the task field: a bare "T1" also occurs in timestamps from 10:00 to 19:59 UTC.
+	replaced := strings.Replace(string(original), `"task":"T1"`, `"task":"T9"`, 1)
 	if err := os.WriteFile(ws.EventsFile(), []byte(replaced), 0o644); err != nil {
 		t.Fatal(err)
 	}
