@@ -46,21 +46,39 @@ func newReindexCmd() *cobra.Command {
 	}
 }
 
+// fullGuideTopic is the embedded docs topic holding the complete agent guide.
+const fullGuideTopic = "agent-guide"
+
 func newSkillCmd() *cobra.Command {
-	return &cobra.Command{
+	var full bool
+	cmd := &cobra.Command{
 		Use:     "skill",
 		Aliases: []string{"guide"},
-		Short:   "Print a self-contained usage guide for an agent harness",
-		Example: "  docket skill\n  docket skill > ~/.config/my-agent/skills/docket.md",
+		Short:   "Print a short usage guide for an agent harness",
+		Long: `Prints a short entry guide covering workspace discovery, identity, task
+reads and writes, output choices, and where to find exact flags. It points to
+"docket docs TOPIC" for Lua hooks, plugins, and event integration instead of
+including them. --full prints the complete agent guide.`,
+		Example: "  docket skill\n  docket skill > ~/.config/my-agent/skills/docket.md\n  docket skill --full",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if flagJSON {
-				return printJSON(map[string]string{"skill": skillDoc})
+			guide := skillDoc
+			if full {
+				_, content, ok := docs.Read(fullGuideTopic)
+				if !ok {
+					return fmt.Errorf("embedded %s topic is missing", fullGuideTopic)
+				}
+				guide = content
 			}
-			fmt.Print(skillDoc)
+			if flagJSON {
+				return printJSON(map[string]string{"skill": guide})
+			}
+			fmt.Print(guide)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&full, "full", false, "print the complete agent guide, including Lua, plugin, and event reference")
+	return cmd
 }
 
 func newDocsCmd() *cobra.Command {

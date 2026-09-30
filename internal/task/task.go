@@ -198,6 +198,13 @@ type CreateOptions struct {
 
 // Create allocates an id, scaffolds the task folder, and writes task.md.
 func Create(ws *workspace.Workspace, opts CreateOptions) (*Task, error) {
+	return CreateWithCommit(ws, opts, nil)
+}
+
+// CreateWithCommit is Create plus a commit callback run while the new task's
+// lock is held, so no other mutation of the task can be recorded before it. A
+// failed commit removes the task folder.
+func CreateWithCommit(ws *workspace.Workspace, opts CreateOptions, commit func(t *Task) error) (*Task, error) {
 	if strings.TrimSpace(opts.Title) == "" {
 		return nil, fmt.Errorf("title is required")
 	}
@@ -250,10 +257,42 @@ func Create(ws *workspace.Workspace, opts CreateOptions) (*Task, error) {
 	if err := store.EnsureDir(t.dir); err != nil {
 		return nil, err
 	}
-	if err := t.save(); err != nil {
+	err = store.WithLock(filepath.Join(t.dir, ".lock"), func() error {
+		if err := t.save(); err != nil {
+			return err
+		}
+		if commit == nil {
+			return nil
+		}
+		if err := commit(t); err != nil {
+			if Committed(err) {
+				return err
+			}
+			if rollbackErr := os.RemoveAll(t.dir); rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("roll back created task: %w", rollbackErr))
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if Committed(err) {
+			return t, err
+		}
+		if !store.Exists(filepath.Join(t.dir, "task.md")) {
+			_ = os.RemoveAll(t.dir)
+		}
 		return nil, err
 	}
 	return t, nil
+}
+
+// Committed reports whether a commit callback failed after its durable record
+// may already be visible, for example an event append whose rollback failed.
+// Such mutations are kept rather than restored, so the task never disagrees
+// with an event that consumers can observe; the caller still reports err.
+func Committed(err error) bool {
+	return errors.Is(err, store.ErrAppendIndeterminate)
 }
 
 // Update runs fn against the task under an exclusive lock, bumps updated_at,
@@ -263,8 +302,10 @@ func Update(ws *workspace.Workspace, id string, fn func(t *Task) error) (*Task, 
 }
 
 // UpdateWithCommit keeps the task lock while commit records dependent durable
-// state such as an event group. If commit fails, the original dossier bytes are
-// restored before the lock is released.
+// state such as an event group, so concurrent mutations record events in the
+// same order as their dossier writes. If commit fails, the original dossier
+// bytes (including updated_at) are restored before the lock is released,
+// unless Committed(err) reports the record may already be visible.
 func UpdateWithCommit(ws *workspace.Workspace, id string, fn func(t *Task) error, commit func(t *Task) error) (*Task, error) {
 	dir, err := resolveDir(ws, id)
 	if err != nil {
@@ -290,6 +331,9 @@ func UpdateWithCommit(ws *workspace.Workspace, id string, fn func(t *Task) error
 		}
 		if commit != nil {
 			if err := commit(value); err != nil {
+				if Committed(err) {
+					return err
+				}
 				rollbackErr := store.WriteAtomic(taskFile, original, 0o644)
 				if rollbackErr != nil {
 					return errors.Join(err, fmt.Errorf("roll back task dossier: %w", rollbackErr))

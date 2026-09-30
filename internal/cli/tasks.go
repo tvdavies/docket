@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -9,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/bundle"
-	"github.com/tvdavies/docket/internal/events"
 	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
@@ -69,10 +69,7 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, err := operations.Create(task.CreateOptions{
 				Title:       title,
 				Description: description,
@@ -151,16 +148,31 @@ func newListCmd() *cobra.Command {
 }
 
 func newShowCmd() *cobra.Command {
-	var comments int
+	var options bundle.Options
 	cmd := &cobra.Command{
 		Use:   "show [TASK-ID]",
 		Short: "Show the complete context needed to understand or resume a task",
 		Long: `Show prints the task description, comments, attachments, project, and
 resolved relationships. TASK-ID may be omitted only when an optional session
-pointer is attached; explicit IDs are recommended for scripts and agents.`,
+pointer is attached; explicit IDs are recommended for scripts and agents.
+
+Views bound how much history is returned:
+  full     everything (default); the established JSON contract
+  agent    current state plus the newest 20 activity items, each fact once
+  current  current state only: description, wait, references,
+           relationships, and attachment metadata, with no history
+
+--activity N and --activity-before POS page the chronological activity
+timeline (comments, events, and session audits). Output reports
+activity_page {total, start, end, truncated, next_before}; pass next_before as
+--activity-before to read older items. --comments N drops older comments from
+both comments and activity. Limits only shape output: they never change
+stored history or acknowledge inbox events.`,
 		Example: `  docket show TASK-0007
-  docket show TASK-0007 --comments 10
-  docket show TASK-0007 --json`,
+  docket show TASK-0007 --view agent
+  docket show TASK-0007 --view agent --activity 50 --activity-before 120
+  docket show TASK-0007 --view current --json --compact
+  docket show TASK-0007 --comments 10 --json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -171,25 +183,59 @@ pointer is attached; explicit IDs are recommended for scripts and agents.`,
 			if err != nil {
 				return err
 			}
-			b, err := bundle.Build(ws, id, comments)
-			if err != nil {
-				return err
-			}
-			if flagJSON {
-				return printJSON(b)
-			}
-			printBundleHuman(b)
-			return nil
+			return printContext(ws, id, options)
 		},
 	}
-	cmd.Flags().IntVar(&comments, "comments", 0, "show only the most recent N comments (0 means all)")
+	addContextFlags(cmd, &options)
 	return cmd
+}
+
+// addContextFlags binds the view and history limits shared by commands that
+// print a task's context.
+func addContextFlags(cmd *cobra.Command, options *bundle.Options) {
+	cmd.Flags().StringVar(&options.View, "view", bundle.ViewFull, "context view: full, agent, or current")
+	cmd.Flags().IntVar(&options.CommentLimit, "comments", 0, "keep only the most recent N comments (0 means all)")
+	cmd.Flags().IntVar(&options.ActivityLimit, "activity", 0, "return at most N activity items, newest first page (agent view defaults to 20)")
+	cmd.Flags().IntVar(&options.ActivityBefore, "activity-before", 0, "read activity older than this timeline position (from next_before)")
+}
+
+// printContext builds and prints a task's context in the requested view.
+func printContext(ws *workspace.Workspace, id string, options bundle.Options) error {
+	if err := bundle.ValidView(options.View); err != nil {
+		return err
+	}
+	if options.CommentLimit < 0 || options.ActivityLimit < 0 || options.ActivityBefore < 0 {
+		return fmt.Errorf("--comments, --activity, and --activity-before cannot be negative")
+	}
+	if options.View == bundle.ViewCurrent && (options.ActivityLimit > 0 || options.ActivityBefore > 0) {
+		return fmt.Errorf("the current view has no activity; use --view agent with --activity")
+	}
+	if options.View == bundle.ViewCurrent || options.View == bundle.ViewAgent {
+		value, err := bundle.BuildContext(ws, id, options)
+		if err != nil {
+			return err
+		}
+		if flagJSON {
+			return printJSON(value)
+		}
+		printContextHuman(value)
+		return nil
+	}
+	b, err := bundle.BuildWith(ws, id, options)
+	if err != nil {
+		return err
+	}
+	if flagJSON {
+		return printJSON(b)
+	}
+	printBundleHuman(b)
+	return nil
 }
 
 func newContextCmd() *cobra.Command {
 	cmd := newShowCmd()
 	cmd.Use = "context [TASK-ID]"
-	cmd.Short = "Compatibility alias for show --comments"
+	cmd.Short = "Compatibility alias for show"
 	cmd.Long = "This compatibility command remains for existing scripts. New usage should call `docket show [TASK-ID] --comments N`."
 	return cmd
 }
@@ -240,10 +286,7 @@ when an optional session pointer is attached. Use --assignee "" to clear it.`,
 			if cmd.Flags().Changed("assignee") {
 				assigneeChange = &assignee
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, err := operations.Edit(id, actions.EditOptions{
 				Title: titleChange, Description: descriptionChange, Assignee: assigneeChange,
 			})
@@ -289,10 +332,7 @@ Explicit IDs are recommended for scripts and agents.`,
 			if err != nil {
 				return err
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, from, err := operations.Move(id, status)
 			if err != nil {
 				return err
@@ -329,10 +369,7 @@ only when an optional session pointer is attached.`,
 			if err != nil {
 				return err
 			}
-			operations := actions.Tasks{
-				Workspace: ws, Actor: actor(), Session: sessionID(),
-				Append: func(event events.Event) error { return appendEvent(ws, event) },
-			}
+			operations := operationsFor(ws)
 			t, err := operations.Label(id, add, remove)
 			if err != nil {
 				return err
@@ -393,21 +430,36 @@ func taskSummaries(tasks []*task.Task) []taskSummary {
 	return out
 }
 
+// printTaskTable prints an aligned table with shortened titles on a
+// terminal. Elsewhere (pipes, files, agent harnesses) it prints full titles in
+// tab-separated columns so grep, cut, and awk see every word.
 func printTaskTable(tasks []*task.Task) {
 	if len(tasks) == 0 {
 		fmt.Println("No tasks.")
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tLABELS\tWAITING")
+	terminal := stdoutIsTerminal()
+	var out io.Writer = os.Stdout
+	var table *tabwriter.Writer
+	if terminal {
+		table = tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+		out = table
+	}
+	fmt.Fprintln(out, "ID\tSTATUS\tTITLE\tLABELS\tWAITING")
 	for _, t := range tasks {
 		waiting := ""
 		if t.Wait != nil {
 			waiting = t.Wait.Kind
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, truncate(t.Title, 50), strings.Join(t.Labels, ","), waiting)
+		title := strings.Join(strings.Fields(t.Title), " ")
+		if terminal {
+			title = truncate(title, 50)
+		}
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, title, strings.Join(t.Labels, ","), waiting)
 	}
-	_ = w.Flush()
+	if table != nil {
+		_ = table.Flush()
+	}
 }
 
 func reportTask(t *task.Task, verb string) error {
@@ -418,9 +470,11 @@ func reportTask(t *task.Task, verb string) error {
 	return nil
 }
 
+// truncate shortens s to at most n characters without splitting a rune.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(runes[:n-1]) + "…"
 }

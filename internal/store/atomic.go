@@ -105,6 +105,11 @@ func SyncDir(path string) error {
 	return d.Close()
 }
 
+// ErrAppendIndeterminate marks an append failure that could not be rolled back.
+// The group may already be visible to readers, so callers must treat the
+// mutation it records as committed rather than restoring earlier state.
+var ErrAppendIndeterminate = errors.New("append outcome indeterminate")
+
 // AppendLine appends a single line (newline added) to a file, creating it if
 // needed. O_APPEND writes of a single small line are atomic on local
 // filesystems, so concurrent appenders never interleave.
@@ -178,10 +183,9 @@ func AppendLinesCheckpoint(path string, lines [][]byte) (int64, string, error) {
 			truncateErr := f.Truncate(originalSize)
 			syncErr := f.Sync()
 			if truncateErr != nil {
-				cause = errors.Join(cause, fmt.Errorf("truncate partial append: %w", truncateErr))
-			}
-			if syncErr != nil {
-				cause = errors.Join(cause, fmt.Errorf("sync append rollback: %w", syncErr))
+				cause = errors.Join(cause, ErrAppendIndeterminate, fmt.Errorf("truncate partial append: %w", truncateErr))
+			} else if syncErr != nil {
+				cause = errors.Join(cause, ErrAppendIndeterminate, fmt.Errorf("sync append rollback: %w", syncErr))
 			}
 			return cause
 		}

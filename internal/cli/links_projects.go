@@ -13,7 +13,7 @@ import (
 )
 
 // relationshipFlags binds one --<kind> TARGET flag per configured relationship.
-func linkRunner(eventType string, link bool) func(cmd *cobra.Command, args []string) error {
+func linkRunner(link bool) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		ws, err := openWS()
 		if err != nil {
@@ -33,18 +33,13 @@ func linkRunner(eventType string, link bool) func(cmd *cobra.Command, args []str
 		if kind == "" {
 			return fmt.Errorf("specify a relationship flag, e.g. --blocks TASK-0010 (configured: %s)", strings.Join(ws.Config.RelNames(), ", "))
 		}
+		operations := operationsFor(ws)
 		if link {
-			err = task.Link(ws, from, kind, to)
+			err = operations.Link(from, kind, to)
 		} else {
-			err = task.Unlink(ws, from, kind, to)
+			err = operations.Unlink(from, kind, to)
 		}
 		if err != nil {
-			return err
-		}
-		if err := appendEvent(ws, events.Event{
-			Type: eventType, Task: from, Actor: actor(),
-			Data: map[string]any{"kind": kind, "to": to},
-		}); err != nil {
 			return err
 		}
 		if flagJSON {
@@ -78,7 +73,7 @@ func newLinkCmd() *cobra.Command {
   docket link TASK-0007 --parent TASK-0001
   docket link TASK-0007 --relates TASK-0008`,
 		Args: cobra.ExactArgs(1),
-		RunE: linkRunner(events.TaskLinked, true),
+		RunE: linkRunner(true),
 	}
 	addRelFlags(cmd)
 	return cmd
@@ -91,7 +86,7 @@ func newUnlinkCmd() *cobra.Command {
 		Example: `  docket unlink TASK-0007 --blocks TASK-0010
   docket unlink TASK-0007 --relates TASK-0008`,
 		Args: cobra.ExactArgs(1),
-		RunE: linkRunner(events.TaskUnlinked, false),
+		RunE: linkRunner(false),
 	}
 	addRelFlags(cmd)
 	return cmd

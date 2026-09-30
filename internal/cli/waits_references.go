@@ -10,10 +10,14 @@ import (
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
+// operationsFor records task events under the task lock and drains inline
+// handlers only after the lock is released, so a handler may mutate the same
+// task without deadlocking.
 func operationsFor(ws *workspace.Workspace) actions.Tasks {
 	return actions.Tasks{
 		Workspace: ws, Actor: actor(), Session: sessionID(),
-		Append: func(event events.Event) error { return appendEvent(ws, event) },
+		Append:    func(event events.Event) error { return recordEvent(ws, event) },
+		Committed: func() { drainInline(ws) },
 	}
 }
 

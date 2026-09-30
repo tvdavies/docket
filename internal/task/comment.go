@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,9 +30,14 @@ func fsTimestamp(t time.Time) string {
 }
 
 // AddComment appends a comment to a task. Comment files are uniquely named and
-// never rewritten, so this needs no task lock — only the per-task comment
-// sequence is taken under a short lock to keep numbering monotonic.
+// never rewritten; the task lock is held only to keep numbering monotonic.
 func AddComment(ws *workspace.Workspace, id, author, session, body string) (*Comment, error) {
+	return AddCommentWithCommit(ws, id, author, session, body, nil)
+}
+
+// AddCommentWithCommit is AddComment plus a commit callback run under the task
+// lock with the task as loaded there. A failed commit removes the new comment.
+func AddCommentWithCommit(ws *workspace.Workspace, id, author, session, body string, commit func(*Task, *Comment) error) (*Comment, error) {
 	dir, err := resolveDir(ws, id)
 	if err != nil {
 		return nil, err
@@ -41,22 +47,42 @@ func AddComment(ws *workspace.Workspace, id, author, session, body string) (*Com
 		return nil, err
 	}
 
-	c := &Comment{Author: author, Session: session, CreatedAt: Now()}
-	var fname string
+	c := &Comment{Author: author, Session: session, CreatedAt: Now(), Body: strings.TrimRight(body, "\n")}
 	err = store.WithLock(filepath.Join(dir, ".lock"), func() error {
-		seq := nextCommentSeq(commentsDir)
-		fname = fmt.Sprintf("%04d--%s.md", seq, fsTimestamp(c.CreatedAt))
-		data, err := store.RenderFrontmatter(c, strings.TrimRight(body, "\n"))
+		value, err := loadDir(dir)
 		if err != nil {
 			return err
 		}
-		return store.WriteAtomic(filepath.Join(commentsDir, fname), data, 0o644)
+		seq := nextCommentSeq(commentsDir)
+		c.File = fmt.Sprintf("%04d--%s.md", seq, fsTimestamp(c.CreatedAt))
+		data, err := store.RenderFrontmatter(c, c.Body)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(commentsDir, c.File)
+		if err := store.WriteAtomic(path, data, 0o644); err != nil {
+			return err
+		}
+		if commit == nil {
+			return nil
+		}
+		if err := commit(value, c); err != nil {
+			if Committed(err) {
+				return err
+			}
+			if rollbackErr := os.Remove(path); rollbackErr != nil && !os.IsNotExist(rollbackErr) {
+				return errors.Join(err, fmt.Errorf("roll back comment: %w", rollbackErr))
+			}
+			return err
+		}
+		return nil
 	})
 	if err != nil {
+		if Committed(err) {
+			return c, err
+		}
 		return nil, err
 	}
-	c.Body = strings.TrimRight(body, "\n")
-	c.File = fname
 	return c, nil
 }
 

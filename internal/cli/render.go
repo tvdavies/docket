@@ -12,12 +12,37 @@ import (
 	"github.com/tvdavies/docket/internal/bundle"
 )
 
+// stdoutIsTerminal reports whether stdout is an interactive terminal. Agent
+// harnesses and pipes are not, and get output meant for tools.
+func stdoutIsTerminal() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 func readStdin() ([]byte, error) {
 	return io.ReadAll(os.Stdin)
 }
 
-// printBundleHuman renders a context bundle as readable markdown-ish text.
+// printBundleHuman renders a full context bundle as readable markdown-ish text.
 func printBundleHuman(b *bundle.Bundle) {
+	printStateHuman(b.State())
+	printActivityHuman(b.ID, b.Activity, b.ActivityPage, b.CommentsOmitted)
+}
+
+// printContextHuman renders the current or agent view. The current view
+// prints only a pointer to the history it left out.
+func printContextHuman(c *bundle.Context) {
+	printStateHuman(c)
+	if c.View == bundle.ViewCurrent {
+		if c.ActivityPage.Total > 0 {
+			fmt.Printf("\n## Activity\n%d items not shown; read them with: docket show %s --view agent\n", c.ActivityPage.Total, c.ID)
+		}
+		return
+	}
+	printActivityHuman(c.ID, c.Activity, &c.ActivityPage, c.CommentsOmitted)
+}
+
+func printStateHuman(b *bundle.Context) {
 	fmt.Printf("# %s — %s\n", b.ID, b.Title)
 	fmt.Printf("status: %s", b.Status)
 	if b.Assignee != "" {
@@ -82,25 +107,40 @@ func printBundleHuman(b *bundle.Bundle) {
 			fmt.Println(line)
 		}
 	}
+}
 
-	if len(b.Activity) > 0 {
-		fmt.Printf("\n## Activity (%d)\n", len(b.Activity))
-		for _, activity := range b.Activity {
-			actor := activity.Actor
-			if actor == "" {
-				actor = "system"
-			}
-			fmt.Printf("\n[%s] %s · %s", activity.At, actor, activity.Type)
-			if activity.Session != "" {
-				fmt.Printf(" · session %s", activity.Session)
-			}
-			fmt.Println()
-			if activity.Body != "" {
-				fmt.Println(activity.Body)
-			} else if len(activity.Data) > 0 {
-				data, _ := json.Marshal(activity.Data)
-				fmt.Println(string(data))
-			}
+func printActivityHuman(id string, activity []bundle.ActivityView, page *bundle.ActivityPage, commentsOmitted int) {
+	if page == nil {
+		if len(activity) > 0 {
+			fmt.Printf("\n## Activity (%d)\n", len(activity))
+		}
+	} else if page.Total > 0 {
+		fmt.Printf("\n## Activity (%d–%d of %d)\n", page.Start+1, page.End, page.Total)
+		if page.NextBefore > 0 {
+			fmt.Printf("%d older items not shown; read them with: docket show %s --view agent --activity-before %d\n", page.NextBefore, id, page.NextBefore)
+		}
+		if newer := page.Total - page.End; newer > 0 {
+			fmt.Printf("%d newer items not shown.\n", newer)
+		}
+	}
+	if commentsOmitted > 0 {
+		fmt.Printf("%d older comments omitted by --comments.\n", commentsOmitted)
+	}
+	for _, item := range activity {
+		actor := item.Actor
+		if actor == "" {
+			actor = "system"
+		}
+		fmt.Printf("\n[%s] %s · %s", item.At, actor, item.Type)
+		if item.Session != "" {
+			fmt.Printf(" · session %s", item.Session)
+		}
+		fmt.Println()
+		if item.Body != "" {
+			fmt.Println(item.Body)
+		} else if len(item.Data) > 0 {
+			data, _ := json.Marshal(item.Data)
+			fmt.Println(string(data))
 		}
 	}
 }

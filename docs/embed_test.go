@@ -6,7 +6,7 @@ import (
 )
 
 func TestTopicsIncludeTheReferenceGuides(t *testing.T) {
-	for _, name := range []string{"plugins", "plugins/authoring", "cli", "inbox", "lua-hooks"} {
+	for _, name := range []string{"plugins", "plugins/authoring", "cli", "inbox", "lua-hooks", "agent-guide"} {
 		topic, content, ok := Read(name)
 		if !ok || strings.TrimSpace(content) == "" || topic.Title == "" {
 			t.Fatalf("topic %q: ok=%v title=%q", name, ok, topic.Title)
