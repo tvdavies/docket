@@ -157,7 +157,7 @@ Invalid roots and unsupported nesting fail config validation instead of silently
 
 ### Delivery
 
-`delivery: inline` is the default. The mutating CLI command runs the handler after the event is durable and waits for completion.
+`delivery: inline` is the default. The mutating CLI command runs the handler after the event is durable and waits for completion. A task mutation writes its files and appends its event while holding the task lock, then releases the lock before running inline handlers, so a handler may change the same task. If the event append fails, the task files are restored and the command fails without running handlers.
 
 `delivery: service` leaves the handler cursor pending for the event runner. The CLI returns after appending the event, while `docket run` performs durable asynchronous delivery. If no runner is running, events remain in the log and drain when `docket run` starts or `docket run --once` is called. The name `service` is kept for compatibility; no network service is involved.
 
