@@ -126,8 +126,8 @@ handler scripts.
 
 ## Coordination (triggering work elsewhere)
 
-Every mutation appends to an append-only event log. There are three ways to
-react:
+Every mutation appends to an append-only event log. Callers can
+react through:
 
 - **Handlers** — post-hoc executables or embedded Lua scripts declared in
   `.docket/config.yaml`. Every handler owns a durable cursor: delivery is

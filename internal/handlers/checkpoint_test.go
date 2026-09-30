@@ -149,8 +149,8 @@ func TestTransferCheckpointLockedCopiesExactlyAndNeverTouchesSource(t *testing.T
 	if _, err := os.Stat(cursorPath(ws, "plugin/corrupt")); !os.IsNotExist(err) {
 		t.Fatalf("destination created from a corrupt source: %v", err)
 	}
-	if err := handlers.AdoptCursor(ws, "missing", "plugin/missing"); !errors.Is(err, handlers.ErrCheckpointMissing) {
-		t.Fatalf("AdoptCursor missing source = %v", err)
+	if _, err := handlers.TransferCheckpointLocked(ws, "missing", "plugin/missing"); !errors.Is(err, handlers.ErrCheckpointMissing) {
+		t.Fatalf("TransferCheckpointLocked missing source = %v", err)
 	}
 }
 

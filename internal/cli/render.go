@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/tvdavies/docket/internal/bundle"
@@ -45,7 +47,8 @@ func printBundleHuman(b *bundle.Bundle) {
 
 	if len(b.Relationships) > 0 {
 		fmt.Println("\n## Relationships")
-		for kind, refs := range b.Relationships {
+		for _, kind := range slices.Sorted(maps.Keys(b.Relationships)) {
+			refs := b.Relationships[kind]
 			var parts []string
 			for _, r := range refs {
 				if r.Title != "" {

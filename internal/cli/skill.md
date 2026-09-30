@@ -7,7 +7,7 @@
 Use explicit task IDs unless your harness intentionally uses session pointers:
 
 ```sh
-docket show TASK-0007 --json
+docket show TASK-0007
 # ...perform the work...
 docket comment TASK-0007 "Root cause: stale cache key omits pwdVersion"
 docket attach-file TASK-0007 ./repro.log --caption "Failing assertion"
@@ -17,10 +17,18 @@ docket move TASK-0007 in-review
 A fresh session resumes with:
 
 ```sh
-docket show TASK-0007 --json
+docket show TASK-0007
 ```
 
 `show` returns the task description, active wait, typed references, comments, files, project, labels, assignee, sessions, resolved relationships, and chronological activity.
+
+## Keep session output small
+
+- Use `docket list` with exact filters to find an ID before reading its full task.
+- Use `docket show TASK-ID` for Markdown context; it renders comments once in the activity timeline.
+- Use `docket show TASK-ID --comments 5` when only recent comments are needed. Zero means all comments; this does not limit other activity.
+- Use `--json` when a script needs structured fields. Full bundles also include comments and sessions separately from activity, so they repeat context.
+- Read only the relevant reference topic with `docket docs TOPIC` and exact flags with `docket COMMAND --help`.
 
 ## Correcting command mistakes
 
@@ -71,12 +79,12 @@ docket link TASK-ID --blocks TARGET
 docket unlink TASK-ID --blocks TARGET
 ```
 
-Use `--file -` to read a description or comment from stdin.
+Use `--desc-file -` for a description and `--file -` for a comment from stdin.
 
 ## Durable-context practice
 
 1. Create or identify one task for each unit of work.
-2. Read `docket show TASK-ID --json` before acting.
+2. Read `docket show TASK-ID` before acting.
 3. Record decisions, evidence, root causes, and dead ends as comments.
 4. Store plan, pull-request, ticket, and transcript URLs as typed references.
 5. Attach logs, screenshots, and other file artifacts.

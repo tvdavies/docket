@@ -8,12 +8,12 @@ The recommended first cut removes browser execution and HTTP hosting, while pres
 
 | Order | Plan | Priority | Effort | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| 001 | [Remove web hosting and retain a headless event runner](001-cli-and-headless-events.md) | P1 | L | None | Implemented; PR open for review |
-| 002 | [Make inbox reads safe for durable consumers](002-durable-inbox-consumption.md) | P1 | M | None; required before Sal relies on polling | Implemented; PR open for review |
+| 001 | [Remove web hosting and retain a headless event runner](001-cli-and-headless-events.md) | P1 | L | None | Merged in [PR #16](https://github.com/tvdavies/docket/pull/16) |
+| 002 | [Make inbox reads safe for durable consumers](002-durable-inbox-consumption.md) | P1 | M | None; required before Sal relies on polling | Merged in [PR #16](https://github.com/tvdavies/docket/pull/16) |
 
-These are independent implementation changes. Plan 002 can land first. Keep the removal diff separate from the inbox correctness change so regressions are easier to isolate.
+These changes were implemented as separate commits and merged together in PR #16.
 
-Implementation (30 September 2026): both plans are implemented on branch `t3code/simplify-docket-headless-runner`, based on `0af2dda` (no drift from the planned commit). Plan 002 is a separate commit from the plan 001 removal. See each plan's *Implementation notes* for decisions and deviations. Nothing is merged, released or rolled out; the operational rollout steps in plan 001 remain to be done.
+Implementation (30 September 2026): both plans are implemented on branch `t3code/simplify-docket-headless-runner`, based on `0af2dda` (no drift from the planned commit). Plan 002 is a separate commit from the plan 001 removal. See each plan's *Implementation notes* for decisions and deviations. Both commits are now merged. Release and operational rollout were not verified in this cleanup; the operational rollout steps in plan 001 still need checking.
 
 ## Findings
 

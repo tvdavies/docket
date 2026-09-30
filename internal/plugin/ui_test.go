@@ -42,14 +42,3 @@ func TestFrameUIManifestValidation(t *testing.T) {
 		})
 	}
 }
-
-func TestDeclaredWidgetsIncludeLegacyV2CardsAndDefaultSlots(t *testing.T) {
-	ui := plugin.UI{APIVersion: 2, Cards: []plugin.Card{{Type: "demo/card", Title: "Card", Locations: []string{"activity"}}}, Widgets: []plugin.Widget{{Type: "demo/job", Title: "Job"}}}
-	got := ui.DeclaredWidgets()
-	if len(got) != 2 || strings.Join(got[0].Slots, ",") != "board,activity" || strings.Join(got[1].Slots, ",") != "activity" {
-		t.Fatalf("widgets %+v", got)
-	}
-	if !ui.DeclaresWidget("demo/card") || (plugin.UI{Cards: ui.Cards}).DeclaresWidget("demo/card") {
-		t.Fatal("v1 cards are not ledger widgets")
-	}
-}

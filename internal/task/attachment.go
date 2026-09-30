@@ -116,24 +116,6 @@ func AttachDataWithCommit(ws *workspace.Workspace, id, name string, data []byte,
 
 const timeLayout = "2006-01-02T15:04:05Z07:00"
 
-// AttachmentPath returns an exact manifest-backed path. Names not recorded in
-// the manifest are rejected even if a similarly named file exists on disk.
-func (t *Task) AttachmentPath(name string) (string, *Attachment, error) {
-	if filepath.Base(name) != name || name == "" || strings.ContainsAny(name, `/\\`) {
-		return "", nil, fmt.Errorf("invalid attachment filename %q", name)
-	}
-	manifest, err := t.Attachments()
-	if err != nil {
-		return "", nil, err
-	}
-	for _, item := range manifest {
-		if item != nil && item.File == name {
-			return filepath.Join(t.AttachmentsDir(), name), item, nil
-		}
-	}
-	return "", nil, fmt.Errorf("attachment %q not found", name)
-}
-
 // uniqueDest avoids clobbering an existing attachment with the same name.
 func uniqueDest(dir, base string) string {
 	dest := filepath.Join(dir, base)

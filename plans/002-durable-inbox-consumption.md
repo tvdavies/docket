@@ -10,7 +10,7 @@
 - Category: correctness and CLI contract.
 - Depends on: none; required before using the inbox as Sal's durable intake.
 - Planned at: `0af2dda`, 30 September 2026.
-- **Implementation status: implemented, awaiting review** (not merged).
+- **Implementation status: merged** in [PR #16](https://github.com/tvdavies/docket/pull/16).
 
 ## Background and proposed outcome
 
