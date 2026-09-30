@@ -147,16 +147,31 @@ func newListCmd() *cobra.Command {
 }
 
 func newShowCmd() *cobra.Command {
-	var comments int
+	var options bundle.Options
 	cmd := &cobra.Command{
 		Use:   "show [TASK-ID]",
 		Short: "Show the complete context needed to understand or resume a task",
 		Long: `Show prints the task description, comments, attachments, project, and
 resolved relationships. TASK-ID may be omitted only when an optional session
-pointer is attached; explicit IDs are recommended for scripts and agents.`,
+pointer is attached; explicit IDs are recommended for scripts and agents.
+
+Views bound how much history is returned:
+  full     everything (default); the established JSON contract
+  agent    current state plus the newest 20 activity items, each fact once
+  current  current state only: description, wait, references,
+           relationships, and attachment metadata, with no history
+
+--activity N and --activity-before POS page the chronological activity
+timeline (comments, events, and session audits). Output reports
+activity_page {total, start, end, truncated, next_before}; pass next_before as
+--activity-before to read older items. --comments N drops older comments from
+both comments and activity. Limits only shape output: they never change
+stored history or acknowledge inbox events.`,
 		Example: `  docket show TASK-0007
-  docket show TASK-0007 --comments 10
-  docket show TASK-0007 --json`,
+  docket show TASK-0007 --view agent
+  docket show TASK-0007 --view agent --activity 50 --activity-before 120
+  docket show TASK-0007 --view current --json --compact
+  docket show TASK-0007 --comments 10 --json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -167,25 +182,59 @@ pointer is attached; explicit IDs are recommended for scripts and agents.`,
 			if err != nil {
 				return err
 			}
-			b, err := bundle.Build(ws, id, comments)
-			if err != nil {
-				return err
-			}
-			if flagJSON {
-				return printJSON(b)
-			}
-			printBundleHuman(b)
-			return nil
+			return printContext(ws, id, options)
 		},
 	}
-	cmd.Flags().IntVar(&comments, "comments", 0, "show only the most recent N comments (0 means all)")
+	addContextFlags(cmd, &options)
 	return cmd
+}
+
+// addContextFlags binds the view and history limits shared by commands that
+// print a task's context.
+func addContextFlags(cmd *cobra.Command, options *bundle.Options) {
+	cmd.Flags().StringVar(&options.View, "view", bundle.ViewFull, "context view: full, agent, or current")
+	cmd.Flags().IntVar(&options.CommentLimit, "comments", 0, "keep only the most recent N comments (0 means all)")
+	cmd.Flags().IntVar(&options.ActivityLimit, "activity", 0, "return at most N activity items, newest first page (agent view defaults to 20)")
+	cmd.Flags().IntVar(&options.ActivityBefore, "activity-before", 0, "read activity older than this timeline position (from next_before)")
+}
+
+// printContext builds and prints a task's context in the requested view.
+func printContext(ws *workspace.Workspace, id string, options bundle.Options) error {
+	if err := bundle.ValidView(options.View); err != nil {
+		return err
+	}
+	if options.CommentLimit < 0 || options.ActivityLimit < 0 || options.ActivityBefore < 0 {
+		return fmt.Errorf("--comments, --activity, and --activity-before cannot be negative")
+	}
+	if options.View == bundle.ViewCurrent && (options.ActivityLimit > 0 || options.ActivityBefore > 0) {
+		return fmt.Errorf("the current view has no activity; use --view agent with --activity")
+	}
+	if options.View == bundle.ViewCurrent || options.View == bundle.ViewAgent {
+		value, err := bundle.BuildContext(ws, id, options)
+		if err != nil {
+			return err
+		}
+		if flagJSON {
+			return printJSON(value)
+		}
+		printContextHuman(value)
+		return nil
+	}
+	b, err := bundle.BuildWith(ws, id, options)
+	if err != nil {
+		return err
+	}
+	if flagJSON {
+		return printJSON(b)
+	}
+	printBundleHuman(b)
+	return nil
 }
 
 func newContextCmd() *cobra.Command {
 	cmd := newShowCmd()
 	cmd.Use = "context [TASK-ID]"
-	cmd.Short = "Compatibility alias for show --comments"
+	cmd.Short = "Compatibility alias for show"
 	cmd.Long = "This compatibility command remains for existing scripts. New usage should call `docket show [TASK-ID] --comments N`."
 	return cmd
 }

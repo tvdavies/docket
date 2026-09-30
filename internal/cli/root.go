@@ -26,6 +26,7 @@ var Version = "dev"
 // Global flags.
 var (
 	flagJSON    bool
+	flagCompact bool
 	flagSession string
 )
 
@@ -66,6 +67,7 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 		Version:       Version,
 	}
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "request machine-readable JSON from data-returning commands")
+	root.PersistentFlags().BoolVar(&flagCompact, "compact", false, "with --json, print single-line JSON instead of indented JSON")
 	root.PersistentFlags().StringVar(&flagSession, "session", "", "session pointer used when TASK-ID is omitted (defaults to $DOCKET_SESSION, then _global)")
 
 	root.AddGroup(
@@ -259,10 +261,12 @@ func resolveTaskID(ws *workspace.Workspace, explicit string) (string, error) {
 	return "", fmt.Errorf("no task id given and no task attached to this session (use `docket session attach <id>` first)")
 }
 
-// printJSON writes v as indented JSON to stdout.
+// printJSON writes v as JSON to stdout, indented unless --compact is set.
 func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
+	if !flagCompact {
+		enc.SetIndent("", "  ")
+	}
 	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
 }

@@ -43,24 +43,70 @@ A later human or agent resumes with:
 docket show TASK-0001
 ```
 
-`show` returns the complete context bundle: description, active wait, references, attachments, project, assignee, labels, resolved relationships, sessions, and a chronological activity timeline. Use `--comments N` to limit comment bodies included in the bundle and timeline.
+`show` returns the complete context bundle: description, active wait, references, attachments, project, assignee, labels, resolved relationships, sessions, and a chronological activity timeline.
 
 ## Choosing output for agent sessions
 
-The default `show` output is Markdown: task state followed by context and one
-activity timeline. Comments appear once. Prefer it when a model needs to read
-the task; use `--json` when a program needs structured fields. Full JSON bundles
-also expose comments, sessions, and historical widgets outside the activity
-array, so some context appears twice.
+A task's full bundle grows with its whole history. `show` takes a view that
+bounds what it returns without dropping current state:
 
-Start with a filtered `list` to find the relevant task. For a smaller read, use
-`show TASK-ID --comments 5`; this limits comment bodies only, not other events
-or session history. Zero means all comments. Neither `show` nor `events` currently
-has a general history limit or pagination.
+| View | Returns | Use when |
+|---|---|---|
+| `--view current` | State only: status, labels, assignee, project, description, active wait, references, resolved relationships, attachment metadata | You only need to know where the task stands |
+| `--view agent` | Current state plus the newest 20 activity items; comments and sessions appear only in the timeline | Resuming work; the usual agent read |
+| `--view full` (default) | Everything, in the established JSON contract | Audits, scripts that already parse `show --json` |
 
-`list --json` returns task summaries without descriptions or history. The
-human table truncates long titles; use JSON when their full text matters.
-Read a specific embedded topic with `docs TOPIC` instead of loading every guide.
+Every view keeps the active wait and decision references, because they are
+state, not history. The current view reports how much activity it left out.
+
+History limits apply to the chronological activity timeline, which merges
+comments, task events, and session attach/detach audits:
+
+- `--activity N` returns the newest N timeline items (the agent view defaults
+  to 20; the full view is unbounded unless you pass it).
+- `--activity-before POS` returns items older than timeline position POS.
+  Positions count items oldest-first from 0 and stay stable as new activity
+  arrives, so paging is resumable.
+- `--comments N` keeps only the newest N comments, in both `comments` and the
+  timeline. Keep it the same between pages, since it changes positions.
+
+When a limit applies, JSON includes `activity_page`
+(`{total, start, end, truncated, next_before}`) and `comments_omitted`; pass
+`next_before` as `--activity-before` to read the previous page. Markdown output
+prints the equivalent command. Limits only shape output: they never change
+stored history or acknowledge inbox events. Repeated reads of unchanged history
+return identical output.
+
+```sh
+docket show TASK-0007 --view agent                          # state + newest 20 items
+docket show TASK-0007 --view agent --activity-before 107    # the 20 before position 107
+docket show TASK-0007 --view current --json --compact       # smallest machine read
+docket show TASK-0007 --json                                # complete bundle, unchanged contract
+```
+
+Markdown (the default) is the most compact form for a model to read. Use
+`--json` when a program needs fields; add the global `--compact` flag to print
+single-line JSON. The full JSON bundle also repeats comments, sessions, and
+legacy widget records outside `activity`; the `agent` and `current` views
+include each fact once.
+
+Measured on a task with 60 comments and 127 activity items (plus a wait, a
+decision reference, and a relationship):
+
+| Command | Bytes |
+|---|---|
+| `show --json` | 59,061 |
+| `show --json --compact` | 43,767 |
+| `show` (Markdown) | 21,594 |
+| `show --view agent --json --compact` | 4,953 |
+| `show --view agent` | 3,719 |
+| `show --view current --json --compact` | 806 |
+| `show --view current` | 451 |
+
+Start with a filtered `list` to find the relevant task. `list --json` returns
+task summaries without descriptions or history. The human table truncates long
+titles; use JSON when their full text matters. Read a specific embedded topic
+with `docs TOPIC` instead of loading every guide.
 
 ## Task commands
 
@@ -68,7 +114,7 @@ Read a specific embedded topic with `docs TOPIC` instead of loading every guide.
 |---|---|
 | `docket new --title TITLE` | Create a task and print its ID |
 | `docket list` | List and filter tasks |
-| `docket show [TASK-ID]` | Read a complete context bundle |
+| `docket show [TASK-ID]` | Read task context (`--view current\|agent\|full`) |
 | `docket edit [TASK-ID]` | Change title, description, or assignee |
 | `docket move [TASK-ID] STATUS` | Change workflow status |
 | `docket wait set\|show\|resolve TASK-ID` | Record or resolve one external dependency |
@@ -247,4 +293,4 @@ docket plugin config set my-plugin --status merge agent=merger
 | `DOCKET_SESSION` | Optional session pointer ID |
 | `DOCKET_CONFIG` | Override machine registry path |
 
-The global flags `--json` and `--session` override output/session behaviour for one invocation.
+The global flags `--json`, `--compact`, and `--session` override output/session behaviour for one invocation.

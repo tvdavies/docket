@@ -67,12 +67,18 @@ type Bundle struct {
 	Description   string               `json:"description"`
 	Relationships map[string][]TaskRef `json:"relationships,omitempty"`
 	Comments      []CommentView        `json:"comments"`
-	Attachments   []*task.Attachment   `json:"attachments"`
-	Sessions      []session.Entry      `json:"sessions"`
+	// CommentsOmitted counts older comments dropped by a comment limit; they
+	// are also absent from Activity.
+	CommentsOmitted int                `json:"comments_omitted,omitempty"`
+	Attachments     []*task.Attachment `json:"attachments"`
+	Sessions        []session.Entry    `json:"sessions"`
 	// ActiveSessions is retained as an empty compatibility field. Command
 	// context attachment is not an external execution-liveness signal.
 	ActiveSessions []session.Entry `json:"active_sessions"`
 	Activity       []ActivityView  `json:"activity"`
+	// ActivityPage is present only when an activity limit or cursor was
+	// requested, and describes which slice of the timeline Activity holds.
+	ActivityPage   *ActivityPage   `json:"activity_page,omitempty"`
 	Widgets        []widget.Record `json:"widgets"`
 	WidgetRevision string          `json:"widget_revision"`
 }
@@ -80,6 +86,12 @@ type Bundle struct {
 // Build assembles the bundle for a task. commentLimit > 0 keeps only the most
 // recent N comments; <= 0 keeps all.
 func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error) {
+	return BuildWith(ws, id, Options{CommentLimit: commentLimit})
+}
+
+// BuildWith assembles the full bundle, applying the comment and activity
+// limits in options. The view is ignored; see Project for projections.
+func BuildWith(ws *workspace.Workspace, id string, options Options) (*Bundle, error) {
 	t, err := task.Load(ws, id)
 	if err != nil {
 		return nil, err
@@ -149,8 +161,9 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 	if err != nil {
 		return nil, err
 	}
-	if commentLimit > 0 && len(comments) > commentLimit {
-		comments = comments[len(comments)-commentLimit:]
+	if options.CommentLimit > 0 && len(comments) > options.CommentLimit {
+		b.CommentsOmitted = len(comments) - options.CommentLimit
+		comments = comments[b.CommentsOmitted:]
 	}
 	b.Comments = make([]CommentView, 0, len(comments))
 	for _, c := range comments {
@@ -225,6 +238,11 @@ func Build(ws *workspace.Workspace, id string, commentLimit int) (*Bundle, error
 	}
 	b.Attachments = atts
 
+	if options.ActivityLimit > 0 || options.ActivityBefore > 0 {
+		page := pageActivity(len(b.Activity), options.ActivityLimit, options.ActivityBefore)
+		b.Activity = b.Activity[page.Start:page.End]
+		b.ActivityPage = &page
+	}
 	return b, nil
 }
 

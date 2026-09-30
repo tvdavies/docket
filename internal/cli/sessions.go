@@ -33,7 +33,7 @@ the harness integration.`,
 }
 
 func newAttachCmd() *cobra.Command {
-	var comments int
+	var options bundle.Options
 	cmd := &cobra.Command{
 		Use:   "attach TASK-ID",
 		Short: "Point this session at a task and print its full context",
@@ -42,7 +42,7 @@ session ID and prints the same context bundle as docket show. It does not claim,
 assign, lock, or start the task. Explicit TASK-ID arguments always remain valid.`,
 		Example: `  docket session attach TASK-0007
   docket session attach TASK-0007 --session agent-turn-42
-  docket session attach TASK-0007 --comments 10`,
+  docket session attach TASK-0007 --view agent`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -61,19 +61,13 @@ assign, lock, or start the task. Explicit TASK-ID arguments always remain valid.
 			}); err != nil {
 				return err
 			}
-			b, err := bundle.Build(ws, t.ID, comments)
-			if err != nil {
-				return err
+			if !flagJSON {
+				fmt.Printf("Attached session %q to %s\n\n", sid, t.ID)
 			}
-			if flagJSON {
-				return printJSON(b)
-			}
-			fmt.Printf("Attached session %q to %s\n\n", sid, t.ID)
-			printBundleHuman(b)
-			return nil
+			return printContext(ws, t.ID, options)
 		},
 	}
-	cmd.Flags().IntVar(&comments, "comments", 0, "limit context to the most recent N comments")
+	addContextFlags(cmd, &options)
 	return cmd
 }
 
