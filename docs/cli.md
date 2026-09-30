@@ -272,6 +272,27 @@ docket docs plugins/authoring          # print one (Markdown)
 docket docs inbox --json               # {name, title, content}
 ```
 
+### Agent guide
+
+`docket skill` prints a short entry guide to load into agent sessions. It
+covers workspace discovery, identity, explicit task IDs, reading and updating
+tasks, waits and handoff, output choices, and where to find exact flags. It
+points to one `docket docs TOPIC` for anything else instead of including it.
+`docket skill --full` prints the complete guide (topic `agent-guide`), which
+also includes the Lua SDK, handler configuration, and plugin commands.
+
+| Guide | Size | Approx. tokens |
+|---|---|---|
+| Previous all-in-one `docket skill` | 8.7 KB | ~2,200 |
+| `docket skill` | 3.5 KB | ~900 |
+| `docket skill --full` | 9.0 KB | ~2,300 |
+
+Keep the entry guide under 4 KB (about 1,000 tokens); a test enforces this.
+A typical session then loads the guide, one `show --view agent` read (usually
+under 5 KB), and at most one reference topic when it needs one. Tests also
+check every `docket` command and flag in the guides' shell examples against the
+real command definitions.
+
 Plugin commands:
 
 ```sh

@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/tvdavies/docket/main/scripts/instal
 This drops `docket` into `~/.local/bin` and prints how to add it to `PATH`. Then:
 
 ```sh
-docket skill        # print the agent usage guide (drop into any harness)
+docket skill        # print the short agent guide (drop into any harness)
 ```
 
 Build from source instead:
@@ -64,10 +64,13 @@ docket show "$ID"       # dossier + waits + references + sessions + activity
 - [Plugins](docs/plugins.md) — manifests, installation, hooks, statuses, and config
 - [Authoring plugins](docs/plugins/authoring.md) — build a headless plugin
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
+- [Agent guide (full)](docs/agent-guide.md) — the complete agent reference behind `docket skill --full`
 - [Migrating to the headless CLI](docs/migration-headless.md) — removed web features and upgrade steps
 
 Run `docket COMMAND --help` for exact local usage and examples, or `docket skill`
-for a self-contained guide suitable for an agent harness.
+for a short guide suitable for an agent harness. It points to `docket docs TOPIC`
+for Lua hooks, plugins, and event integration; `docket skill --full` prints
+everything in one document.
 
 ## The handoff
 
