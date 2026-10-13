@@ -9,12 +9,14 @@ import (
 	"strings"
 
 	"github.com/tvdavies/docket/internal/plugin"
+	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
 // tryPluginPassthrough resolves git-style plugin commands before Cobra parses
 // plugin-owned flags. Builtins always win.
 func tryPluginPassthrough(args []string) (bool, error) {
+	selector, args := leadingWorkspaceFlag(args)
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") || builtinCommand(args[0]) {
 		return false, nil
 	}
@@ -23,7 +25,19 @@ func tryPluginPassthrough(args []string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ws, _ := workspace.Open()
+	// The plugin is pinned to the selected workspace through DOCKET_HOME. An
+	// explicit -w that cannot be resolved is an error once the command is
+	// known to be a plugin; otherwise the plugin runs without a workspace.
+	var ws *workspace.Workspace
+	resolution, resolveErr := registry.Resolve(selector)
+	if resolveErr == nil {
+		ws, resolveErr = workspace.OpenRoot(resolution.Root)
+	}
+	if resolveErr != nil && selector != "" {
+		if _, lookErr := exec.LookPath("docket-" + name); lookErr == nil || installedPlugin(entries, name) {
+			return true, resolveErr
+		}
+	}
 	baseEnvironment := os.Environ()
 	if ws != nil {
 		baseEnvironment = withEnvironment(baseEnvironment, map[string]string{"DOCKET_HOME": ws.Root})
@@ -67,6 +81,32 @@ func tryPluginPassthrough(args []string) (bool, error) {
 		return false, nil
 	}
 	return true, execPassthrough(program, append([]string{program}, args[1:]...), baseEnvironment)
+}
+
+// leadingWorkspaceFlag removes a -w/--workspace flag written before a plugin
+// command name (docket -w NAME my-plugin ...), returning its value.
+func leadingWorkspaceFlag(args []string) (string, []string) {
+	if len(args) == 0 {
+		return "", args
+	}
+	switch first := args[0]; {
+	case (first == "-w" || first == "--workspace") && len(args) > 1:
+		return args[1], args[2:]
+	case strings.HasPrefix(first, "--workspace="):
+		return strings.TrimPrefix(first, "--workspace="), args[1:]
+	case strings.HasPrefix(first, "-w") && len(first) > 2:
+		return strings.TrimPrefix(strings.TrimPrefix(first, "-w"), "="), args[1:]
+	}
+	return "", args
+}
+
+func installedPlugin(entries []plugin.Installed, name string) bool {
+	for _, entry := range entries {
+		if entry.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func withEnvironment(existing []string, values map[string]string) []string {

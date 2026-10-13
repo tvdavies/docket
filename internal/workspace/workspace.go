@@ -135,24 +135,37 @@ func openRoot(root string) (*Workspace, error) {
 // discover locates the `.docket` directory, honouring DOCKET_HOME first, then
 // walking up from the current working directory.
 func discover() (string, error) {
-	if home := os.Getenv("DOCKET_HOME"); home != "" {
-		abs, err := filepath.Abs(home)
-		if err != nil {
-			return "", err
-		}
-		// DOCKET_HOME may point either at the project root or the `.docket` dir.
-		if filepath.Base(abs) == DirName {
-			if isDir(abs) {
-				return abs, nil
-			}
-		}
-		candidate := filepath.Join(abs, DirName)
-		if isDir(candidate) {
-			return candidate, nil
-		}
-		return "", fmt.Errorf("%w (DOCKET_HOME=%s)", ErrNotFound, home)
+	if root, ok, err := HomeRoot(); ok || err != nil {
+		return root, err
 	}
+	return DiscoverFromCwd()
+}
 
+// HomeRoot resolves DOCKET_HOME, which may point at the project directory or
+// its .docket directory. ok is false when the variable is unset or empty.
+// Handler and plugin subprocesses inherit DOCKET_HOME to pin their workspace.
+func HomeRoot() (root string, ok bool, err error) {
+	home := os.Getenv("DOCKET_HOME")
+	if home == "" {
+		return "", false, nil
+	}
+	abs, err := filepath.Abs(home)
+	if err != nil {
+		return "", true, err
+	}
+	if filepath.Base(abs) == DirName && isDir(abs) {
+		return abs, true, nil
+	}
+	candidate := filepath.Join(abs, DirName)
+	if isDir(candidate) {
+		return candidate, true, nil
+	}
+	return "", true, fmt.Errorf("%w (DOCKET_HOME=%s)", ErrNotFound, home)
+}
+
+// DiscoverFromCwd walks up from the current working directory to the nearest
+// .docket directory, returning ErrNotFound when there is none.
+func DiscoverFromCwd() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err

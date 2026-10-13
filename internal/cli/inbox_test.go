@@ -21,7 +21,7 @@ func runDocket(t *testing.T, dir string, args ...string) (string, string, error)
 	t.Helper()
 	command := exec.Command(docketBinary(t), args...)
 	command.Dir = dir
-	command.Env = append(os.Environ(), "DOCKET_HOME=", "DOCKET_CONFIG="+dir+"/no-registry.yaml")
+	command.Env = append(os.Environ(), "DOCKET_HOME=", "DOCKET_WORKSPACE=", "DOCKET_CONFIG="+dir+"/no-registry.yaml")
 	var stdout, stderr strings.Builder
 	command.Stdout = &stdout
 	command.Stderr = &stderr

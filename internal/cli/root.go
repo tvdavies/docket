@@ -28,6 +28,8 @@ var (
 	flagJSON    bool
 	flagCompact bool
 	flagSession string
+	// flagWorkspace is -w/--workspace; resolve it through resolveWorkspace.
+	flagWorkspace string
 )
 
 const (
@@ -69,6 +71,7 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "request machine-readable JSON from data-returning commands")
 	root.PersistentFlags().BoolVar(&flagCompact, "compact", false, "with --json, print single-line JSON instead of indented JSON")
 	root.PersistentFlags().StringVar(&flagSession, "session", "", "session pointer used when TASK-ID is omitted (defaults to $DOCKET_SESSION, then _global)")
+	registerWorkspaceFlag(root)
 
 	root.AddGroup(
 		&cobra.Group{ID: groupTasks, Title: "Task workflow:"},
@@ -194,9 +197,13 @@ func isUsageError(err error) bool {
 	return false
 }
 
-// openWS discovers and opens the workspace.
+// openWS opens the workspace selected by resolveWorkspace.
 func openWS() (*workspace.Workspace, error) {
-	return workspace.Open()
+	resolution, err := resolveWorkspace()
+	if err != nil {
+		return nil, err
+	}
+	return workspace.OpenRoot(resolution.Root)
 }
 
 // appendEvent durably records a mutation and then drains configured post-hoc
