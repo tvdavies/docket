@@ -15,7 +15,7 @@ import (
 func newPluginConfigCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "config",
-		Short: "Show or update a plugin's instance, workspace and status settings",
+		Short: "Show or change plugin settings",
 		Long: `Plugin settings have three scopes:
 
   instance   machine-wide, stored in the Docket registry
@@ -31,6 +31,9 @@ map replaces the stored value whole. Empty strings, zero and false are stored
 as real values. Every value is validated against the plugin's schema (and, for
 instance scope, against every workspace that enables the plugin) before any
 file is written; a rejected update changes nothing.`,
+		Example: `  docket plugin config get my-plugin
+  docket plugin config set my-plugin key=value
+  docket plugin config set my-plugin --scope instance key=value`,
 	}
 	command.AddCommand(newPluginConfigGetCmd(), newPluginConfigSetCmd())
 	return command

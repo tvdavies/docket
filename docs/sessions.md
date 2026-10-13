@@ -98,4 +98,4 @@ Clear a pointer with:
 docket session detach --session agent-turn-42
 ```
 
-Legacy flat commands (`docket attach`, `docket detach`, and `docket current`) remain compatible but are hidden from root help. New automation should normally use explicit task IDs; interactive integrations that need shorthand can use `docket session ...`.
+The earlier flat `docket attach`, `docket detach`, and `docket current` commands have been removed; use `docket session attach|detach|current`. New automation should normally use explicit task IDs; interactive integrations that need shorthand can use `docket session ...`.

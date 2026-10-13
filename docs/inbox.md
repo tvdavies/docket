@@ -89,5 +89,5 @@ successfully only after that write is durable. Docket retries failed batches.
 The consumer decides what to do with each receipt: processing policy, model
 invocation, and notifications belong to the consumer, not Docket.
 
-`docket watch` is a live diagnostic stream. It has no cursor and is not a
+`docket events --follow` is a live diagnostic stream. It has no cursor and is not a
 substitute for durable intake.

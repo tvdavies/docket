@@ -85,9 +85,13 @@ func checkDocumentedCommand(t *testing.T, file, line string) {
 		return
 	}
 	root := newRootCmd()
-	target, _, err := root.Find(words)
+	target, rest, err := root.Find(words)
 	if err != nil {
 		t.Errorf("%s: %q: %v", file, line, err)
+		return
+	}
+	if !target.Runnable() && len(rest) > 0 {
+		t.Errorf("%s: %q: %s has no %q subcommand", file, line, target.CommandPath(), rest[0])
 		return
 	}
 	target.InitDefaultHelpFlag()

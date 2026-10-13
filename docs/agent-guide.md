@@ -22,7 +22,7 @@ A fresh session resumes with:
 docket show TASK-0007
 ```
 
-`show` returns the task description, active wait, typed references, comments, files, project, labels, assignee, sessions, resolved relationships, and chronological activity.
+`show` returns the task description, active wait, typed references, comments, attachments, project, labels, assignee, sessions, resolved relationships, and chronological activity. It is the one read command: there is no separate command to list a task's files, wait, or references.
 
 ## Keep session output small
 
@@ -67,21 +67,24 @@ docket show TASK-ID [--view current|agent|full] [--activity N] [--activity-befor
 docket edit TASK-ID [--title TITLE] [--desc TEXT | --desc-file FILE] [--assignee ACTOR]
 docket move TASK-ID STATUS
 docket wait set TASK-ID --kind KIND --reason TEXT [--ref URL]
-docket wait show TASK-ID
 docket wait resolve TASK-ID --wait-id WAIT-ID [--result RESULT]
 docket reference add TASK-ID --kind KIND --url URL [--title TITLE]
-docket reference list TASK-ID
 docket reference remove TASK-ID REFERENCE-ID
 docket comment TASK-ID "TEXT"
 docket comment TASK-ID --file FILE
 docket label TASK-ID --add LABEL --remove LABEL
 docket attach-file TASK-ID PATH [--caption TEXT]
-docket files TASK-ID
-docket link TASK-ID --blocks TARGET
-docket unlink TASK-ID --blocks TARGET
+docket link TASK-ID --blocks TARGET-ID [--remove]
 ```
 
 Use `--desc-file -` for a description and `--file -` for a comment from stdin.
+
+Read the active wait ID, references, and attachments from `show`:
+
+```sh
+docket show TASK-0007 --view current --json | jq -r .wait.id
+docket show TASK-0007 --view current --json | jq '{references, attachments}'
+```
 
 ## Durable-context practice
 
@@ -109,8 +112,6 @@ docket session detach
 
 Prefer explicit IDs for hooks, concurrent agents, and independently generated commands. Without `--session` or `DOCKET_SESSION`, attachment uses a shared `_global` pointer.
 
-Legacy `docket attach`, `detach`, and `current` commands remain compatible but `docket session ...` is the documented surface.
-
 ## Projects
 
 ```sh
@@ -124,7 +125,7 @@ Projects group tasks inside one workspace; they are not separate workspaces.
 
 ## Event automation
 
-Every mutation appends to `.docket/events.jsonl`. Prefer durable configured handlers over polling or `docket watch`.
+Every mutation appends to `.docket/events.jsonl`. Prefer durable configured handlers over polling or `docket events --follow`.
 
 ```yaml
 handlers:
@@ -241,7 +242,7 @@ docket plugin config set NAME [--scope instance|workspace|status] [--status S] K
 
 ```sh
 docket events [--since N] --json
-docket watch [--from-start]
+docket events --follow [--from-start]                # JSONL stream until interrupted
 docket inbox [--actor ACTOR] [--all] [--mark-read] --json
 docket inbox [--actor ACTOR] [--all] --peek --json   # durable read; then:
 docket inbox ack [--actor ACTOR] [--all] CHECKPOINT

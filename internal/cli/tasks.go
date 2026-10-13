@@ -18,7 +18,7 @@ import (
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Ensure this directory is a registered Docket workspace",
+		Short: "Create or register the workspace in this directory",
 		Long: `init is idempotent: it creates .docket/ when absent and registers the
 workspace with the machine-wide service when unregistered. Re-running it is a
 successful no-op; it never creates duplicate registrations.`,
@@ -54,7 +54,10 @@ func newNewCmd() *cobra.Command {
 	var labels []string
 	cmd := &cobra.Command{
 		Use:   "new --title TITLE",
-		Short: "Create a task and print its new ID",
+		Short: "Create a task and print its ID",
+		Long: `Prints only the new TASK-ID, so it can be captured in a shell variable. The
+task starts in the first configured status unless --status is given. Use
+--desc-file for multiline descriptions ('-' reads stdin).`,
 		Example: `  docket new --title "Fix login cache"
   docket new --title "Fix login cache" --label bug --status ready
   docket new --title "Investigate" --desc-file ./brief.md --project PROJ-0001
@@ -102,7 +105,11 @@ func newListCmd() *cobra.Command {
 	var status, label, project, assignee string
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List tasks, with optional exact filters",
+		Short: "List tasks, optionally filtered",
+		Long: `Filters match exactly and combine with AND. On a terminal the table is
+aligned and long titles are shortened; piped output keeps full titles in
+tab-separated columns (ID STATUS TITLE LABELS WAITING). --json returns task
+summaries without descriptions or history.`,
 		Example: `  docket list
   docket list --status in-review
   docket list --label bug --assignee researcher
@@ -151,10 +158,11 @@ func newShowCmd() *cobra.Command {
 	var options bundle.Options
 	cmd := &cobra.Command{
 		Use:   "show [TASK-ID]",
-		Short: "Show the complete context needed to understand or resume a task",
-		Long: `Show prints the task description, comments, attachments, project, and
-resolved relationships. TASK-ID may be omitted only when an optional session
-pointer is attached; explicit IDs are recommended for scripts and agents.
+		Short: "Show a task's full context: state, history, and attachments",
+		Long: `Show prints everything needed to understand or resume a task: description,
+active wait, references, attachments, project, resolved relationships, and an
+activity timeline of comments and events. TASK-ID may be omitted only when a
+session pointer is attached; pass it explicitly in scripts and agents.
 
 Views bound how much history is returned:
   full     everything (default); the established JSON contract
@@ -232,14 +240,6 @@ func printContext(ws *workspace.Workspace, id string, options bundle.Options) er
 	return nil
 }
 
-func newContextCmd() *cobra.Command {
-	cmd := newShowCmd()
-	cmd.Use = "context [TASK-ID]"
-	cmd.Short = "Compatibility alias for show"
-	cmd.Long = "This compatibility command remains for existing scripts. New usage should call `docket show [TASK-ID] --comments N`."
-	return cmd
-}
-
 func newEditCmd() *cobra.Command {
 	var title, desc, descFile, assignee string
 	cmd := &cobra.Command{
@@ -307,10 +307,10 @@ when an optional session pointer is attached. Use --assignee "" to clear it.`,
 func newMoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "move [TASK-ID] STATUS",
-		Short: "Move a task to a configured status lane",
+		Short: "Move a task to another status",
 		Long: `With two arguments, the first is TASK-ID and the second is STATUS. With
-one argument, it is STATUS for the optional task attached to this session.
-Explicit IDs are recommended for scripts and agents.`,
+one argument, it is STATUS for the task attached to this session. Valid
+statuses come from .docket/config.yaml; an unknown status error lists them.`,
 		Example: `  docket move TASK-0007 in-progress
   docket move TASK-0007 done
 
@@ -350,7 +350,7 @@ func newLabelCmd() *cobra.Command {
 	var add, remove []string
 	cmd := &cobra.Command{
 		Use:   "label [TASK-ID]",
-		Short: "Add or remove task labels",
+		Short: "Add or remove labels on a task",
 		Long: `Repeat --add or --remove to change several labels. TASK-ID may be omitted
 only when an optional session pointer is attached.`,
 		Example: `  docket label TASK-0007 --add bug

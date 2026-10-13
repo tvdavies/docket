@@ -17,10 +17,16 @@ import (
 func newPluginCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "plugin",
-		Short: "Install, enable and configure trusted Docket plugins",
+		Short: "Install, enable, and configure plugins",
 		Long: `Plugins contribute hooks, statuses, scoped configuration and a CLI command
-to the workspaces that enable them. Docket runs the hooks and CLI; it does not
-serve plugin UI or launch plugin services.`,
+to the workspaces that enable them. Installation is per machine; enabling is
+per workspace. Docket runs the hooks and CLI; it does not serve plugin UI or
+launch plugin services. Only install plugins you trust: their hooks run with
+your permissions.`,
+		Example: `  docket plugin add ~/dev/my-plugin
+  docket plugin add acme/docket-dispatch@v1.2.0
+  docket plugin enable my-plugin --set key=value
+  docket plugin list`,
 	}
 	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd(),
 		newPluginConfigCmd(), newPluginValidateCmd())
@@ -30,7 +36,14 @@ serve plugin UI or launch plugin services.`,
 func newPluginAddCmd() *cobra.Command {
 	var name string
 	command := &cobra.Command{
-		Use: "add PATH|OWNER/REPO[@REF]", Short: "Install a linked local plugin or managed git plugin", Args: cobra.ExactArgs(1),
+		Use:   "add PATH|OWNER/REPO[@REF]",
+		Short: "Install a plugin from a local directory or a git repository",
+		Long: `A local PATH is linked in place, so edits take effect without reinstalling.
+OWNER/REPO[@REF] clones a managed copy that "docket plugin update" can move
+forward. Installing does not enable the plugin in any workspace.`,
+		Example: `  docket plugin add ~/dev/my-plugin
+  docket plugin add acme/docket-dispatch@v1.2.0 --name dispatch`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			entry, err := pluginmgr.Add(args[0], name, Version)
 			if err != nil {
@@ -53,7 +66,10 @@ func newPluginAddCmd() *cobra.Command {
 
 func newPluginListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "list", Short: "List instance-installed plugins", Args: cobra.NoArgs,
+		Use:     "list",
+		Short:   "List plugins installed on this machine",
+		Example: "  docket plugin list\n  docket plugin list --json",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			config, err := registry.Load()
 			if err != nil {
@@ -86,7 +102,10 @@ func newPluginListCmd() *cobra.Command {
 
 func newPluginRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "remove NAME", Short: "Unregister a plugin", Args: cobra.ExactArgs(1),
+		Use:     "remove NAME",
+		Short:   "Uninstall a plugin from this machine",
+		Example: "  docket plugin remove my-plugin",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			removed, err := pluginmgr.Remove(args[0])
 			if err != nil {
@@ -106,7 +125,11 @@ func newPluginRemoveCmd() *cobra.Command {
 
 func newPluginUpdateCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "update [NAME]", Short: "Validate and atomically update managed git plugins", Args: cobra.MaximumNArgs(1),
+		Use:     "update [NAME]",
+		Short:   "Update managed git plugins, validating before switching",
+		Long:    "Without NAME, updates every managed git plugin. Linked local plugins are skipped. A plugin whose new version fails validation is left unchanged.",
+		Example: "  docket plugin update\n  docket plugin update dispatch",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := ""
 			if len(args) == 1 {
@@ -139,7 +162,12 @@ func newPluginEnableCmd() *cobra.Command {
 	var expectHash string
 	var receiptDir string
 	command := &cobra.Command{
-		Use: "enable NAME", Short: "Enable an installed plugin for a workspace", Args: cobra.ExactArgs(1),
+		Use:   "enable NAME",
+		Short: "Enable an installed plugin in this workspace",
+		Example: `  docket plugin enable my-plugin
+  docket plugin enable my-plugin --set key=value
+  docket plugin enable dispatch --adopt-cursors`,
+		Args: cobra.ExactArgs(1),
 		Long: `Enable an installed plugin for a workspace.
 
 A plain enable seeds missing plugin-handler cursors at the current log end.
@@ -195,7 +223,10 @@ func newPluginDisableCmd() *cobra.Command {
 	var expectHash string
 	var receiptDir string
 	command := &cobra.Command{
-		Use: "disable NAME", Short: "Disable a plugin without deleting its cursors", Args: cobra.ExactArgs(1),
+		Use:     "disable NAME",
+		Short:   "Disable a plugin in this workspace, keeping its cursors",
+		Example: "  docket plugin disable my-plugin",
+		Args:    cobra.ExactArgs(1),
 		Long: `Disable a plugin for a workspace.
 
 A plain disable removes the plugin declaration and keeps its cursors. It is an
@@ -306,12 +337,18 @@ func parseSettings(entries []string) (map[string]any, error) {
 	return result, nil
 }
 
+// builtinCommand reports whether name is a builtin command or alias, which
+// always wins over a plugin CLI or a docket-NAME executable. It reads the real
+// command tree so the reserved set cannot drift from the commands that exist.
 func builtinCommand(name string) bool {
-	_, exists := map[string]struct{}{
-		"__lua-hook": {}, "attach": {}, "attach-file": {}, "comment": {}, "completion": {}, "context": {},
-		"detach": {}, "docs": {}, "edit": {}, "events": {}, "files": {}, "help": {}, "inbox": {}, "init": {}, "label": {},
-		"link": {}, "list": {}, "move": {}, "new": {}, "plugin": {}, "project": {}, "reference": {}, "reindex": {},
-		"guide": {}, "ref": {}, "run": {}, "serve": {}, "service": {}, "session": {}, "show": {}, "skill": {}, "unlink": {}, "wait": {}, "watch": {}, "workspace": {},
-	}[name]
-	return exists
+	switch name {
+	case "help", "completion": // added by cobra only when a command runs
+		return true
+	}
+	for _, command := range newRootCmd().Commands() {
+		if command.Name() == name || command.HasAlias(name) {
+			return true
+		}
+	}
+	return false
 }

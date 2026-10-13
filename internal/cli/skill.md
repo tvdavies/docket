@@ -40,7 +40,7 @@ Keep the status unchanged while blocked on something external; record one wait i
 
 ```sh
 docket wait set TASK-0007 --kind review --reason "Awaiting security review"
-docket wait show TASK-0007 --json               # {"id": "wait-...", ...}
+docket show TASK-0007 --view current --json | jq -r .wait.id   # WAIT-ID
 docket wait resolve TASK-0007 --wait-id WAIT-ID --result approved
 ```
 

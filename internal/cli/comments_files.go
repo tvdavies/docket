@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/store"
-	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
@@ -16,7 +15,7 @@ func newCommentCmd() *cobra.Command {
 	var fromFile string
 	cmd := &cobra.Command{
 		Use:   "comment [TASK-ID] [TEXT]",
-		Short: "Append a durable, immutable comment to a task",
+		Short: "Add an immutable comment to a task",
 		Long: `Comments should capture decisions, evidence, dead ends, and handoff context.
 Quote multi-word TEXT as one shell argument, or use --file. TASK-ID may be omitted
 only when an optional session pointer is attached.`,
@@ -73,13 +72,15 @@ func newAttachFileCmd() *cobra.Command {
 	var caption string
 	cmd := &cobra.Command{
 		Use:   "attach-file [TASK-ID] PATH",
-		Short: "Copy a file into a task's durable attachments",
+		Short: "Copy a file into a task's attachments",
 		Long: `The source file is copied into the task folder and recorded in its
-attachment manifest. With one argument, PATH applies to the optional attached
-task; explicit TASK-ID plus PATH is recommended for automation.`,
+attachment manifest. "docket show" lists a task's attachments.
+
+With one argument, PATH applies to the task attached to this session; pass
+TASK-ID explicitly in scripts and agents.`,
 		Example: `  docket attach-file TASK-0007 ./repro.log
   docket attach-file TASK-0007 ./screenshot.png --caption "Failure state"
-  docket files TASK-0007`,
+  docket show TASK-0007 --view current   # lists attachments`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -113,52 +114,6 @@ task; explicit TASK-ID plus PATH is recommended for automation.`,
 	}
 	cmd.Flags().StringVar(&caption, "caption", "", "caption for the attachment")
 	return cmd
-}
-
-func newFilesCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:     "files [TASK-ID]",
-		Short:   "List files attached to a task",
-		Long:    "TASK-ID may be omitted only when an optional session pointer is attached.",
-		Example: "  docket files TASK-0007\n  docket files TASK-0007 --json",
-		Args:    cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ws, err := openWS()
-			if err != nil {
-				return err
-			}
-			id, err := resolveTaskID(ws, firstArg(args))
-			if err != nil {
-				return err
-			}
-			t, err := task.Load(ws, id)
-			if err != nil {
-				return err
-			}
-			atts, err := t.Attachments()
-			if err != nil {
-				return err
-			}
-			if flagJSON {
-				if atts == nil {
-					atts = []*task.Attachment{}
-				}
-				return printJSON(atts)
-			}
-			if len(atts) == 0 {
-				fmt.Println("No attachments.")
-				return nil
-			}
-			for _, a := range atts {
-				line := fmt.Sprintf("attachments/%s\t%s\t%d bytes", a.File, a.Mime, a.Bytes)
-				if a.Caption != "" {
-					line += "\t" + a.Caption
-				}
-				fmt.Println(line)
-			}
-			return nil
-		},
-	}
 }
 
 // splitIDAndText interprets comment args: if the first arg parses as a task id

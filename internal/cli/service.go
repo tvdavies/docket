@@ -17,7 +17,7 @@ func newRunCmd() *cobra.Command {
 	var all, once bool
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Run the headless event runner: watch workspaces and deliver hooks",
+		Short: "Run the event runner in the foreground to deliver hooks",
 		Long: `run watches workspaces and drains every configured handler, including
 "delivery: service" hooks that mutating commands leave for the runner. It
 opens no network listener.
@@ -46,33 +46,6 @@ remove", or let a long-running "docket run --all" prune it.
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "run every workspace in the machine-local registry")
 	cmd.Flags().BoolVar(&once, "once", false, "drain pending events once and exit")
-	return cmd
-}
-
-// newServeCmd keeps "serve" working for existing unit files and scripts for
-// one transition. It runs the same headless runner; the board, API and
-// listen flags are gone.
-func newServeCmd() *cobra.Command {
-	var all bool
-	var listen string
-	var allowRemote bool
-	cmd := &cobra.Command{
-		Use:        "serve",
-		Short:      "Deprecated alias for \"docket run\" (no web board or HTTP API)",
-		Deprecated: "use \"docket run\"; Docket no longer serves a web board or HTTP API",
-		Args:       cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if listen != "" || allowRemote {
-				return fmt.Errorf("--listen and --allow-remote are no longer supported: Docket no longer serves a web board or HTTP API; run \"docket run%s\" for hook delivery", map[bool]string{true: " --all"}[all])
-			}
-			return runEventRunner(cmd, all, false)
-		},
-	}
-	cmd.Flags().BoolVar(&all, "all", false, "run every workspace in the machine-local registry")
-	cmd.Flags().StringVar(&listen, "listen", "", "removed; rejected with an explanation")
-	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, "removed; rejected with an explanation")
-	_ = cmd.Flags().MarkHidden("listen")
-	_ = cmd.Flags().MarkHidden("allow-remote")
 	return cmd
 }
 
@@ -138,15 +111,15 @@ func runEventRunner(cmd *cobra.Command, all, once bool) error {
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "service",
-		Short: "Install and control the optional systemd user unit for the event runner",
+		Short: "Run the event runner as a systemd user service",
 		Long: `There is one Docket user service per machine, not one per workspace. It
 runs ` + "`docket run --all`" + ` in the background so "delivery: service" hooks
 are delivered without a foreground process. It is optional: containers and
 other supervisors can run ` + "`docket run --all`" + ` directly, and schedulers can
 call ` + "`docket run --once --all`" + `.
 
-"install" rewrites the unit, so re-run it after upgrading from a release whose
-unit ran "serve --all".`,
+Re-run "install" after upgrading from a release whose unit ran "serve --all":
+the "serve" command has been removed and the old unit will fail to start.`,
 		Example: `  docket service install
   docket service start
   docket service status

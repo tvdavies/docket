@@ -65,9 +65,10 @@ docket show "$ID"       # dossier + waits + references + sessions + activity
 - [Authoring plugins](docs/plugins/authoring.md) — build a headless plugin
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
 - [Agent guide (full)](docs/agent-guide.md) — the complete agent reference behind `docket skill --full`
-- [Migrating to the headless CLI](docs/migration-headless.md) — removed web features and upgrade steps
+- [Migrating to the headless CLI](docs/migration-headless.md) — removed web features, removed commands, and upgrade steps
 
-Run `docket COMMAND --help` for exact local usage and examples, or `docket skill`
+Run `docket COMMAND --help` for exact local usage and examples (or read the
+man page: `docket man | man -l -`; `make man` writes one page per command), or `docket skill`
 for a short guide suitable for an agent harness. It points to `docket docs TOPIC`
 for Lua hooks, plugins, and event integration; `docket skill --full` prints
 everything in one document.
@@ -141,8 +142,8 @@ react through:
 - `docket inbox --mark-read --json` — **poll**: unread events on tasks assigned to
   you, tracked by a per-actor cursor. Durable consumers use `--peek` and
   `docket inbox ack CHECKPOINT` instead (see [docs/inbox.md](docs/inbox.md)).
-- `docket watch` — **stream**: emits each new event as a JSON line for one
-  workspace; it remains a diagnostic primitive rather than the daemon.
+- `docket events --follow` — **stream**: emits each new event as a JSON line
+  for one workspace; it remains a diagnostic primitive rather than the daemon.
 - `docket run [--all] [--once]` — **runner**: watches registered workspaces and
   drains handlers for events written outside a synchronous CLI mutation.
 - `docket events [--since N]` — the raw log.
@@ -202,7 +203,7 @@ Each workspace is text-first and git-trackable:
 ```
 
 The filesystem is the source of truth. `.index/` (if present) is a rebuildable
-cache (`docket reindex`), never authoritative. Machine-local handler cursors
+cache (`docket workspace reindex`), never authoritative. Machine-local handler cursors
 live under the gitignored `.cursors/handlers/` directory.
 
 ## License

@@ -82,14 +82,6 @@ func TestRunOnceDeliversServiceHooksAndReportsFailure(t *testing.T) {
 	}
 }
 
-func TestServeAliasRejectsRemovedListenFlags(t *testing.T) {
-	dir, _ := handledProject(t, "#!/bin/sh\ncat >/dev/null\n")
-	_, stderr, err := runDocket(t, dir, "serve", "--listen", "127.0.0.1:7463")
-	if err == nil || !strings.Contains(stderr, "no longer serves a web board") {
-		t.Fatalf("serve --listen: err=%v stderr=%q", err, stderr)
-	}
-}
-
 // The foreground runner delivers events as they are appended and exits
 // cleanly on SIGTERM, terminating an in-flight hook rather than waiting for it.
 func TestRunForegroundDeliversAndStopsOnSignal(t *testing.T) {
