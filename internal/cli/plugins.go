@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 
@@ -354,14 +355,35 @@ func parseSettings(entries []string) (map[string]any, error) {
 // always wins over a plugin CLI or a docket-NAME executable. It reads the real
 // command tree so the reserved set cannot drift from the commands that exist.
 func builtinCommand(name string) bool {
-	switch name {
-	case "help", "completion": // added by cobra only when a command runs
-		return true
+	builtinNamesOnce.Do(func() { builtinNames = collectBuiltinNames() })
+	return builtinNames[name]
+}
+
+// collectBuiltinNames builds the reserved set. Building a root command rebinds
+// the package-level global flags to their defaults, so the parsed values are
+// saved and restored around it; otherwise a check made mid-command would
+// silently drop --json, -w, and friends.
+var (
+	builtinNamesOnce sync.Once
+	builtinNames     map[string]bool
+)
+
+func collectBuiltinNames() map[string]bool {
+	jsonFlag, compact, sessionFlag, workspaceFlag := flagJSON, flagCompact, flagSession, flagWorkspace
+	defer func() {
+		flagJSON, flagCompact, flagSession, flagWorkspace = jsonFlag, compact, sessionFlag, workspaceFlag
+	}()
+	// help, completion and the shell-completion helpers are added by cobra
+	// only when a command runs.
+	names := map[string]bool{
+		"help": true, "completion": true,
+		cobra.ShellCompRequestCmd: true, cobra.ShellCompNoDescRequestCmd: true,
 	}
 	for _, command := range newRootCmd().Commands() {
-		if command.Name() == name || command.HasAlias(name) {
-			return true
+		names[command.Name()] = true
+		for _, alias := range command.Aliases {
+			names[alias] = true
 		}
 	}
-	return false
+	return names
 }

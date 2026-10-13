@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuiltinAliasesAreReservedFromPluginPassthrough(t *testing.T) {
-	for _, name := range []string{"reference", "ref", "skill", "guide", "man", "__lua-hook", "help", "completion", "events", "link"} {
+	for _, name := range []string{"reference", "ref", "skill", "guide", "man", "__lua-hook", "help", "completion", "__complete", "__completeNoDesc", "events", "link"} {
 		if !builtinCommand(name) {
 			t.Fatalf("builtin command or alias %q is not reserved", name)
 		}
