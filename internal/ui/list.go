@@ -22,6 +22,7 @@ func (t Theme) TaskTable(tasks []*task.Task, width int) string {
 		widths[i] = lipgloss.Width(header)
 	}
 	for _, value := range tasks {
+		value = SanitizeTask(value)
 		r := row{
 			id:     value.ID,
 			status: "● " + value.Status,

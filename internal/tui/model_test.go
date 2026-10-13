@@ -343,3 +343,163 @@ func TestRefreshMessageReloadsSnapshot(t *testing.T) {
 		t.Fatalf("refresh did not reload:\n%s", out)
 	}
 }
+
+func TestBoardNeutralisesInjectedControlSequences(t *testing.T) {
+	const evil = "\x1b]0;pwned\x07\x1b[2J\r"
+	src := newFake()
+	src.snap.Name = "demo" + evil
+	src.snap.Tasks[1].Title = "Write docs" + evil
+	src.snap.Tasks[1].Labels = []string{"l" + evil}
+	src.snap.Tasks[1].Assignee = "eve" + evil
+	m := loaded(t, src, 140, 30)
+	for _, out := range []string{m.render(), press(t, m, "enter").render(), press(t, m, "m").render()} {
+		for _, bad := range []string{"\x1b]", "\x07", "[2J", "\r", "pwned"} {
+			if strings.Contains(out, bad) {
+				t.Fatalf("board output contains %q:\n%q", bad, out)
+			}
+		}
+	}
+	if !strings.Contains(screen(m), "Write docs") {
+		t.Fatalf("sanitised title missing:\n%s", screen(m))
+	}
+	if src.snap.Tasks[1].Title != "Write docs"+evil {
+		t.Fatal("rendering modified the snapshot")
+	}
+}
+
+// replaceSnapshot delivers a refreshed snapshot, as a watcher-triggered
+// reload would while an overlay is open.
+func replaceSnapshot(t *testing.T, m Model, snap Snapshot) Model {
+	t.Helper()
+	m, cmd := send(t, m, snapshotMsg{snap: snap})
+	return drive(t, m, cmd)
+}
+
+func TestMoveOverlayKeepsItsTargetAcrossRefresh(t *testing.T) {
+	src := newFake()
+	m := loaded(t, src, 120, 40)
+	m = press(t, m, "m") // TASK-0002, the first backlog card
+	if m.target != "TASK-0002" {
+		t.Fatalf("target = %q", m.target)
+	}
+	// A refresh puts another task first in the lane: the selection moves
+	// to it, but the open picker must still act on TASK-0002.
+	snap := newFake().snap
+	snap.Tasks = append([]*task.Task{{ID: "TASK-0009", Title: "Newcomer", Status: "backlog"}}, snap.Tasks...)
+	m = replaceSnapshot(t, m, snap)
+	m.rows["backlog"] = 0
+	if m.selectedID() != "TASK-0009" {
+		t.Fatalf("selection = %s", m.selectedID())
+	}
+	m = press(t, m, "j", "enter")
+	if len(src.moved) != 1 || src.moved[0] != [2]string{"TASK-0002", "in-progress"} {
+		t.Fatalf("moved = %v", src.moved)
+	}
+}
+
+func TestMoveOverlayRefusesWhenTargetDisappears(t *testing.T) {
+	src := newFake()
+	m := loaded(t, src, 120, 40)
+	m = press(t, m, "m")
+	snap := newFake().snap
+	snap.Tasks = slicesDelete(snap.Tasks, "TASK-0002")
+	m = replaceSnapshot(t, m, snap)
+	m = press(t, m, "j", "enter")
+	if len(src.moved) != 0 {
+		t.Fatalf("moved another task: %v", src.moved)
+	}
+	if m.statusOK || !strings.Contains(m.status, "TASK-0002 no longer exists") {
+		t.Fatalf("status = %q ok=%v", m.status, m.statusOK)
+	}
+}
+
+func TestCommentOverlayKeepsItsTargetAndRefusesWhenItDisappears(t *testing.T) {
+	src := newFake()
+	m := loaded(t, src, 120, 40)
+	m = press(t, m, "c", "h", "i") // on TASK-0002
+	snap := newFake().snap
+	snap.Tasks = append([]*task.Task{{ID: "TASK-0009", Title: "Newcomer", Status: "backlog"}}, snap.Tasks...)
+	m = replaceSnapshot(t, m, snap)
+	m.rows["backlog"] = 0
+	m = press(t, m, "ctrl+s")
+	if len(src.comments) != 1 || src.comments[0] != [2]string{"TASK-0002", "hi"} {
+		t.Fatalf("comments = %v", src.comments)
+	}
+
+	src.snap = snap
+	m = replaceSnapshot(t, m, snap)
+	m.rows["backlog"] = 0
+	m = press(t, m, "c", "y", "o") // on TASK-0009
+	if m.target != "TASK-0009" {
+		t.Fatalf("target = %q", m.target)
+	}
+	snap.Tasks = slicesDelete(snap.Tasks, "TASK-0009")
+	m = replaceSnapshot(t, m, snap)
+	m = press(t, m, "ctrl+s")
+	if len(src.comments) != 1 {
+		t.Fatalf("commented on another task: %v", src.comments)
+	}
+	if m.mode != modeComment || m.comment.Value() != "yo" || !strings.Contains(m.status, "TASK-0009 no longer exists") {
+		t.Fatalf("mode=%v value=%q status=%q", m.mode, m.comment.Value(), m.status)
+	}
+}
+
+func TestMovePickerSurvivesStatusesShrinkingOnRefresh(t *testing.T) {
+	src := newFake()
+	m := loaded(t, src, 120, 40)
+	m = press(t, m, "m", "j", "j")
+	if m.moveTo != 2 {
+		t.Fatalf("cursor = %d", m.moveTo)
+	}
+	snap := newFake().snap
+	snap.Statuses = []string{"backlog"}
+	m = replaceSnapshot(t, m, snap)
+	if m.mode != modeMove || m.moveTo != 0 {
+		t.Fatalf("not clamped: mode=%v cursor=%d", m.mode, m.moveTo)
+	}
+	_ = m.render()
+	m = press(t, m, "enter") // TASK-0002 is already in backlog: a no-op
+	if len(src.moved) != 0 || m.mode != modeBoard {
+		t.Fatalf("moved=%v mode=%v", src.moved, m.mode)
+	}
+
+	m = press(t, m, "m")
+	snap.Statuses = nil
+	m = replaceSnapshot(t, m, snap)
+	if m.mode != modeBoard || !strings.Contains(m.status, "No status lanes") {
+		t.Fatalf("empty statuses: mode=%v status=%q", m.mode, m.status)
+	}
+	// A confirm racing the refresh must not panic either.
+	m.mode, m.moveTo = modeMove, 3
+	m = press(t, m, "enter")
+	if len(src.moved) != 0 || m.statusOK {
+		t.Fatalf("moved=%v status=%q", src.moved, m.status)
+	}
+}
+
+func TestPastedFilterTextFiltersTheBoard(t *testing.T) {
+	m := loaded(t, newFake(), 140, 30)
+	m = press(t, m, "/")
+	m, cmd := send(t, m, tea.PasteMsg{Content: "ops"})
+	m = drive(t, m, cmd)
+	if m.query != "ops" {
+		t.Fatalf("query = %q", m.query)
+	}
+	total := 0
+	for _, c := range m.columns {
+		total += len(c.tasks)
+	}
+	if total != 1 || m.selectedID() != "TASK-0003" {
+		t.Fatalf("filtered to %d tasks, selected %s", total, m.selectedID())
+	}
+}
+
+func slicesDelete(tasks []*task.Task, id string) []*task.Task {
+	var out []*task.Task
+	for _, t := range tasks {
+		if t.ID != id {
+			out = append(out, t)
+		}
+	}
+	return out
+}

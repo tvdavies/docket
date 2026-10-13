@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -25,10 +28,11 @@ var flagNoPager bool
 // maxReadableWidth keeps prose comfortable on very wide terminals.
 const maxReadableWidth = 110
 
-// stdinIsTerminal reports whether stdin is an interactive terminal.
+// stdinIsTerminal reports whether stdin is an interactive terminal. It asks
+// the terminal driver (isatty) rather than checking for a character device,
+// which /dev/null also is.
 func stdinIsTerminal() bool {
-	info, err := os.Stdin.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(os.Stdin.Fd())
 }
 
 // terminalSize returns stdout's size, or 80x24 when it cannot be read.
@@ -92,16 +96,24 @@ func writeProfiled(w io.Writer, profile colorprofile.Profile, text string) {
 // does not fit on one screen. Paging is skipped with --no-pager, for
 // TERM=dumb, and when PAGER is set to an empty string or "cat".
 func page(content string, profile colorprofile.Profile, height int, noPager bool) error {
+	return pageTo(os.Stdout, content, profile, height, noPager)
+}
+
+// pageTo is page writing to out. When the pager cannot be run (not
+// installed, not executable) the content is written to out directly, so it
+// is never lost. Quitting the pager early is not an error; a pager that
+// fails is.
+func pageTo(out io.Writer, content string, profile colorprofile.Profile, height int, noPager bool) error {
 	var rendered bytes.Buffer
 	writeProfiled(&rendered, profile, content)
 	pager, usePager := pagerCommand()
-	if noPager || !usePager || os.Getenv("TERM") == "dumb" || strings.Count(rendered.String(), "\n") < height {
-		_, err := os.Stdout.Write(rendered.Bytes())
+	if noPager || !usePager || os.Getenv("TERM") == "dumb" || strings.Count(rendered.String(), "\n") < height || !pagerAvailable(pager) {
+		_, err := out.Write(rendered.Bytes())
 		return err
 	}
 	cmd := pagerProcess(pager)
-	cmd.Stdin = &rendered
-	cmd.Stdout = os.Stdout
+	cmd.Stdin = bytes.NewReader(rendered.Bytes())
+	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 	if _, ok := os.LookupEnv("LESS"); !ok {
@@ -109,12 +121,46 @@ func page(content string, profile colorprofile.Profile, height int, noPager bool
 		cmd.Env = append(cmd.Env, "LESS=FRX")
 	}
 	if err := cmd.Start(); err != nil {
-		_, err := os.Stdout.Write(rendered.Bytes())
+		_, err := out.Write(rendered.Bytes())
 		return err
 	}
-	// A pager quit early (q in less) is not an error for `show`.
-	_ = cmd.Wait()
-	return nil
+	return pagerResult(cmd.Wait(), pager, out, rendered.Bytes())
+}
+
+// pagerResult interprets the pager's exit. The shell exits 126 or 127 when
+// it cannot run the pager, which therefore printed nothing: the content goes
+// to out directly. A pager closing its input early (q in less) or ended by a
+// signal is a normal way to stop reading.
+func pagerResult(err error, pager string, out io.Writer, content []byte) error {
+	if err == nil || errors.Is(err, syscall.EPIPE) {
+		return nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		switch code := exit.ExitCode(); code {
+		case -1: // terminated by a signal
+			return nil
+		case 126, 127:
+			_, werr := out.Write(content)
+			return werr
+		default:
+			return fmt.Errorf("pager %q exited with status %d", pager, code)
+		}
+	}
+	return fmt.Errorf("pager %q: %w", pager, err)
+}
+
+// pagerAvailable reports whether the pager's program can be found. Leading
+// VAR=value assignments are skipped, as the shell would.
+func pagerAvailable(pager string) bool {
+	for _, field := range strings.Fields(pager) {
+		if strings.Contains(field, "=") && !strings.ContainsAny(field, "/") {
+			continue
+		}
+		_, err := exec.LookPath(field)
+		return err == nil
+	}
+	return false
 }
 
 // pagerCommand returns the pager to run and whether paging is enabled.

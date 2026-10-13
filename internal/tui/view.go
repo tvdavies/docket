@@ -31,7 +31,7 @@ func (m Model) render() string {
 	}
 	if !m.loaded {
 		if m.loadErr != nil {
-			return m.theme.Fg(m.theme.Danger).Render("Could not load the board: "+m.loadErr.Error()) + "\n\n" + m.theme.Dim("press r to retry or q to quit")
+			return m.theme.Fg(m.theme.Danger).Render("Could not load the board: "+ui.SanitizeLine(m.loadErr.Error())) + "\n\n" + m.theme.Dim("press r to retry or q to quit")
 		}
 		return m.theme.Dim("Loading…")
 	}
@@ -62,9 +62,9 @@ func (m Model) footer() string {
 		if !m.statusOK {
 			color = m.theme.Danger
 		}
-		lines = append(lines, m.theme.Fg(color).Render(ui.Truncate(m.status, m.width)))
+		lines = append(lines, m.theme.Fg(color).Render(ui.Truncate(ui.SanitizeLine(m.status), m.width)))
 	} else if m.loadErr != nil {
-		lines = append(lines, m.theme.Fg(m.theme.Danger).Render(ui.Truncate("reload failed: "+m.loadErr.Error(), m.width)))
+		lines = append(lines, m.theme.Fg(m.theme.Danger).Render(ui.Truncate("reload failed: "+ui.SanitizeLine(m.loadErr.Error()), m.width)))
 	}
 	lines = append(lines, m.help.View(m.keys.help(m.mode)))
 	return strings.Join(lines, "\n")
@@ -95,7 +95,7 @@ func (m Model) boardView(height int) string {
 
 	title := th.Fg(th.Accent).Bold(true).Render("docket")
 	if m.snap.Name != "" {
-		title += th.Dim(" · " + m.snap.Name)
+		title += th.Dim(" · " + ui.SanitizeLine(m.snap.Name))
 	}
 	shown, total := 0, len(m.snap.Tasks)
 	for _, c := range m.columns {
@@ -148,7 +148,7 @@ func (m Model) laneView(index, width, height int) string {
 		count = fmt.Sprintf(" %d/%d", row+1, len(c.tasks))
 	}
 	headerStyle := th.Fg(color).Bold(true)
-	header := headerStyle.Render(ui.Truncate("● "+c.status, width-lipgloss.Width(count))) + th.Dim(count)
+	header := headerStyle.Render(ui.Truncate("● "+ui.SanitizeLine(c.status), width-lipgloss.Width(count))) + th.Dim(count)
 	ruleChar := "─"
 	if active {
 		ruleChar = "━"
@@ -171,6 +171,8 @@ func (m Model) laneView(index, width, height int) string {
 
 func (m Model) card(t *task.Task, width int, selected bool) string {
 	th := m.theme
+	// Draw a sanitised copy; actions keep using the raw task.
+	t = ui.SanitizeTask(t)
 	inner := max(width-2, 4) // border + padding
 	id := th.Fg(th.Muted).Render(t.ID)
 	if t.Wait != nil {
@@ -210,9 +212,9 @@ func (m Model) card(t *task.Task, width int, selected bool) string {
 func (m Model) movePicker() string {
 	th := m.theme
 	var lines []string
-	lines = append(lines, th.Bold("Move "+m.actionTarget()+" to"), "")
+	lines = append(lines, th.Bold("Move "+ui.SanitizeLine(m.target)+" to"), "")
 	current := ""
-	if t := m.taskByID(m.actionTarget()); t != nil {
+	if t := m.taskByID(m.target); t != nil {
 		current = t.Status
 	}
 	for i, status := range m.snap.Statuses {
@@ -220,7 +222,7 @@ func (m Model) movePicker() string {
 		if i == m.moveTo {
 			cursor = th.Fg(th.Accent).Render("› ")
 		}
-		line := cursor + th.StatusBadge(status)
+		line := cursor + th.StatusBadge(ui.SanitizeLine(status))
 		if status == current {
 			line += th.Dim("  (current)")
 		}
@@ -235,7 +237,7 @@ func (m Model) movePicker() string {
 
 func (m Model) commentBox() string {
 	th := m.theme
-	head := th.Bold("Comment on " + m.actionTarget())
+	head := th.Bold("Comment on " + ui.SanitizeLine(m.target))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(th.Accent).
@@ -255,7 +257,7 @@ func (m Model) detailWidth() int {
 // detailChrome renders the fixed header and tab bar above the viewport.
 func (m Model) detailChrome() string {
 	if m.detail == nil {
-		return m.theme.Dim("Loading " + m.detailID + "…")
+		return m.theme.Dim("Loading " + ui.SanitizeLine(m.detailID) + "…")
 	}
 	value := ui.FromBundle(m.detail)
 	header := m.renderer().Header(value)

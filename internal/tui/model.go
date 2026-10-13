@@ -82,12 +82,15 @@ type Model struct {
 	col  int
 	rows map[string]int
 
-	mode     mode
-	overlay  mode // board or detail: where move/comment return to
-	filter   textinput.Model
-	query    string
-	comment  textarea.Model
-	moveTo   int
+	mode    mode
+	overlay mode // board or detail: where move/comment return to
+	filter  textinput.Model
+	query   string
+	comment textarea.Model
+	moveTo  int
+	// target is the task an open move or comment overlay acts on, fixed
+	// when the overlay opens so a refresh cannot retarget it.
+	target   string
 	status   string
 	statusOK bool
 
@@ -162,8 +165,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.loadErr = nil
 		selected := m.selectedID()
+		var choice string
+		if m.mode == modeMove && m.moveTo >= 0 && m.moveTo < len(m.snap.Statuses) {
+			choice = m.snap.Statuses[m.moveTo]
+		}
 		m.snap, m.loaded = msg.snap, true
 		m.rebuild(selected)
+		if m.mode == modeMove {
+			m.reconcileMove(choice)
+		}
 		if m.detailID != "" {
 			return m, m.loadDetail(m.detailID)
 		}
@@ -213,6 +223,7 @@ func (m Model) forward(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeFilter:
 		m.filter, cmd = m.filter.Update(msg)
+		m.syncQuery()
 	case modeComment:
 		m.comment, cmd = m.comment.Update(msg)
 	case modeDetail:
@@ -358,14 +369,36 @@ func (m Model) filterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.filter, cmd = m.filter.Update(msg)
+	m.syncQuery()
+	return m, cmd
+}
+
+// syncQuery applies the filter input's value to the board. It runs after
+// every filter input update, typed or pasted.
+func (m *Model) syncQuery() {
 	if value := m.filter.Value(); value != m.query {
 		m.query = value
 		m.rebuild(m.selectedID())
 	}
-	return m, cmd
 }
 
-// actionTarget is the task move and comment act on.
+// reconcileMove keeps the move picker valid after a refresh: it reselects
+// the previously highlighted status by name, clamps otherwise, and closes the
+// picker when no lanes remain.
+func (m *Model) reconcileMove(choice string) {
+	if len(m.snap.Statuses) == 0 {
+		m.mode = m.overlay
+		m.setStatus("No status lanes to move to", false)
+		return
+	}
+	if i := slices.Index(m.snap.Statuses, choice); choice != "" && i >= 0 {
+		m.moveTo = i
+		return
+	}
+	m.moveTo = clamp(m.moveTo, 0, len(m.snap.Statuses)-1)
+}
+
+// actionTarget is the task a newly opened move or comment overlay acts on.
 func (m Model) actionTarget() string {
 	if m.detailID != "" {
 		return m.detailID
@@ -383,6 +416,7 @@ func (m Model) startMove() (tea.Model, tea.Cmd) {
 	}
 	m.overlay = m.mode
 	m.mode = modeMove
+	m.target = id
 	m.moveTo = 0
 	if t := m.taskByID(id); t != nil {
 		if i := slices.Index(m.snap.Statuses, t.Status); i >= 0 {
@@ -400,11 +434,20 @@ func (m Model) moveKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Up):
 		m.moveTo = max(m.moveTo-1, 0)
 	case key.Matches(msg, k.Down):
-		m.moveTo = min(m.moveTo+1, len(m.snap.Statuses)-1)
+		m.moveTo = clamp(m.moveTo+1, 0, len(m.snap.Statuses)-1)
 	case key.Matches(msg, k.Confirm):
-		id, status := m.actionTarget(), m.snap.Statuses[m.moveTo]
 		m.mode = m.overlay
-		if t := m.taskByID(id); t != nil && t.Status == status {
+		if m.moveTo < 0 || m.moveTo >= len(m.snap.Statuses) {
+			m.setStatus("No status lanes to move to", false)
+			return m, nil
+		}
+		id, status := m.target, m.snap.Statuses[m.moveTo]
+		t := m.taskByID(id)
+		if t == nil {
+			m.setStatus(id+" no longer exists; nothing was moved", false)
+			return m, nil
+		}
+		if t.Status == status {
 			return m, nil
 		}
 		src := m.src
@@ -417,11 +460,13 @@ func (m Model) moveKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) startComment() (tea.Model, tea.Cmd) {
-	if m.actionTarget() == "" {
+	id := m.actionTarget()
+	if id == "" {
 		return m, nil
 	}
 	m.overlay = m.mode
 	m.mode = modeComment
+	m.target = id
 	m.comment.Reset()
 	return m, m.comment.Focus()
 }
@@ -438,7 +483,12 @@ func (m Model) commentKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setStatus("Comment is empty", false)
 			return m, nil
 		}
-		id := m.actionTarget()
+		id := m.target
+		if m.taskByID(id) == nil {
+			// Keep the overlay and its text so the comment is not lost.
+			m.setStatus(id+" no longer exists; the comment was not saved", false)
+			return m, nil
+		}
 		m.comment.Blur()
 		m.mode = m.overlay
 		src := m.src

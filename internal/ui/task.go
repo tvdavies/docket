@@ -40,13 +40,15 @@ type Task struct {
 	Page *bundle.ActivityPage
 }
 
-// FromBundle adapts a full bundle.
+// FromBundle adapts a full bundle. Like FromContext, it sanitises every
+// user-controlled string (see Sanitize), so this is the boundary where task
+// data enters styled rendering.
 func FromBundle(b *bundle.Bundle) Task {
 	t := fromContext(b.State())
 	t.View = bundle.ViewFull
 	t.Activity = b.Activity
 	t.Page = b.ActivityPage
-	return t
+	return t.sanitized()
 }
 
 // FromContext adapts a current or agent projection.
@@ -55,7 +57,7 @@ func FromContext(c *bundle.Context) Task {
 	t.Activity = c.Activity
 	page := c.ActivityPage
 	t.Page = &page
-	return t
+	return t.sanitized()
 }
 
 func fromContext(c *bundle.Context) Task {
@@ -347,6 +349,9 @@ func dayLabel(at time.Time) string {
 func (r Renderer) activityItem(item bundle.ActivityView, at time.Time) string {
 	th := r.Theme
 	summary := Summarize(item)
+	// Data is sanitised on the way in; this also covers values Summarize
+	// formats from non-string data.
+	summary.Text = Sanitize(summary.Text)
 	actor := item.Actor
 	if actor == "" {
 		actor = "system"
