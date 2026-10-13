@@ -54,6 +54,22 @@ A later caller resumes with full continuity:
 docket show "$ID"       # dossier + waits + references + sessions + activity
 ```
 
+## Interactive board
+
+Run `docket` with no arguments in a terminal (or `docket board`, alias
+`docket tui`) to open a full-screen board: one column per status lane, task
+cards with labels and waits, `/` to filter, and `enter` to read a task's
+description, comments, activity timeline, and links. `m` moves a task, `c`
+comments, and `?` lists every key. The board refreshes as the workspace changes.
+
+At a terminal, `docket show` and `docket list` are styled too: coloured
+statuses, markdown descriptions and comments, and a readable timeline
+("moved backlog → in-progress"). Long `show` output goes through `$PAGER`
+(default `less -R`); pass `--no-pager` to print it directly. `NO_COLOR` and
+`TERM=dumb` are honoured. Pipes, agent harnesses, and `--json` get exactly the
+plain output documented in the [CLI guide](docs/cli.md). See
+[docs/board.md](docs/board.md) for details.
+
 ## Documentation
 
 - [CLI guide](docs/cli.md) — workflows, command map, flags, errors, and examples
@@ -64,6 +80,7 @@ docket show "$ID"       # dossier + waits + references + sessions + activity
 - [Plugins](docs/plugins.md) — manifests, installation, hooks, statuses, and config
 - [Authoring plugins](docs/plugins/authoring.md) — build a headless plugin
 - [Session attachment](docs/sessions.md) — optional pointer semantics and when to use it
+- [Interactive board and styled output](docs/board.md) — keys, paging, colour, and terminal detection
 - [Agent guide (full)](docs/agent-guide.md) — the complete agent reference behind `docket skill --full`
 - [Migrating to the headless CLI](docs/migration-headless.md) — removed web features and upgrade steps
 

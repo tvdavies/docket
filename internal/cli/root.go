@@ -65,6 +65,9 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
+		// Bare `docket` opens the board at a terminal and prints help
+		// elsewhere; see runRoot.
+		RunE: runRoot,
 	}
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "request machine-readable JSON from data-returning commands")
 	root.PersistentFlags().BoolVar(&flagCompact, "compact", false, "with --json, print single-line JSON instead of indented JSON")
@@ -84,6 +87,7 @@ Session attachment is optional shorthand for omitting TASK-ID. See
 	taskCommands := []*cobra.Command{
 		newInitCmd(), newNewCmd(), newListCmd(), newShowCmd(), newEditCmd(),
 		newMoveCmd(), newWaitCmd(), newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newFilesCmd(),
+		newBoardCmd(),
 	}
 	setCommandGroup(groupTasks, taskCommands...)
 
