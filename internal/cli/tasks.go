@@ -2,16 +2,15 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/bundle"
 	"github.com/tvdavies/docket/internal/registry"
 	"github.com/tvdavies/docket/internal/task"
+	"github.com/tvdavies/docket/internal/ui"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
@@ -205,6 +204,7 @@ func addContextFlags(cmd *cobra.Command, options *bundle.Options) {
 	cmd.Flags().IntVar(&options.CommentLimit, "comments", 0, "keep only the most recent N comments (0 means all)")
 	cmd.Flags().IntVar(&options.ActivityLimit, "activity", 0, "return at most N activity items, newest first page (agent view defaults to 20)")
 	cmd.Flags().IntVar(&options.ActivityBefore, "activity-before", 0, "read activity older than this timeline position (from next_before)")
+	cmd.Flags().BoolVar(&flagNoPager, "no-pager", false, "on a terminal, print long output directly instead of through $PAGER")
 }
 
 // printContext builds and prints a task's context in the requested view.
@@ -226,6 +226,9 @@ func printContext(ws *workspace.Workspace, id string, options bundle.Options) er
 		if flagJSON {
 			return printJSON(value)
 		}
+		if stdoutIsTerminal() {
+			return printTaskStyled(ui.FromContext(value))
+		}
 		printContextHuman(value)
 		return nil
 	}
@@ -235,6 +238,9 @@ func printContext(ws *workspace.Workspace, id string, options bundle.Options) er
 	}
 	if flagJSON {
 		return printJSON(b)
+	}
+	if stdoutIsTerminal() {
+		return printTaskStyled(ui.FromBundle(b))
 	}
 	printBundleHuman(b)
 	return nil
@@ -430,35 +436,26 @@ func taskSummaries(tasks []*task.Task) []taskSummary {
 	return out
 }
 
-// printTaskTable prints an aligned table with shortened titles on a
-// terminal. Elsewhere (pipes, files, agent harnesses) it prints full titles in
-// tab-separated columns so grep, cut, and awk see every word.
+// printTaskTable prints a coloured table sized to the terminal. Elsewhere
+// (pipes, files, agent harnesses) it prints full titles in tab-separated
+// columns so grep, cut, and awk see every word.
 func printTaskTable(tasks []*task.Task) {
 	if len(tasks) == 0 {
 		fmt.Println("No tasks.")
 		return
 	}
-	terminal := stdoutIsTerminal()
-	var out io.Writer = os.Stdout
-	var table *tabwriter.Writer
-	if terminal {
-		table = tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-		out = table
+	if stdoutIsTerminal() {
+		printTaskTableStyled(tasks)
+		return
 	}
-	fmt.Fprintln(out, "ID\tSTATUS\tTITLE\tLABELS\tWAITING")
+	fmt.Println("ID\tSTATUS\tTITLE\tLABELS\tWAITING")
 	for _, t := range tasks {
 		waiting := ""
 		if t.Wait != nil {
 			waiting = t.Wait.Kind
 		}
 		title := strings.Join(strings.Fields(t.Title), " ")
-		if terminal {
-			title = truncate(title, 50)
-		}
-		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, title, strings.Join(t.Labels, ","), waiting)
-	}
-	if table != nil {
-		_ = table.Flush()
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, title, strings.Join(t.Labels, ","), waiting)
 	}
 }
 
@@ -468,13 +465,4 @@ func reportTask(t *task.Task, verb string) error {
 	}
 	fmt.Printf("%s %s\n", t.ID, verb)
 	return nil
-}
-
-// truncate shortens s to at most n characters without splitting a rune.
-func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n-1]) + "…"
 }

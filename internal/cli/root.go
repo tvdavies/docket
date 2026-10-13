@@ -61,6 +61,9 @@ returns data; diagnostics always go to stderr.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
+		// Bare `docket` opens the board at a terminal and prints help
+		// elsewhere; see runRoot.
+		RunE: runRoot,
 	}
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "print machine-readable JSON from commands that return data")
 	root.PersistentFlags().BoolVar(&flagCompact, "compact", false, "with --json, print single-line JSON")
@@ -83,7 +86,7 @@ returns data; diagnostics always go to stderr.`,
 	groups := map[string][]*cobra.Command{
 		groupTasks: {
 			newNewCmd(), newListCmd(), newShowCmd(), newEditCmd(), newMoveCmd(),
-			newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newWaitCmd(),
+			newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newWaitCmd(), newBoardCmd(),
 		},
 		groupContext:    {newLinkCmd(), newReferenceCmd(), newProjectCmd(), newSessionCmd()},
 		groupAutomation: {newEventsCmd(), newInboxCmd(), newRunCmd(), newServiceCmd(), newPluginCmd()},

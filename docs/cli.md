@@ -148,6 +148,7 @@ so it can split a multi-line comment. For JSON, `jq` slicing
 
 | Command | Purpose |
 |---|---|
+| `docket` / `docket board` | Open the interactive board at a terminal (see `docket docs board`) |
 | `docket new --title TITLE` | Create a task and print its ID |
 | `docket list` | List and filter tasks |
 | `docket show [TASK-ID]` | Read task context (`--view current\|agent\|full`) |
@@ -385,5 +386,6 @@ docket plugin config set my-plugin --status merge agent=merger
 | `DOCKET_ACTOR` | Authorship identity; otherwise Git user, then `unknown` |
 | `DOCKET_SESSION` | Optional session pointer ID |
 | `DOCKET_CONFIG` | Override machine registry path |
+| `DOCKET_THEME` | `light` or `dark`; overrides background detection for styled output |
 
 The global flags `--json`, `--compact`, and `--session` override output/session behaviour for one invocation.
