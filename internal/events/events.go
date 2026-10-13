@@ -1,6 +1,6 @@
 // Package events implements docket's append-only event log (events.jsonl) — the
 // coordination primitive. Every mutation appends one JSON line. Consumers
-// either poll a filtered view (the "inbox"), stream new lines (`docket watch`),
+// either poll a filtered view (the "inbox"), stream new lines (`docket events --follow`),
 // or receive matching events through configured post-hoc handlers.
 package events
 

@@ -12,7 +12,7 @@ import (
 func newSessionCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "session",
-		Short: "Optional task pointer for commands that omit TASK-ID",
+		Short: "Point a session at a task so commands can omit TASK-ID",
 		Long: `Session attachment is optional shorthand, not task assignment or locking.
 
 Attaching stores a machine-local pointer from one session ID to one task. After

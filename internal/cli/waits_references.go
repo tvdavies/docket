@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/actions"
 	"github.com/tvdavies/docket/internal/events"
-	"github.com/tvdavies/docket/internal/task"
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
@@ -24,12 +23,17 @@ func operationsFor(ws *workspace.Workspace) actions.Tasks {
 func newWaitCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "wait",
-		Short: "Record and resolve an external condition blocking a task",
-		Long: `A task has at most one active wait. Workflow status remains unchanged while
-waiting. Resolving the exact wait ID emits task.resumed so automation can wake
-the assignee for the task's current stage.`,
+		Short: "Mark a task as waiting on something external, or resolve it",
+		Long: `A task has at most one active wait. Its status stays unchanged while it
+waits. Resolving requires the exact wait ID, so a stale watcher cannot clear a
+newer condition, and emits task.resumed so automation can wake the assignee.
+
+"docket show" prints the active wait and its ID.`,
+		Example: `  docket wait set TASK-0007 --kind review --reason "Awaiting security review"
+  docket show TASK-0007 --view current --json | jq -r .wait.id
+  docket wait resolve TASK-0007 --wait-id wait-abc123 --result approved`,
 	}
-	command.AddCommand(newWaitSetCmd(), newWaitResolveCmd(), newWaitShowCmd())
+	command.AddCommand(newWaitSetCmd(), newWaitResolveCmd())
 	return command
 }
 
@@ -37,8 +41,9 @@ func newWaitSetCmd() *cobra.Command {
 	var kind, reason, reference string
 	command := &cobra.Command{
 		Use:   "set TASK-ID",
-		Short: "Mark a task as waiting",
-		Example: `  docket wait set JOB-0001 --kind plan_feedback \
+		Short: "Mark a task as waiting and print the wait ID",
+		Long:  "--kind is a machine-readable category for automation; --reason is for people.",
+		Example: `  docket wait set TASK-0007 --kind plan_feedback \
     --reason "Awaiting review of plan v1" --ref https://example.com/plan`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
@@ -72,7 +77,7 @@ func newWaitResolveCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:     "resolve TASK-ID",
 		Short:   "Clear an exact active wait and resume automation",
-		Example: `  docket wait resolve JOB-0001 --wait-id wait-abc123 --result approved`,
+		Example: `  docket wait resolve TASK-0007 --wait-id wait-abc123 --result approved`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -102,43 +107,17 @@ func newWaitResolveCmd() *cobra.Command {
 	return command
 }
 
-func newWaitShowCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "show TASK-ID",
-		Short: "Show the task's active wait",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			ws, err := openWS()
-			if err != nil {
-				return err
-			}
-			value, err := task.Load(ws, args[0])
-			if err != nil {
-				return err
-			}
-			if flagJSON {
-				return printJSON(value.Wait)
-			}
-			if value.Wait == nil {
-				fmt.Printf("%s is not waiting.\n", value.ID)
-				return nil
-			}
-			fmt.Printf("%s  %s  %s\n", value.Wait.ID, value.Wait.Kind, value.Wait.Reason)
-			if value.Wait.Reference != "" {
-				fmt.Println(value.Wait.Reference)
-			}
-			return nil
-		},
-	}
-}
-
 func newReferenceCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:     "reference",
 		Aliases: []string{"ref"},
-		Short:   "Manage durable external links on a task",
+		Short:   "Add or remove typed external links on a task",
+		Long: `References are durable, typed links such as pull requests, plans, or
+tickets. Each gets a stable ID; "docket show" lists them with their IDs.`,
+		Example: `  docket reference add TASK-0007 --kind pr --url https://github.com/org/repo/pull/42
+  docket reference remove TASK-0007 ref-abc123`,
 	}
-	command.AddCommand(newReferenceAddCmd(), newReferenceRemoveCmd(), newReferenceListCmd())
+	command.AddCommand(newReferenceAddCmd(), newReferenceRemoveCmd())
 	return command
 }
 
@@ -147,7 +126,7 @@ func newReferenceAddCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:     "add TASK-ID",
 		Short:   "Add a typed external link",
-		Example: `  docket reference add JOB-0001 --kind plan --url https://example.com/plan --title "Plan v1"`,
+		Example: `  docket reference add TASK-0007 --kind plan --url https://example.com/plan --title "Plan v1"`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -175,9 +154,10 @@ func newReferenceAddCmd() *cobra.Command {
 
 func newReferenceRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove TASK-ID REFERENCE-ID",
-		Short: "Remove a reference by stable ID",
-		Args:  cobra.ExactArgs(2),
+		Use:     "remove TASK-ID REFERENCE-ID",
+		Short:   "Remove a reference by its ID",
+		Example: "  docket reference remove TASK-0007 ref-abc123",
+		Args:    cobra.ExactArgs(2),
 		RunE: func(command *cobra.Command, args []string) error {
 			ws, err := openWS()
 			if err != nil {
@@ -191,39 +171,6 @@ func newReferenceRemoveCmd() *cobra.Command {
 				return printJSON(reference)
 			}
 			fmt.Printf("%s removed %s reference %s\n", args[0], reference.Kind, reference.ID)
-			return nil
-		},
-	}
-}
-
-func newReferenceListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list TASK-ID",
-		Short: "List task references",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			ws, err := openWS()
-			if err != nil {
-				return err
-			}
-			value, err := task.Load(ws, args[0])
-			if err != nil {
-				return err
-			}
-			if flagJSON {
-				return printJSON(value.References)
-			}
-			if len(value.References) == 0 {
-				fmt.Println("No references.")
-				return nil
-			}
-			for _, reference := range value.References {
-				fmt.Printf("%s  %s  %s", reference.ID, reference.Kind, reference.URL)
-				if reference.Title != "" {
-					fmt.Printf("  %s", reference.Title)
-				}
-				fmt.Println()
-			}
 			return nil
 		},
 	}

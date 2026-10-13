@@ -30,7 +30,7 @@ The command emits `task.waiting`. A second wait is rejected until the active one
 A human or deterministic watcher must resolve the exact wait ID it observed:
 
 ```sh
-WAIT_ID=$(docket wait show JOB-0001 --json | jq -r .id)
+WAIT_ID=$(docket show JOB-0001 --view current --json | jq -r .wait.id)
 docket comment JOB-0001 "Approved without changes"
 docket wait resolve JOB-0001 --wait-id "$WAIT_ID" --result approved
 ```
@@ -53,7 +53,7 @@ docket reference add JOB-0001 \
   --kind pr \
   --url https://github.com/example/repo/pull/42
 
-docket reference list JOB-0001
+docket show JOB-0001 --view current --json | jq .references
 docket reference remove JOB-0001 ref-8c7d...
 ```
 

@@ -153,14 +153,15 @@ so it can split a multi-line comment. For JSON, `jq` slicing
 | `docket show [TASK-ID]` | Read task context (`--view current\|agent\|full`) |
 | `docket edit [TASK-ID]` | Change title, description, or assignee |
 | `docket move [TASK-ID] STATUS` | Change workflow status |
-| `docket wait set\|show\|resolve TASK-ID` | Record or resolve one external dependency |
+| `docket wait set\|resolve TASK-ID` | Record or resolve one external dependency |
 | `docket comment [TASK-ID] TEXT` | Add immutable durable context |
 | `docket label [TASK-ID]` | Add or remove labels |
 | `docket attach-file [TASK-ID] PATH` | Copy an artifact into the task |
-| `docket files [TASK-ID]` | List attached files |
-| `docket reference add\|list\|remove TASK-ID` | Manage typed external links |
-| `docket link TASK-ID --RELATIONSHIP TARGET` | Create a typed relationship |
-| `docket unlink TASK-ID --RELATIONSHIP TARGET` | Remove a relationship |
+| `docket reference add\|remove TASK-ID` | Manage typed external links |
+| `docket link TASK-ID --RELATIONSHIP TARGET-ID [--remove]` | Add or remove a typed relationship |
+
+`show` is the single read command: a task's attachments, active wait, and
+references all appear in it, including the smallest `--view current` read.
 
 Run any command with `--help` for exact flags and examples.
 
@@ -205,22 +206,22 @@ Status identifies the workflow stage; an active wait identifies the one external
 
 ```sh
 docket wait set TASK-0001 --kind ci --reason "Awaiting required checks" --ref https://github.com/example/repo/pull/42
-WAIT_ID=$(docket wait show TASK-0001 --json | jq -r .id)
+WAIT_ID=$(docket show TASK-0001 --view current --json | jq -r .wait.id)
 docket wait resolve TASK-0001 --wait-id "$WAIT_ID" --result green
 
 docket reference add TASK-0001 --kind pr --url https://github.com/example/repo/pull/42
-docket reference list TASK-0001
+docket show TASK-0001 --view current --json | jq .references
 ```
 
 See [Waits, references, and activity](waits-and-references.md) for the event and automation contract.
 
 ### Relationships
 
-Relationship flags come from workspace configuration. Defaults include `--blocks`, `--blocked-by`, `--parent`, `--subtasks`, `--relates`, `--duplicate-of`, and `--duplicates`. Docket maintains the inverse on the target task automatically.
+Relationship flags come from workspace configuration. Defaults include `--blocks`, `--blocked-by`, `--parent`, `--subtasks`, `--relates`, `--duplicate-of`, and `--duplicates`. Docket maintains the inverse on the target task automatically, and `--remove` deletes both sides.
 
 ```sh
 docket link TASK-0001 --blocks TASK-0002
-docket unlink TASK-0001 --blocks TASK-0002
+docket link TASK-0001 --blocks TASK-0002 --remove
 ```
 
 ## Optional session shorthand
@@ -247,7 +248,7 @@ docket project show "$PROJECT"
 | Command | Intended use |
 |---|---|
 | `docket events [--since N]` | Inspect the append-only event log |
-| `docket watch [--from-start]` | Stream JSONL for diagnostics or a transient consumer |
+| `docket events --follow [--from-start]` | Stream JSONL for diagnostics or a transient consumer |
 | `docket inbox [--mark-read]` | Poll unread events using an actor cursor; `--mark-read` acknowledges immediately |
 | `docket inbox --peek` / `docket inbox ack CHECKPOINT` | Durable consumers: read, record, then acknowledge |
 
@@ -262,6 +263,7 @@ docket workspace check                 # validate current config/store
 docket workspace list
 docket workspace add ~/dev/other --name other
 docket workspace remove other          # files remain untouched
+docket workspace reindex               # optional derived index; see below
 ```
 
 `run` is the headless event runner. It delivers `delivery: service` hooks and
@@ -276,8 +278,7 @@ docket run --once --all                # drain pending hooks once and exit (hear
 `--once` exits non-zero when any handler fails; failed events stay pending for
 the next run. With `--all`, a registered workspace whose directory is gone is
 reported as `missing` without failing the run; the long-running `run --all`
-prunes such registrations after `prune_after`. `docket serve` is a deprecated alias for `docket run` and
-rejects the removed `--listen`/`--allow-remote` flags.
+prunes such registrations after `prune_after`.
 
 `service` optionally installs `docket run --all` as a systemd user unit:
 
@@ -294,7 +295,7 @@ There is one runner per user/machine and any number of registered workspaces.
 
 ## Optional derived index
 
-`docket reindex [--json]` writes `.docket/.index/tasks.json` from current task
+`docket workspace reindex [--json]` writes `.docket/.index/tasks.json` from current task
 summaries. No built-in command reads this cache. Run it only for an external
 consumer that explicitly uses that file; normal task operations need no indexing.
 

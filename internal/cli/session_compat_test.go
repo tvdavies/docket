@@ -8,7 +8,7 @@ import (
 	"github.com/tvdavies/docket/internal/workspace"
 )
 
-func TestGroupedAndLegacySessionCommandsRemainFunctional(t *testing.T) {
+func TestSessionCommandsAttachAndDetach(t *testing.T) {
 	t.Setenv("DOCKET_HOME", "")
 	rootDir := t.TempDir()
 	ws, err := workspace.Init(rootDir)
@@ -30,14 +30,6 @@ func TestGroupedAndLegacySessionCommandsRemainFunctional(t *testing.T) {
 		t.Fatalf("grouped detach current = %q", got)
 	}
 
-	runCLIForTest(t, "attach", created.ID, "--session", "legacy")
-	if got := sessionstore.Current(ws, "legacy"); got != created.ID {
-		t.Fatalf("legacy attach current = %q", got)
-	}
-	runCLIForTest(t, "detach", "--session", "legacy")
-	if got := sessionstore.Current(ws, "legacy"); got != "" {
-		t.Fatalf("legacy detach current = %q", got)
-	}
 }
 
 func runCLIForTest(t *testing.T, args ...string) {

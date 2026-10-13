@@ -13,12 +13,15 @@ import (
 //go:embed skill.md
 var skillDoc string
 
-func newReindexCmd() *cobra.Command {
+// newWorkspaceReindexCmd is attached under "docket workspace" by newRootCmd.
+func newWorkspaceReindexCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "reindex",
-		Short:   "Rebuild the optional derived task index",
-		Long:    "Normal commands read authoritative task files directly. Run this only when a consumer explicitly needs .docket/.index/tasks.json.",
-		Example: "  docket reindex\n  docket reindex --json",
+		Use:   "reindex",
+		Short: "Rebuild the optional derived task index",
+		Long: `Writes .docket/.index/tasks.json from the current task summaries. No Docket
+command reads this file; normal commands read the task files directly. Run it
+only for an external consumer that explicitly uses the index.`,
+		Example: "  docket workspace reindex\n  docket workspace reindex --json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := openWS()
@@ -54,7 +57,7 @@ func newSkillCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "skill",
 		Aliases: []string{"guide"},
-		Short:   "Print a short usage guide for an agent harness",
+		Short:   "Print the usage guide for agents",
 		Long: `Prints a short entry guide covering workspace discovery, identity, task
 reads and writes, output choices, and where to find exact flags. It points to
 "docket docs TOPIC" for Lua hooks, plugins, and event integration instead of
@@ -83,8 +86,8 @@ including them. --full prints the complete agent guide.`,
 
 func newDocsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "docs [topic]",
-		Short:   "Print Docket's reference documentation, shipped with this binary",
+		Use:     "docs [TOPIC]",
+		Short:   "Print reference documentation shipped with this binary",
 		Long:    "Without a topic, lists the embedded documents. With one, prints it as Markdown. The docs match this binary's version, so prefer them over copies found elsewhere.",
 		Example: "  docket docs\n  docket docs plugins/authoring\n  docket docs inbox",
 		Args:    cobra.MaximumNArgs(1),
