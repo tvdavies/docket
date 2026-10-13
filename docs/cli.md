@@ -163,7 +163,10 @@ so it can split a multi-line comment. For JSON, `jq` slicing
 `show` is the single read command: a task's attachments, active wait, and
 references all appear in it, including the smallest `--view current` read.
 
-Run any command with `--help` for exact flags and examples.
+Run any command with `--help` for exact flags and examples. `docket man`
+prints a roff man page (`docket man | man -l -`), and `docket man --dir DIR`
+writes one page per command for packaging; `make man` does the same into
+`./man`.
 
 Installed plugins may contribute git-style commands: `docket NAME ARGS...`
 executes the plugin's declared CLI, otherwise Docket searches `docket-NAME` on

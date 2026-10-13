@@ -36,7 +36,7 @@ func TestRootHelpGroupsTheReducedCommandSurface(t *testing.T) {
 	if strings.Contains(text, "\x1b[") {
 		t.Fatalf("help written to a buffer must not contain colour codes:\n%q", text)
 	}
-	for _, removed := range []string{"attach", "detach", "current", "context", "serve", "watch", "files", "unlink", "reindex", "__lua-hook"} {
+	for _, removed := range []string{"attach", "detach", "current", "context", "serve", "watch", "files", "unlink", "reindex", "man", "__lua-hook"} {
 		if strings.Contains(text, "\n  "+removed+" ") {
 			t.Fatalf("command %q is listed in root help:\n%s", removed, text)
 		}

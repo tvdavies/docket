@@ -67,7 +67,8 @@ docket show "$ID"       # dossier + waits + references + sessions + activity
 - [Agent guide (full)](docs/agent-guide.md) — the complete agent reference behind `docket skill --full`
 - [Migrating to the headless CLI](docs/migration-headless.md) — removed web features, removed commands, and upgrade steps
 
-Run `docket COMMAND --help` for exact local usage and examples, or `docket skill`
+Run `docket COMMAND --help` for exact local usage and examples (or read the
+man page: `docket man | man -l -`; `make man` writes one page per command), or `docket skill`
 for a short guide suitable for an agent harness. It points to `docket docs TOPIC`
 for Lua hooks, plugins, and event integration; `docket skill --full` prints
 everything in one document.

@@ -90,8 +90,9 @@ returns data; diagnostics always go to stderr.`,
 		setCommandGroup(group, groups[group]...)
 		root.AddCommand(groups[group]...)
 	}
-	// Hidden: __lua-hook is the handler runner's Lua subprocess entry point.
-	root.AddCommand(newLuaHookCmd())
+	// Hidden: man is for packaging, and __lua-hook is the handler runner's
+	// Lua subprocess entry point.
+	root.AddCommand(newManCmd(), newLuaHookCmd())
 	return root
 }
 
