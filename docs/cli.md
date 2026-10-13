@@ -257,6 +257,38 @@ docket project show "$PROJECT"
 
 Configured handlers are preferred for durable event-driven automation. See [Lua hooks and SDK](lua-hooks.md) and [Inbox consumers](inbox.md).
 
+## Selecting a workspace
+
+Every command works on one workspace. You don't have to `cd` into it first;
+Docket picks the first match in this order:
+
+1. `-w NAME` or `--workspace NAME|PATH` on the command line
+2. `$DOCKET_HOME` (set for handlers and plugin CLIs), then `$DOCKET_WORKSPACE`
+   (`NAME` or `PATH`)
+3. the nearest `.docket/` above the current directory
+4. the default saved by `docket workspace use NAME`
+
+The current directory beats the saved default, so working inside a project
+never silently targets another one. `NAME` is a registered name from
+`docket workspace list`. `PATH` may be the project directory, its `.docket/`,
+or anything inside it. A registered name wins over a directory of the same
+name; write `./NAME` to mean the directory. `docket init` and
+`docket workspace add` always act on their own directory.
+
+```sh
+docket -w client-b list                  # one command, from any directory
+docket workspace use client-b            # default when outside a workspace
+docket workspace use --clear
+docket workspace current                 # workspace in effect and why (flag/env/cwd/context)
+docket workspace list                    # CURRENT column marks it; --json has current/default
+cd (docket workspace path client-b)      # fish; bash/zsh: cd "$(docket workspace path client-b)"
+```
+
+Shell completion offers registered names for `-w`, `workspace use`,
+`workspace path`, and `workspace remove`. Plugin commands such as
+`plugin enable`, `plugin disable`, and `plugin config set` use the same
+selection; `--workspace PATH` after the subcommand still works.
+
 ## Workspaces and the event runner
 
 `docket init` creates and registers a workspace, so manual registry commands are uncommon.

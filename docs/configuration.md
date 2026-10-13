@@ -237,6 +237,12 @@ docket plugin config set dispatch --scope instance endpoint=http://127.0.0.1:746
 
 A `listen` key written by earlier releases is still accepted and ignored.
 
+`docket workspace use NAME` stores `current_workspace: NAME` here. It is the
+default workspace for commands run outside any workspace directory; `-w`,
+`$DOCKET_WORKSPACE` and the current directory all take precedence. Unregistering
+that workspace clears it, and `docket workspace use --clear` removes it. See
+[Selecting a workspace](cli.md#selecting-a-workspace).
+
 ### Pruning missing workspaces
 
 `docket run --all` periodically checks each registered workspace's project

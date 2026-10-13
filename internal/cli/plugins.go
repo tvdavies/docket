@@ -155,7 +155,6 @@ func newPluginUpdateCmd() *cobra.Command {
 }
 
 func newPluginEnableCmd() *cobra.Command {
-	var workspacePath string
 	var adopt bool
 	var fromStart bool
 	var settings []string
@@ -164,10 +163,7 @@ func newPluginEnableCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "enable NAME",
 		Short: "Enable an installed plugin in this workspace",
-		Example: `  docket plugin enable my-plugin
-  docket plugin enable my-plugin --set key=value
-  docket plugin enable dispatch --adopt-cursors`,
-		Args: cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(1),
 		Long: `Enable an installed plugin for a workspace.
 
 A plain enable seeds missing plugin-handler cursors at the current log end.
@@ -176,7 +172,14 @@ A plain enable seeds missing plugin-handler cursors at the current log end.
 identities, transfers each legacy handler's validated checkpoint to its plugin
 identity, removes the matching legacy declarations and publishes one config
 change. Acknowledged events are not replayed and pending ones stay pending.
-An existing --receipt-dir is inspected and reported; it is never re-applied.`,
+An existing --receipt-dir is inspected and reported; it is never re-applied.
+
+The workspace is the one selected by -w, $DOCKET_WORKSPACE or the current
+directory (see "docket workspace --help").`,
+		Example: `  docket plugin enable my-plugin
+  docket plugin enable dispatch --set agent=claude
+  docket -w client-b plugin enable dispatch --from-start
+  docket -w ~/dev/app plugin enable dispatch --adopt-cursors --receipt-dir ./receipts`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if adopt && fromStart {
 				return fmt.Errorf("--adopt-cursors and --from-start are mutually exclusive")
@@ -187,6 +190,10 @@ An existing --receipt-dir is inspected and reported; it is never re-applied.`,
 			}
 			if (expectHash != "" || receiptDir != "") && !adopt {
 				return fmt.Errorf("--expect-config-sha256 and --receipt-dir require --adopt-cursors")
+			}
+			workspacePath, err := selectedWorkspaceRoot()
+			if err != nil {
+				return err
 			}
 			if adopt {
 				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -207,7 +214,6 @@ An existing --receipt-dir is inspected and reported; it is never re-applied.`,
 			return nil
 		},
 	}
-	command.Flags().StringVar(&workspacePath, "workspace", ".", "workspace path")
 	command.Flags().BoolVar(&adopt, "adopt-cursors", false, "transfer same-named legacy handler checkpoints to the plugin and remove legacy wiring")
 	command.Flags().BoolVar(&fromStart, "from-start", false, "replay the existing event log")
 	command.Flags().StringArrayVar(&settings, "set", nil, "workspace config key=value (repeatable)")
@@ -217,16 +223,14 @@ An existing --receipt-dir is inspected and reported; it is never re-applied.`,
 }
 
 func newPluginDisableCmd() *cobra.Command {
-	var workspacePath string
 	var adopt bool
 	var legacyConfig string
 	var expectHash string
 	var receiptDir string
 	command := &cobra.Command{
-		Use:     "disable NAME",
-		Short:   "Disable a plugin in this workspace, keeping its cursors",
-		Example: "  docket plugin disable my-plugin",
-		Args:    cobra.ExactArgs(1),
+		Use:   "disable NAME",
+		Short: "Disable a plugin in this workspace, keeping its cursors",
+		Args:  cobra.ExactArgs(1),
 		Long: `Disable a plugin for a workspace.
 
 A plain disable removes the plugin declaration and keeps its cursors. It is an
@@ -239,12 +243,22 @@ reviewed --legacy-config template declaring each mapped legacy handler,
 --expect-config-sha256 of the current config.yaml and a new --receipt-dir.
 Only the mapped handler declarations are imported from the template; statuses
 the plugin contributed are pinned at their current positions. An existing
---receipt-dir is inspected and reported; it is never re-applied.`,
+--receipt-dir is inspected and reported; it is never re-applied.
+
+The workspace is the one selected by -w, $DOCKET_WORKSPACE or the current
+directory (see "docket workspace --help").`,
+		Example: `  docket plugin disable dispatch
+  docket -w ~/dev/app plugin disable dispatch --adopt-cursors \
+    --legacy-config legacy.yaml --expect-config-sha256 HASH --receipt-dir ./receipts`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !adopt && (legacyConfig != "" || expectHash != "" || receiptDir != "") {
+				return fmt.Errorf("--legacy-config, --expect-config-sha256 and --receipt-dir require --adopt-cursors")
+			}
+			workspacePath, err := selectedWorkspaceRoot()
+			if err != nil {
+				return err
+			}
 			if !adopt {
-				if legacyConfig != "" || expectHash != "" || receiptDir != "" {
-					return fmt.Errorf("--legacy-config, --expect-config-sha256 and --receipt-dir require --adopt-cursors")
-				}
 				if err := pluginmgr.Disable(workspacePath, args[0]); err != nil {
 					return err
 				}
@@ -271,7 +285,6 @@ the plugin contributed are pinned at their current positions. An existing
 			return reportHandoff(result, err)
 		},
 	}
-	command.Flags().StringVar(&workspacePath, "workspace", ".", "workspace path")
 	command.Flags().BoolVar(&adopt, "adopt-cursors", false, "transfer plugin handler checkpoints back to legacy handlers declared in --legacy-config")
 	command.Flags().StringVar(&legacyConfig, "legacy-config", "", "reviewed legacy config template; only mapped handler declarations are imported")
 	command.Flags().StringVar(&expectHash, "expect-config-sha256", "", "require the current declared config.yaml to have this SHA-256")

@@ -92,7 +92,7 @@ func TestRunForegroundDeliversAndStopsOnSignal(t *testing.T) {
 	{
 		command := exec.Command(docketBinary(t), "run")
 		command.Dir = dir
-		command.Env = append(os.Environ(), "DOCKET_HOME=", "DOCKET_CONFIG="+dir+"/no-registry.yaml")
+		command.Env = append(os.Environ(), "DOCKET_HOME=", "DOCKET_WORKSPACE=", "DOCKET_CONFIG="+dir+"/no-registry.yaml")
 		stderr, err := command.StderrPipe()
 		if err != nil {
 			t.Fatal(err)
