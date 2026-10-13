@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 
@@ -17,10 +18,16 @@ import (
 func newPluginCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "plugin",
-		Short: "Install, enable and configure trusted Docket plugins",
+		Short: "Install, enable, and configure plugins",
 		Long: `Plugins contribute hooks, statuses, scoped configuration and a CLI command
-to the workspaces that enable them. Docket runs the hooks and CLI; it does not
-serve plugin UI or launch plugin services.`,
+to the workspaces that enable them. Installation is per machine; enabling is
+per workspace. Docket runs the hooks and CLI; it does not serve plugin UI or
+launch plugin services. Only install plugins you trust: their hooks run with
+your permissions.`,
+		Example: `  docket plugin add ~/dev/my-plugin
+  docket plugin add acme/docket-dispatch@v1.2.0
+  docket plugin enable my-plugin --set key=value
+  docket plugin list`,
 	}
 	command.AddCommand(newPluginAddCmd(), newPluginListCmd(), newPluginRemoveCmd(), newPluginUpdateCmd(), newPluginEnableCmd(), newPluginDisableCmd(),
 		newPluginConfigCmd(), newPluginValidateCmd())
@@ -30,7 +37,14 @@ serve plugin UI or launch plugin services.`,
 func newPluginAddCmd() *cobra.Command {
 	var name string
 	command := &cobra.Command{
-		Use: "add PATH|OWNER/REPO[@REF]", Short: "Install a linked local plugin or managed git plugin", Args: cobra.ExactArgs(1),
+		Use:   "add PATH|OWNER/REPO[@REF]",
+		Short: "Install a plugin from a local directory or a git repository",
+		Long: `A local PATH is linked in place, so edits take effect without reinstalling.
+OWNER/REPO[@REF] clones a managed copy that "docket plugin update" can move
+forward. Installing does not enable the plugin in any workspace.`,
+		Example: `  docket plugin add ~/dev/my-plugin
+  docket plugin add acme/docket-dispatch@v1.2.0 --name dispatch`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			entry, err := pluginmgr.Add(args[0], name, Version)
 			if err != nil {
@@ -53,7 +67,10 @@ func newPluginAddCmd() *cobra.Command {
 
 func newPluginListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "list", Short: "List instance-installed plugins", Args: cobra.NoArgs,
+		Use:     "list",
+		Short:   "List plugins installed on this machine",
+		Example: "  docket plugin list\n  docket plugin list --json",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			config, err := registry.Load()
 			if err != nil {
@@ -86,7 +103,10 @@ func newPluginListCmd() *cobra.Command {
 
 func newPluginRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "remove NAME", Short: "Unregister a plugin", Args: cobra.ExactArgs(1),
+		Use:     "remove NAME",
+		Short:   "Uninstall a plugin from this machine",
+		Example: "  docket plugin remove my-plugin",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			removed, err := pluginmgr.Remove(args[0])
 			if err != nil {
@@ -106,7 +126,11 @@ func newPluginRemoveCmd() *cobra.Command {
 
 func newPluginUpdateCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "update [NAME]", Short: "Validate and atomically update managed git plugins", Args: cobra.MaximumNArgs(1),
+		Use:     "update [NAME]",
+		Short:   "Update managed git plugins, validating before switching",
+		Long:    "Without NAME, updates every managed git plugin. Linked local plugins are skipped. A plugin whose new version fails validation is left unchanged.",
+		Example: "  docket plugin update\n  docket plugin update dispatch",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := ""
 			if len(args) == 1 {
@@ -132,14 +156,15 @@ func newPluginUpdateCmd() *cobra.Command {
 }
 
 func newPluginEnableCmd() *cobra.Command {
-	var workspacePath string
 	var adopt bool
 	var fromStart bool
 	var settings []string
 	var expectHash string
 	var receiptDir string
 	command := &cobra.Command{
-		Use: "enable NAME", Short: "Enable an installed plugin for a workspace", Args: cobra.ExactArgs(1),
+		Use:   "enable NAME",
+		Short: "Enable an installed plugin in this workspace",
+		Args:  cobra.ExactArgs(1),
 		Long: `Enable an installed plugin for a workspace.
 
 A plain enable seeds missing plugin-handler cursors at the current log end.
@@ -148,7 +173,14 @@ A plain enable seeds missing plugin-handler cursors at the current log end.
 identities, transfers each legacy handler's validated checkpoint to its plugin
 identity, removes the matching legacy declarations and publishes one config
 change. Acknowledged events are not replayed and pending ones stay pending.
-An existing --receipt-dir is inspected and reported; it is never re-applied.`,
+An existing --receipt-dir is inspected and reported; it is never re-applied.
+
+The workspace is the one selected by -w, $DOCKET_WORKSPACE or the current
+directory (see "docket workspace --help").`,
+		Example: `  docket plugin enable my-plugin
+  docket plugin enable dispatch --set agent=claude
+  docket -w client-b plugin enable dispatch --from-start
+  docket -w ~/dev/app plugin enable dispatch --adopt-cursors --receipt-dir ./receipts`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if adopt && fromStart {
 				return fmt.Errorf("--adopt-cursors and --from-start are mutually exclusive")
@@ -159,6 +191,10 @@ An existing --receipt-dir is inspected and reported; it is never re-applied.`,
 			}
 			if (expectHash != "" || receiptDir != "") && !adopt {
 				return fmt.Errorf("--expect-config-sha256 and --receipt-dir require --adopt-cursors")
+			}
+			workspacePath, err := selectedWorkspaceRoot()
+			if err != nil {
+				return err
 			}
 			if adopt {
 				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -179,7 +215,6 @@ An existing --receipt-dir is inspected and reported; it is never re-applied.`,
 			return nil
 		},
 	}
-	command.Flags().StringVar(&workspacePath, "workspace", ".", "workspace path")
 	command.Flags().BoolVar(&adopt, "adopt-cursors", false, "transfer same-named legacy handler checkpoints to the plugin and remove legacy wiring")
 	command.Flags().BoolVar(&fromStart, "from-start", false, "replay the existing event log")
 	command.Flags().StringArrayVar(&settings, "set", nil, "workspace config key=value (repeatable)")
@@ -189,13 +224,14 @@ An existing --receipt-dir is inspected and reported; it is never re-applied.`,
 }
 
 func newPluginDisableCmd() *cobra.Command {
-	var workspacePath string
 	var adopt bool
 	var legacyConfig string
 	var expectHash string
 	var receiptDir string
 	command := &cobra.Command{
-		Use: "disable NAME", Short: "Disable a plugin without deleting its cursors", Args: cobra.ExactArgs(1),
+		Use:   "disable NAME",
+		Short: "Disable a plugin in this workspace, keeping its cursors",
+		Args:  cobra.ExactArgs(1),
 		Long: `Disable a plugin for a workspace.
 
 A plain disable removes the plugin declaration and keeps its cursors. It is an
@@ -208,12 +244,22 @@ reviewed --legacy-config template declaring each mapped legacy handler,
 --expect-config-sha256 of the current config.yaml and a new --receipt-dir.
 Only the mapped handler declarations are imported from the template; statuses
 the plugin contributed are pinned at their current positions. An existing
---receipt-dir is inspected and reported; it is never re-applied.`,
+--receipt-dir is inspected and reported; it is never re-applied.
+
+The workspace is the one selected by -w, $DOCKET_WORKSPACE or the current
+directory (see "docket workspace --help").`,
+		Example: `  docket plugin disable dispatch
+  docket -w ~/dev/app plugin disable dispatch --adopt-cursors \
+    --legacy-config legacy.yaml --expect-config-sha256 HASH --receipt-dir ./receipts`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !adopt && (legacyConfig != "" || expectHash != "" || receiptDir != "") {
+				return fmt.Errorf("--legacy-config, --expect-config-sha256 and --receipt-dir require --adopt-cursors")
+			}
+			workspacePath, err := selectedWorkspaceRoot()
+			if err != nil {
+				return err
+			}
 			if !adopt {
-				if legacyConfig != "" || expectHash != "" || receiptDir != "" {
-					return fmt.Errorf("--legacy-config, --expect-config-sha256 and --receipt-dir require --adopt-cursors")
-				}
 				if err := pluginmgr.Disable(workspacePath, args[0]); err != nil {
 					return err
 				}
@@ -240,7 +286,6 @@ the plugin contributed are pinned at their current positions. An existing
 			return reportHandoff(result, err)
 		},
 	}
-	command.Flags().StringVar(&workspacePath, "workspace", ".", "workspace path")
 	command.Flags().BoolVar(&adopt, "adopt-cursors", false, "transfer plugin handler checkpoints back to legacy handlers declared in --legacy-config")
 	command.Flags().StringVar(&legacyConfig, "legacy-config", "", "reviewed legacy config template; only mapped handler declarations are imported")
 	command.Flags().StringVar(&expectHash, "expect-config-sha256", "", "require the current declared config.yaml to have this SHA-256")
@@ -306,12 +351,39 @@ func parseSettings(entries []string) (map[string]any, error) {
 	return result, nil
 }
 
+// builtinCommand reports whether name is a builtin command or alias, which
+// always wins over a plugin CLI or a docket-NAME executable. It reads the real
+// command tree so the reserved set cannot drift from the commands that exist.
 func builtinCommand(name string) bool {
-	_, exists := map[string]struct{}{
-		"__lua-hook": {}, "attach": {}, "attach-file": {}, "comment": {}, "completion": {}, "context": {},
-		"detach": {}, "docs": {}, "edit": {}, "events": {}, "files": {}, "help": {}, "inbox": {}, "init": {}, "label": {},
-		"link": {}, "list": {}, "move": {}, "new": {}, "plugin": {}, "project": {}, "reference": {}, "reindex": {},
-		"guide": {}, "ref": {}, "run": {}, "serve": {}, "service": {}, "session": {}, "show": {}, "skill": {}, "unlink": {}, "wait": {}, "watch": {}, "workspace": {},
-	}[name]
-	return exists
+	builtinNamesOnce.Do(func() { builtinNames = collectBuiltinNames() })
+	return builtinNames[name]
+}
+
+// collectBuiltinNames builds the reserved set. Building a root command rebinds
+// the package-level global flags to their defaults, so the parsed values are
+// saved and restored around it; otherwise a check made mid-command would
+// silently drop --json, -w, and friends.
+var (
+	builtinNamesOnce sync.Once
+	builtinNames     map[string]bool
+)
+
+func collectBuiltinNames() map[string]bool {
+	jsonFlag, compact, sessionFlag, workspaceFlag := flagJSON, flagCompact, flagSession, flagWorkspace
+	defer func() {
+		flagJSON, flagCompact, flagSession, flagWorkspace = jsonFlag, compact, sessionFlag, workspaceFlag
+	}()
+	// help, completion and the shell-completion helpers are added by cobra
+	// only when a command runs.
+	names := map[string]bool{
+		"help": true, "completion": true,
+		cobra.ShellCompRequestCmd: true, cobra.ShellCompNoDescRequestCmd: true,
+	}
+	for _, command := range newRootCmd().Commands() {
+		names[command.Name()] = true
+		for _, alias := range command.Aliases {
+			names[alias] = true
+		}
+	}
+	return names
 }

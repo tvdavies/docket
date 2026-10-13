@@ -28,95 +28,77 @@ var (
 	flagJSON    bool
 	flagCompact bool
 	flagSession string
+	// flagWorkspace is -w/--workspace; resolve it through resolveWorkspace.
+	flagWorkspace string
 )
 
 const (
 	groupTasks      = "tasks"
-	groupSessions   = "sessions"
-	groupProjects   = "projects"
+	groupContext    = "context"
 	groupAutomation = "automation"
-	groupService    = "service"
-	groupHelp       = "help"
+	groupSetup      = "setup"
 )
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "docket",
 		Short: "File-backed tasks and durable context for humans and agents",
-		Long: `Docket stores tasks as plain Markdown and YAML files under .docket/.
+		Long: `Docket keeps tasks, comments, and attachments as plain Markdown and YAML
+files under .docket/, so a later human or agent can resume with full context.
 
-The normal workflow uses explicit task IDs:
-  1. docket init
-  2. docket new --title "Describe the work"
-  3. docket show TASK-0001
-  4. docket comment TASK-0001 "Record a durable decision"
-  5. docket move TASK-0001 done
+  docket init                               create and register a workspace
+  docket new --title "Fix login cache"      create a task and print its ID
+  docket show TASK-0001                     read everything about a task
+  docket comment TASK-0001 "Root cause..."  record a durable decision
+  docket move TASK-0001 done                change its status
 
-Session attachment is optional shorthand for omitting TASK-ID. See
-"docket session --help" before using it.`,
-		Example: `  # Start a workspace and create a task
-  docket init
-  docket new --title "Fix login cache" --label bug
-
-  # Inspect and update it using an explicit ID
-  docket show TASK-0001
-  docket comment TASK-0001 "Root cause: stale cache key"
-  docket move TASK-0001 in-review`,
+Pass TASK-ID explicitly in scripts and agents. Add --json to any command that
+returns data; diagnostics always go to stderr.`,
+		Example: `  docket list --status ready --label bug
+  docket show TASK-0001 --view agent
+  docket link TASK-0001 --blocks TASK-0002
+  docket events --follow`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
+		// Bare `docket` opens the board at a terminal and prints help
+		// elsewhere; see runRoot.
+		RunE: runRoot,
 	}
-	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "request machine-readable JSON from data-returning commands")
-	root.PersistentFlags().BoolVar(&flagCompact, "compact", false, "with --json, print single-line JSON instead of indented JSON")
-	root.PersistentFlags().StringVar(&flagSession, "session", "", "session pointer used when TASK-ID is omitted (defaults to $DOCKET_SESSION, then _global)")
+	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "print machine-readable JSON from commands that return data")
+	root.PersistentFlags().BoolVar(&flagCompact, "compact", false, "with --json, print single-line JSON")
+	root.PersistentFlags().StringVar(&flagSession, "session", "", "session pointer used when TASK-ID is omitted (default $DOCKET_SESSION, then _global)")
+	registerWorkspaceFlag(root)
 
 	root.AddGroup(
-		&cobra.Group{ID: groupTasks, Title: "Task workflow:"},
-		&cobra.Group{ID: groupSessions, Title: "Optional session shorthand:"},
-		&cobra.Group{ID: groupProjects, Title: "Projects and relationships:"},
-		&cobra.Group{ID: groupAutomation, Title: "Automation and event diagnostics:"},
-		&cobra.Group{ID: groupService, Title: "Workspace, event runner, and maintenance:"},
-		&cobra.Group{ID: groupHelp, Title: "Help and shell integration:"},
+		&cobra.Group{ID: groupTasks, Title: "Tasks:"},
+		&cobra.Group{ID: groupContext, Title: "Relationships and context:"},
+		&cobra.Group{ID: groupAutomation, Title: "Events and automation:"},
+		&cobra.Group{ID: groupSetup, Title: "Setup and help:"},
 	)
-	root.SetHelpCommandGroupID(groupHelp)
-	root.SetCompletionCommandGroupID(groupHelp)
+	root.SetHelpCommandGroupID(groupSetup)
+	root.SetCompletionCommandGroupID(groupSetup)
+	installHelp(root)
 
-	taskCommands := []*cobra.Command{
-		newInitCmd(), newNewCmd(), newListCmd(), newShowCmd(), newEditCmd(),
-		newMoveCmd(), newWaitCmd(), newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newFilesCmd(),
+	workspaceCommand := newWorkspaceCmd()
+	workspaceCommand.AddCommand(newWorkspaceReindexCmd())
+
+	groups := map[string][]*cobra.Command{
+		groupTasks: {
+			newNewCmd(), newListCmd(), newShowCmd(), newEditCmd(), newMoveCmd(),
+			newCommentCmd(), newLabelCmd(), newAttachFileCmd(), newWaitCmd(), newBoardCmd(),
+		},
+		groupContext:    {newLinkCmd(), newReferenceCmd(), newProjectCmd(), newSessionCmd()},
+		groupAutomation: {newEventsCmd(), newInboxCmd(), newRunCmd(), newServiceCmd(), newPluginCmd()},
+		groupSetup:      {newInitCmd(), workspaceCommand, newDocsCmd(), newSkillCmd()},
 	}
-	setCommandGroup(groupTasks, taskCommands...)
-
-	projectCommands := []*cobra.Command{newProjectCmd(), newReferenceCmd(), newLinkCmd(), newUnlinkCmd()}
-	setCommandGroup(groupProjects, projectCommands...)
-
-	automationCommands := []*cobra.Command{newInboxCmd(), newEventsCmd(), newWatchCmd()}
-	setCommandGroup(groupAutomation, automationCommands...)
-
-	serviceCommands := []*cobra.Command{newWorkspaceCmd(), newPluginCmd(), newRunCmd(), newServeCmd(), newServiceCmd(), newReindexCmd()}
-	setCommandGroup(groupService, serviceCommands...)
-
-	sessionCommand := newSessionCmd()
-	sessionCommand.GroupID = groupSessions
-	skillCommand := newSkillCmd()
-	skillCommand.GroupID = groupHelp
-	docsCommand := newDocsCmd()
-	docsCommand.GroupID = groupHelp
-
-	// Preserve the original flat session commands and duplicate context command
-	// for scripts, but keep the primary help surface small and unambiguous.
-	legacyAttach, legacyDetach, legacyCurrent := newAttachCmd(), newDetachCmd(), newCurrentCmd()
-	legacyContext := newContextCmd()
-	for _, command := range []*cobra.Command{legacyAttach, legacyDetach, legacyCurrent, legacyContext} {
-		command.Hidden = true
+	for _, group := range []string{groupTasks, groupContext, groupAutomation, groupSetup} {
+		setCommandGroup(group, groups[group]...)
+		root.AddCommand(groups[group]...)
 	}
-
-	root.AddCommand(taskCommands...)
-	root.AddCommand(projectCommands...)
-	root.AddCommand(automationCommands...)
-	root.AddCommand(serviceCommands...)
-	root.AddCommand(sessionCommand, skillCommand, docsCommand)
-	root.AddCommand(legacyAttach, legacyDetach, legacyCurrent, legacyContext, newLuaHookCmd())
+	// Hidden: man is for packaging, and __lua-hook is the handler runner's
+	// Lua subprocess entry point.
+	root.AddCommand(newManCmd(), newLuaHookCmd())
 	return root
 }
 
@@ -194,9 +176,13 @@ func isUsageError(err error) bool {
 	return false
 }
 
-// openWS discovers and opens the workspace.
+// openWS opens the workspace selected by resolveWorkspace.
 func openWS() (*workspace.Workspace, error) {
-	return workspace.Open()
+	resolution, err := resolveWorkspace()
+	if err != nil {
+		return nil, err
+	}
+	return workspace.OpenRoot(resolution.Root)
 }
 
 // appendEvent durably records a mutation and then drains configured post-hoc

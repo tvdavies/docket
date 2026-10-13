@@ -15,7 +15,7 @@ import (
 func newPluginConfigCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "config",
-		Short: "Show or update a plugin's instance, workspace and status settings",
+		Short: "Show or change plugin settings",
 		Long: `Plugin settings have three scopes:
 
   instance   machine-wide, stored in the Docket registry
@@ -31,6 +31,9 @@ map replaces the stored value whole. Empty strings, zero and false are stored
 as real values. Every value is validated against the plugin's schema (and, for
 instance scope, against every workspace that enables the plugin) before any
 file is written; a rejected update changes nothing.`,
+		Example: `  docket plugin config get my-plugin
+  docket plugin config set my-plugin key=value
+  docket plugin config set my-plugin --scope instance key=value`,
 	}
 	command.AddCommand(newPluginConfigGetCmd(), newPluginConfigSetCmd())
 	return command
@@ -106,7 +109,7 @@ func printSettingValues(label string, values map[string]any) {
 }
 
 func newPluginConfigSetCmd() *cobra.Command {
-	var scope, workspacePath, status, file string
+	var scope, status, file string
 	var settings []string
 	command := &cobra.Command{
 		Use:   "set NAME [KEY=VALUE...]",
@@ -114,9 +117,10 @@ func newPluginConfigSetCmd() *cobra.Command {
 		Long: `Each KEY=VALUE value is parsed as YAML, so 3 is a number, true a boolean,
 '"3"' a string and '[a, b]' a list. --file reads a JSON or YAML object of
 values instead ("-" reads stdin). The scope defaults to workspace, or to
-status when --status is given.`,
+status when --status is given. Workspace and status scopes apply to the
+workspace selected by -w, $DOCKET_WORKSPACE or the current directory.`,
 		Example: `  docket plugin config set dispatch --scope instance endpoint=http://127.0.0.1:7464
-  docket plugin config set dispatch --workspace ~/dev/app server_root=/srv/app
+  docket -w ~/dev/app plugin config set dispatch server_root=/srv/app
   docket plugin config set dispatch --status merge agent=merger
   docket plugin config set dispatch --scope instance --file settings.json`,
 		Args: cobra.MinimumNArgs(1),
@@ -148,9 +152,13 @@ status when --status is given.`,
 			}
 			target := pluginmgr.ConfigTarget{Plugin: args[0], Scope: pluginmgr.ConfigScope(scope), Status: status}
 			if target.Scope != pluginmgr.ScopeInstance {
-				target.WorkspacePath = workspacePath
-			} else if cmd.Flags().Changed("workspace") {
-				return fmt.Errorf("--workspace does not apply to instance scope")
+				root, err := selectedWorkspaceRoot()
+				if err != nil {
+					return err
+				}
+				target.WorkspacePath = root
+			} else if flagWorkspace != "" {
+				return fmt.Errorf("-w/--workspace does not apply to instance scope")
 			}
 			if err := pluginmgr.SetConfig(target, values); err != nil {
 				return err
@@ -169,7 +177,6 @@ status when --status is given.`,
 		},
 	}
 	command.Flags().StringVar(&scope, "scope", "", "instance, workspace or status (default workspace, or status with --status)")
-	command.Flags().StringVar(&workspacePath, "workspace", ".", "workspace path for workspace and status scopes")
 	command.Flags().StringVar(&status, "status", "", "composed status name for status scope")
 	command.Flags().StringVar(&file, "file", "", "JSON or YAML object of settings (- for stdin)")
 	command.Flags().StringArrayVar(&settings, "set", nil, "KEY=VALUE (repeatable; same as a positional argument)")

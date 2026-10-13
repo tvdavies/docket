@@ -27,10 +27,13 @@ var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 type Config struct {
 	// Listen was the web board's address. It is ignored, but an existing
 	// value is preserved so an older binary used for rollback still finds it.
-	Listen     string           `yaml:"listen,omitempty"`
-	PruneAfter string           `yaml:"prune_after,omitempty"`
-	Workspaces []WorkspaceEntry `yaml:"workspaces,omitempty"`
-	Plugins    []PluginEntry    `yaml:"plugins,omitempty"`
+	Listen     string `yaml:"listen,omitempty"`
+	PruneAfter string `yaml:"prune_after,omitempty"`
+	// CurrentWorkspace names the registered workspace selected by
+	// "docket workspace use". It applies only outside any workspace directory.
+	CurrentWorkspace string           `yaml:"current_workspace,omitempty"`
+	Workspaces       []WorkspaceEntry `yaml:"workspaces,omitempty"`
+	Plugins          []PluginEntry    `yaml:"plugins,omitempty"`
 }
 
 // PluginEntry identifies one trusted plugin installed for this Docket instance.
@@ -193,6 +196,9 @@ func remove(name string, path *string) (bool, error) {
 			return nil
 		}
 		config.Workspaces = kept
+		if config.CurrentWorkspace == name {
+			config.CurrentWorkspace = ""
+		}
 		return writePath(configPath, config)
 	})
 	return removed, err

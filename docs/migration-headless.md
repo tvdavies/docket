@@ -11,7 +11,8 @@ is needed.
   projects and `events.jsonl`. Existing workspaces open unchanged.
 - Executable and Lua hooks, `delivery: inline|service`, match filters,
   retries, and every handler checkpoint under `.cursors/handlers/`.
-- `events`, `watch` and `inbox`. `inbox --json` output is unchanged.
+- `events` and `inbox`. `inbox --json` output is unchanged. (`watch` later
+  became `events --follow`; see [Command consolidation](#command-consolidation).)
 - Plugin install/enable/disable/update/validate, plugin hooks, contributed
   statuses, scoped config, CLI passthrough, and the `--adopt-cursors`
   ownership handoff. Plugin handler names and cursors are unchanged.
@@ -22,8 +23,8 @@ is needed.
 | Removed | Replacement |
 |---|---|
 | Web board, classic board and settings pages | The CLI and its `--json` output. A separate UI can drive Docket through the CLI. |
-| HTTP API (`/api/...`), SSE streams, live widget ingest | `docket show/list --json`, `docket watch` for live events, hooks and `docket inbox` for delivery. |
-| `docket serve --listen/--allow-remote` | `docket run` (no listener). `serve` remains as a deprecated alias and rejects the listen flags. |
+| HTTP API (`/api/...`), SSE streams, live widget ingest | `docket show/list --json`, `docket events --follow` for live events, hooks and `docket inbox` for delivery. |
+| `docket serve` (including `--listen/--allow-remote`) | `docket run` (no listener). The deprecated `serve` alias has since been removed. |
 | Plugin UI frames, iframe bridge SDK (`@docket/plugin-sdk`, `plugin-sdk.d.ts`) | None. Manifest `ui` sections still parse; nothing is served. |
 | Plugin service proxy (`/plugins/<name>/`) and `options_from` fetching | None. Call plugin services directly from hooks or their own clients. |
 | Supervised `service.command` processes and `docket plugin logs` | Run the process under systemd, a container or another supervisor. |
@@ -68,8 +69,8 @@ your own machine before running it.
    plugin whose manifest fails to load.
 3. **Install the new binary**, keeping the old one for rollback.
 4. **Rewrite the systemd unit** if you use it. The old unit runs
-   `docket serve --all`, which still works through the deprecated alias,
-   but reinstalling switches it to `run --all`:
+   `docket serve --all`, which no longer exists, so the unit fails until you
+   reinstall it; reinstalling switches it to `run --all`:
 
    ```sh
    docket service install
@@ -86,6 +87,27 @@ your own machine before running it.
    docket run --once
    docket events --json | tail
    ```
+
+## Command consolidation
+
+A later release reduced the command surface. These commands were removed
+outright, with no compatibility aliases; scripts must use the replacements.
+
+| Removed | Use instead |
+|---|---|
+| `docket serve [--all]` | `docket run [--all]` |
+| `docket attach`, `detach`, `current` | `docket session attach`, `detach`, `current` |
+| `docket context TASK-ID` | `docket show TASK-ID` |
+| `docket files TASK-ID` | `docket show TASK-ID` (attachments section, or `--view current --json \| jq .attachments`) |
+| `docket wait show TASK-ID` | `docket show TASK-ID --view current --json \| jq .wait` |
+| `docket reference list TASK-ID` | `docket show TASK-ID --view current --json \| jq .references` |
+| `docket unlink TASK-ID --REL TARGET-ID` | `docket link TASK-ID --REL TARGET-ID --remove` |
+| `docket watch [--from-start]` | `docket events --follow [--from-start]` |
+| `docket reindex` | `docket workspace reindex` |
+
+Removed names are no longer reserved, so a plugin or a `docket-NAME`
+executable on `PATH` may now claim them. JSON from `docket link` gains a
+`removed` boolean.
 
 ## Rollback
 

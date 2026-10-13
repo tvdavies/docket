@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tvdavies/docket/internal/events"
+	"github.com/tvdavies/docket/internal/workspace"
 )
 
 func newInboxCmd() *cobra.Command {
@@ -16,7 +17,7 @@ func newInboxCmd() *cobra.Command {
 	var actorFlag string
 	cmd := &cobra.Command{
 		Use:   "inbox",
-		Short: "Show unread events addressed to an actor (poll-based coordination)",
+		Short: "Read and acknowledge unread events for an actor",
 		Long: `inbox returns events on tasks assigned to you that you have not yet seen,
 tracked by a per-actor cursor. Use --all to ignore the assignee filter.
 
@@ -156,17 +157,39 @@ func inboxActor(explicit string) string {
 
 func newEventsCmd() *cobra.Command {
 	var since int
+	var follow, fromStart bool
 	cmd := &cobra.Command{
 		Use:   "events",
-		Short: "Inspect the workspace's append-only event log",
-		Long:  "--since N skips the first N physical event records; it is a cursor position, not an event sequence or timestamp.",
+		Short: "Print or follow the workspace's append-only event log",
+		Long: `Without flags, events prints the whole log, one event per line (or a JSON
+array with --json). --since N skips the first N physical event records; it is
+a cursor position, not an event sequence number or a timestamp.
+
+--follow blocks and prints each new event as one JSON line as soon as it is
+appended, until interrupted. Output is always JSONL, so a transient consumer
+can react without polling. Add --from-start to replay the existing log first.
+
+For durable consumers prefer configured handlers, or "docket inbox" with
+--peek and ack.`,
 		Example: `  docket events
-  docket events --since 20 --json`,
+  docket events --since 20 --json
+  docket events | grep TASK-0007 | tail -n 5
+  docket events --follow
+  docket events --follow --from-start | jq -c 'select(.type == "task.moved")'`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if fromStart && !follow {
+				return fmt.Errorf("--from-start requires --follow; without --follow, events already prints the whole log")
+			}
+			if follow && cmd.Flags().Changed("since") {
+				return fmt.Errorf("--since cannot be combined with --follow; use --from-start to replay the log")
+			}
 			ws, err := openWS()
 			if err != nil {
 				return err
+			}
+			if follow {
+				return followEvents(cmd, ws, fromStart)
 			}
 			evs, err := events.Since(ws, since)
 			if err != nil {
@@ -184,42 +207,30 @@ func newEventsCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().IntVar(&since, "since", 0, "skip the first N events")
+	cmd.Flags().IntVar(&since, "since", 0, "skip the first N event records")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "keep running and stream new events as JSON lines")
+	cmd.Flags().BoolVar(&fromStart, "from-start", false, "with --follow, replay existing events before streaming new ones")
 	return cmd
 }
 
-func newWatchCmd() *cobra.Command {
-	var fromStart bool
-	cmd := &cobra.Command{
-		Use:   "watch",
-		Short: "Stream events as they happen (push-based coordination)",
-		Long: `watch blocks and emits each new event as a JSON line as soon as it is
-appended, so a harness can react without polling. Output is always JSONL.
-Most durable automation should use configured handlers instead.`,
-		Example: `  docket watch
-  docket watch --from-start | jq -c 'select(.type == "task.moved")'`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ws, err := openWS()
-			if err != nil {
-				return err
-			}
-			done := make(chan struct{})
-			sig := make(chan os.Signal, 1)
-			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-			go func() {
-				<-sig
-				close(done)
-			}()
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetEscapeHTML(false)
-			return events.Watch(ws, fromStart, done, func(ev events.Event) error {
-				return enc.Encode(ev)
-			})
-		},
-	}
-	cmd.Flags().BoolVar(&fromStart, "from-start", false, "replay existing events before streaming new ones")
-	return cmd
+// followEvents streams events as JSONL until SIGINT or SIGTERM.
+func followEvents(cmd *cobra.Command, ws *workspace.Workspace, fromStart bool) error {
+	done := make(chan struct{})
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	go func() {
+		select {
+		case <-sig:
+		case <-cmd.Context().Done():
+		}
+		close(done)
+	}()
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetEscapeHTML(false)
+	return events.Watch(ws, fromStart, done, func(ev events.Event) error {
+		return enc.Encode(ev)
+	})
 }
 
 func printEventLine(ev events.Event) {

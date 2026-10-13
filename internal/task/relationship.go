@@ -98,6 +98,11 @@ func updateTwo(ws *workspace.Workspace, idA, idB string, fn func(a, b *Task) err
 	if err != nil {
 		return err
 	}
+	// Both sides resolving to one task would take its lock twice and wait out
+	// the lock timeout.
+	if dirA == dirB {
+		return fmt.Errorf("a relationship needs two different tasks")
+	}
 	// Deterministic lock ordering by directory path prevents deadlock.
 	first, second := dirA, dirB
 	if first > second {

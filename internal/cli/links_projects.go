@@ -12,91 +12,74 @@ import (
 	"github.com/tvdavies/docket/internal/task"
 )
 
-// relationshipFlags binds one --<kind> TARGET flag per configured relationship.
-func linkRunner(link bool) func(cmd *cobra.Command, args []string) error {
-	return func(cmd *cobra.Command, args []string) error {
-		ws, err := openWS()
-		if err != nil {
-			return err
-		}
-		from := args[0]
-		// Find which relationship flag was set.
-		var kind, to string
-		for _, rel := range ws.Config.RelNames() {
-			if v, _ := cmd.Flags().GetString(rel); v != "" {
-				if kind != "" {
-					return fmt.Errorf("specify exactly one relationship flag")
-				}
-				kind, to = rel, v
-			}
-		}
-		if kind == "" {
-			return fmt.Errorf("specify a relationship flag, e.g. --blocks TASK-0010 (configured: %s)", strings.Join(ws.Config.RelNames(), ", "))
-		}
-		operations := operationsFor(ws)
-		if link {
-			err = operations.Link(from, kind, to)
-		} else {
-			err = operations.Unlink(from, kind, to)
-		}
-		if err != nil {
-			return err
-		}
-		if flagJSON {
-			return printJSON(map[string]string{"from": from, "kind": kind, "to": to})
-		}
-		op := "linked"
-		if !link {
-			op = "unlinked"
-		}
-		fmt.Printf("%s %s %s %s\n", from, op, kind, to)
-		return nil
-	}
-}
-
-func addRelFlags(cmd *cobra.Command) {
-	// Relationship flags are resolved at runtime from config; declare the
-	// built-in defaults so --help is useful even before a workspace exists.
-	for _, name := range []string{"blocks", "blocked-by", "parent", "subtasks", "relates", "duplicate-of", "duplicates"} {
-		cmd.Flags().String(name, "", "target task id for the "+name+" relationship")
-	}
-}
-
 func newLinkCmd() *cobra.Command {
+	var remove bool
 	cmd := &cobra.Command{
-		Use:   "link TASK-ID --RELATIONSHIP TARGET",
-		Short: "Create a typed task relationship and its inverse",
+		Use:   "link TASK-ID --RELATIONSHIP TARGET-ID",
+		Short: "Add or remove a typed relationship between two tasks",
 		Long: `Supply exactly one relationship flag. Docket updates both tasks, so
 "TASK-0007 --blocks TASK-0010" also records TASK-0007 under TASK-0010's
-"blocked-by" relationship. Available flags come from workspace configuration.`,
+"blocked-by" relationship. --remove deletes the relationship and its inverse.
+
+Relationship flags come from the workspace configuration; the defaults are
+listed below. "docket show" prints a task's resolved relationships.`,
 		Example: `  docket link TASK-0007 --blocks TASK-0010
   docket link TASK-0007 --parent TASK-0001
-  docket link TASK-0007 --relates TASK-0008`,
+  docket link TASK-0007 --blocks TASK-0010 --remove`,
 		Args: cobra.ExactArgs(1),
-		RunE: linkRunner(true),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ws, err := openWS()
+			if err != nil {
+				return err
+			}
+			from := args[0]
+			var kind, to string
+			for _, rel := range ws.Config.RelNames() {
+				if value, _ := cmd.Flags().GetString(rel); value != "" {
+					if kind != "" {
+						return fmt.Errorf("specify exactly one relationship flag")
+					}
+					kind, to = rel, value
+				}
+			}
+			if kind == "" {
+				return fmt.Errorf("specify a relationship flag, e.g. --blocks TASK-0010 (configured: %s)", strings.Join(ws.Config.RelNames(), ", "))
+			}
+			operations := operationsFor(ws)
+			verb := "linked"
+			if remove {
+				verb = "unlinked"
+				err = operations.Unlink(from, kind, to)
+			} else {
+				err = operations.Link(from, kind, to)
+			}
+			if err != nil {
+				return err
+			}
+			if flagJSON {
+				return printJSON(map[string]any{"from": from, "kind": kind, "to": to, "removed": remove})
+			}
+			fmt.Printf("%s %s %s %s\n", from, verb, kind, to)
+			return nil
+		},
 	}
-	addRelFlags(cmd)
-	return cmd
-}
-
-func newUnlinkCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "unlink TASK-ID --RELATIONSHIP TARGET",
-		Short: "Remove a typed task relationship and its inverse",
-		Example: `  docket unlink TASK-0007 --blocks TASK-0010
-  docket unlink TASK-0007 --relates TASK-0008`,
-		Args: cobra.ExactArgs(1),
-		RunE: linkRunner(false),
+	// Relationship flags are resolved at runtime from config; declare the
+	// built-in defaults so --help is useful before a workspace exists.
+	for _, name := range []string{"blocks", "blocked-by", "parent", "subtasks", "relates", "duplicate-of", "duplicates"} {
+		cmd.Flags().String(name, "", "TARGET-ID for the "+name+" relationship")
 	}
-	addRelFlags(cmd)
+	cmd.Flags().BoolVar(&remove, "remove", false, "remove the relationship and its inverse instead of adding it")
 	return cmd
 }
 
 func newProjectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "project",
-		Short: "Create and inspect named task groupings",
-		Long:  "Projects are lightweight groupings inside one Docket workspace; they are not separate workspaces.",
+		Short: "Group tasks into named projects",
+		Long:  "Projects are lightweight groupings inside one workspace, not separate workspaces. Assign a task with \"docket new --project PROJECT-ID\".",
+		Example: `  PROJECT=$(docket project new --name "Website")
+  docket new --title "Improve navigation" --project "$PROJECT"
+  docket project show "$PROJECT"`,
 	}
 	cmd.AddCommand(newProjectNewCmd(), newProjectListCmd(), newProjectShowCmd())
 	return cmd
@@ -179,7 +162,7 @@ func newProjectListCmd() *cobra.Command {
 
 func newProjectShowCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "show PROJ-ID",
+		Use:     "show PROJECT-ID",
 		Short:   "Show a project and its member tasks",
 		Example: "  docket project show PROJ-0001\n  docket project show PROJ-0001 --json",
 		Args:    cobra.ExactArgs(1),
